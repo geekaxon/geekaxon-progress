@@ -50,12 +50,34 @@ A Khundi is fundamentally an **extended paternal family**. Membership flows **fa
 
 ### 2.3 Membership Rules (Constitutional — must be enforced)
 
-- **Voting-eligible member** = active (not suspended, not expired, not inactive) **male, 18+**. "Can vote" is a **derived status**, computed — never a manual flag.
-- **Female members** = **Honorary**. No vote. **Not counted** toward any constitutional headcount.
-- **Children** are recorded under their father; a **male child turning 18** (and active) becomes voting-eligible and counts toward thresholds — **flag this for human confirmation, never auto-activate.**
-- **Khundi formation/split threshold:** a group must have **≥ 20 active 18+ male voting-eligible members** to be recognized as a Khundi (applies at creation and when splitting off a new sub-group). Below 20 it is not a Khundi.
+> **v2 DATA-MODEL CORRECTION (build-step 19).** The original build stored a `member_type` enum and an `is_honorary` flag, and carried Khundi/Group-code fields on the member. **These are removed.** The corrected model stores only **raw facts** and **derives** every category. The corrected rules below supersede the original; build-step 19 migrates the schema and all derivations. See §7.3 for the corrected table.
+
+**Stored raw facts (the ONLY member-classification inputs a human sets):**
+- `gender` (male/female)
+- `dob` (date of birth)
+- `is_okhai_by_birth` (boolean — replaces `is_honorary` and the `member_type` enum). True = born into the Okhai community (this Khundi's patrilineal line).
+- `omj_card_number` (nullable — present = OMJ-issued canonical identity; absent = a *record*, not a *user*).
+- `status` (active/suspended/expired/inactive).
+- `marital_residence` (light indicator: `lives_in_khundi` | `married_out`) — only meaningful for women; lets the tree/census show a daughter who married out without inventing a member-type.
+
+**Everything else is DERIVED, never stored, never hand-set:**
+- **Voting-eligible** = `status=active` AND `gender=male` AND `age≥18` AND `is_okhai_by_birth=true`. Computed on read (age moves with the calendar). Never a manual flag.
+- **Honorary** = `gender=female` (no vote, **not counted** toward any constitutional headcount). Derived from gender alone — there is no stored `is_honorary`.
+- **Child** = `age<18`. **Adult** = `age≥18`. Derived from `dob`.
+- **Non-member Okhai-by-birth** = `is_okhai_by_birth=true` AND no active membership / no card — e.g. a deceased person needing a grave record (§2.6). Derived from the facts, not a stored type.
+- **Khundi / Group Code are NOT member fields.** The tenant *is* the Khundi; Khundi family + sub-group + group code are read from the tenant. Auto-assigned from the selected/current Khundi — never entered on the member form. (Removed from the member table in build-step 19.)
+
+**Children & the turning-18 flag:** children are recorded under their father; a **male child (Okhai-by-birth) turning 18 and active** becomes voting-eligible and counts toward thresholds — the system **flags this for human confirmation, never auto-activates.**
+
+**Women & marriage (the corrected, fuller model — build-step 19):**
+- A woman is **born into her father's Khundi** and stays an **honorary member of that Khundi (the tenant)**. On marriage she joins her husband's household; KhundiConnect keeps her on her father's-Khundi roster with `marital_residence=married_out` rather than moving her.
+- **Female married to an Okhai groom:** standard honorary record; husband resolvable by OMJ card.
+- **Female married to a NON-Okhai husband (NEW — KhundiConnect registers her; the OMJ Lawazim software does not):** she is still `is_okhai_by_birth=true`, an honorary member of her father's Khundi. We additionally capture **husband-side facts** (not a Khundi/Group code): husband name, husband father name, husband grandfather name, husband CNIC, husband community/biradari, surname, and his community-membership number if any. These are attached facts for census/relationship context — they never make her a member of a non-existent tenant.
+
+**Thresholds & dissolution (unchanged):**
+- **Khundi formation/split threshold:** a group must have **≥ 20 active 18+ male Okhai-by-birth voting-eligible members** to be recognized as a Khundi (applies at creation and when splitting off a new sub-group). Below 20 it is not a Khundi.
 - **Falling below 20 does NOT auto-dissolve a Khundi.** Dissolution is a manual, authority-gated action (by OMJ Hon. General Secretary in the real world). The software **must never auto-dissolve or auto-flag dissolution** when headcount drops.
-- **Suspension is an OMJ-level power**, not a Khundi power. (In this build, suspension status is represented and respected; the act of suspending is an OMJ/Vendor-altitude permission.)
+- **Suspension is an OMJ-level power**, not a Khundi power. (Suspension status is represented and respected; the act of suspending is an OMJ/Vendor-altitude permission.)
 
 ### 2.4 Identity: OMJ Card Number
 
@@ -73,6 +95,11 @@ A Khundi is fundamentally an **extended paternal family**. Membership flows **fa
   - Member pays Khundi → recorded as **income** (full amount, no split).
   - Councilor pays OMJ against an **OMJ-generated receipt** → recorded as a separate **expense** ("Lawazim paid to Jamat — {year}").
   - The system records reality as humans enter it; it never moves money between Khundi and OMJ automatically.
+
+> **v2 LAWAZIM CORRECTIONS (build-step 25).** Refinements from real-world use, applied when the Lawazim module is deepened:
+> - **Liable set is exactly the voting-eligible set:** active, male, 18+, Okhai-by-birth member. A man stays liable every year **until death** (e.g. liable at 79). Honorary females, children, non-members, suspended/inactive/expired are **never** in the collection register. The member picker and register list **only liable members** — never the full roster.
+> - **The Lawazim collection screen shows ONLY Khundi-fee collection.** The Rs 100 OMJ fee is part of **expenses** — it must **not** appear as a "+ OMJ Rs 100/member" note on the collection screen, and the **OMJ remittance is recorded on the expense/accounting side**, not as a block on the Lawazim collection view. (The remittance data model is unchanged; only its placement is corrected — it belongs with expenses.)
+> - **Carry-forward arrears ledger:** dues are a **running per-member balance**, not year-isolated. A member may pay in parts within a year, pay partially across years, or clear two years' fees in a later year after defaulting. The system maintains **outstanding/dues per member carried forward** and always shows the running balance. Professional partial-payment handling + payment history + clear outstanding tracking.
 
 ### 2.6 Death, Bereavement & Graves
 
@@ -227,21 +254,28 @@ High-level relational design. Names indicative; the building agent should implem
 - **user_roles** — `user_id`, `role_id`, `tenant_context` (nullable), `assigned_at`, `assigned_by`.
 
 ### 7.3 Members & Family Graph
-- **members** — `id`, `tenant_id`, `omj_card_number` (nullable; canonical when present), `cnic` (encrypted, nullable), `full_name`, `gender`, `dob`, `is_honorary` (derived: female), `member_type` (member/honorary/child/non_member_okhai), `status` (active/suspended/expired/inactive), `education`, `occupation`, `income_band`, `contact` (JSON), `household_id`, `provenance` (omj_fetch/manual), `created_at`.
-  - **Derived flags (computed, never manually set):** `is_voting_eligible` = active AND male AND age ≥ 18; counts toward threshold accordingly.
+
+> **v2 CORRECTED SCHEMA (build-step 19).** Replaces the original `members` definition. Removes `member_type` and `is_honorary` (now derived) and removes Khundi/Group-code (read from the tenant). Adds `is_okhai_by_birth`, `marital_residence`, and the husband-side fact block. Member profile depth (the full Add-Member field set, minus the dropped fields) lands in build-step 23; the membership-vs-census field split (which facts live here vs. on a census entry) is finalised in build-steps 19/24.
+
+- **members** — `id`, `tenant_id`, `omj_card_number` (nullable; canonical identity when present), `cnic` (encrypted, nullable), `full_name`, `father_name`, `grandfather_name`, `gender`, `dob`, **`is_okhai_by_birth`** (bool — the single okhai/honorary input; replaces `member_type`+`is_honorary`), `status` (active/suspended/expired/inactive), **`marital_residence`** (`lives_in_khundi` | `married_out`, nullable), `blood_group` (nullable), `marital_status` (nullable), `education` (nullable), `occupation` (nullable), `income_band` (nullable), `disability` (nullable), `contact` (JSON: cell/landline/whatsapp/email/emergency), `address` (JSON), `household_id`, `provenance` (omj_fetch/manual), `photo_ref` (nullable), `remarks` (nullable), `created_at`.
+  - **Husband-side facts** (only for a female married to a non-Okhai husband — §2.3; attached facts, NOT a Khundi/Group code): `husband_name`, `husband_father_name`, `husband_grandfather_name`, `husband_cnic` (encrypted, nullable), `husband_community` (biradari), `husband_surname`, `husband_community_membership_no` (nullable). Stored as a nullable JSON block on the member (or a 1:1 side table).
+  - **NO `member_type`. NO `is_honorary`. NO `khundi`/`group_code` columns** — Khundi family, sub-group, and group code are read from the **tenant**, auto-assigned, never on the member.
+  - **Derived (computed on read, never stored, never hand-set):** `is_voting_eligible` = active ∧ male ∧ age≥18 ∧ is_okhai_by_birth; `is_honorary` = (gender=female); `is_child` = age<18; `is_non_member_okhai` = is_okhai_by_birth ∧ no active card/membership; `is_pending_voting_activation` = male ∧ okhai ∧ just-turned-18 ∧ active (flag, never auto-activate). These power the threshold count (counts only eligibles).
 - **households** — `id`, `tenant_id`, `head_member_id`, `address` (JSON), `notes`.
-- **relationships** — `id`, `tenant_id`, `from_member_id`, `to_member_id`, `type` (PARENT_OF / CHILD_OF / SPOUSE_OF / SIBLING_OF). In-law links derived through SPOUSE_OF. This table powers the navigable family tree.
-- **member_status_history** — `member_id`, `old_status`, `new_status`, `reason`, `changed_by`, `at`.
+- **relationships** — `id`, `tenant_id`, `from_member_id`, `to_member_id`, `type` (PARENT_OF / CHILD_OF / SPOUSE_OF / SIBLING_OF). In-law links derived through SPOUSE_OF. This table powers the navigable family tree (professional visualization rebuilt in build-step 23).
+- **member_status_history** — `member_id`, `tenant_id`, `old_status`, `new_status`, `reason`, `changed_by`, `at`.
 
 ### 7.4 OMJ Data Sync
 - **omj_api_config** — `tenant_id`, `api_key` (encrypted), `last_fetch_at`, `last_fetch_status`, `enabled`. (Base endpoint URL lives in env, not here.)
 - **fetch_conflicts** — `id`, `tenant_id`, `match_key` (cnic/card), `incoming_data` (JSON), `local_member_id` (nullable), `conflict_type` (conflict/new/unchanged), `status` (pending/accepted/rejected/merged), `created_at`, `resolved_by`. (Cron updates existing pending conflict rather than stacking duplicates.)
 
 ### 7.5 Census
-- **census_snapshots** — `id`, `tenant_id`, `label` (e.g. "Census 2026"), `status` (open/finalized), `opened_at`, `finalized_at`.
-- **census_entries** — `id`, `tenant_id`, `snapshot_id`, `member_id` (nullable for new persons), `submitted_by_user_id`, `data` (JSON: population/age/income/education/welfare-need fields), `status` (pending/approved/rejected), `approved_by`, `approved_at`. (Approval by Councilor/President/Gen.Sec roles.)
+- **census_snapshots** — `id`, `tenant_id`, `label` (e.g. "Census 2026"), `status` (open/finalized), `opened_at`, `finalized_at`, **`form_definition_id`** (the form-builder definition this round uses — build-step 24).
+- **census_entries** — `id`, `tenant_id`, `snapshot_id`, `member_id` (nullable for new persons), `submitted_by_user_id`, `data` (JSON: answers keyed by form-field, incl. household/relation/income-band/education/profession/welfare-need), `status` (pending/approved/rejected), `approved_by`, `approved_at`. (Approval by Councilor/President/Gen.Sec roles.)
 - Family-tree data is read from **relationships** + **members**; census adds economic/welfare fields and snapshotting.
 - **census_progress** (view/derived) — per-tenant completion %, counts.
+
+> **v2 CENSUS DEEPENING (build-step 24).** Census becomes **form-builder-driven** (build-step 20): each round ships a **default form** the Khundi can customize — they cannot remove **locked-core** fields but can author their own **option sets** per field (Profession/Education/income/etc.) in either a **light** style (Below Average / Average / Above Average) or a **detailed** style (actual ranges/lists), and add unlimited **custom fields**. Public-facing **multi-step**, low-literacy UX. Locked core (for population + cross-Khundi comparability): household, relation-to-head, name, gender, DOB, marital status, okhai-by-birth, OMJ card (if any), education, profession, disability. **Income band is OPTIONAL** (public may skip; welfare/insights treat it as best-effort/sparse). **OMJ receives all Khundi data including custom fields, but cross-Khundi aggregation / Jamat-AI uses ONLY the locked core** (custom fields aren't comparable across Khundis; they still appear in that Khundi's own reports and to OMJ per-Khundi). The membership-vs-census split: stable identity facts live on the **member**; round-specific economic/welfare answers live on the **census entry**.
 
 ### 7.6 Lawazim & Accounting
 - **fee_config** — `tenant_id`, `year`, `khundi_fee_per_member`, `omj_fee_per_member` (default 100).
@@ -258,16 +292,22 @@ High-level relational design. Names indicative; the building agent should implem
 - **welfare_disbursements** — `case_id`, `amount`, `disbursed_at`, `disbursed_by`, `journal_entry_id`.
 - **death_records** — `id`, `tenant_id`, `deceased_person` (member_id nullable — supports Okhai-by-birth non-members), `name`, `date_of_death`, `bereavement_amount`, `bus_service_recorded` (bool), `graveyard_name`, `grave_number`, `grave_issued_date`, `recorded_by`. (Graveyard/grave = OMJ-issued, Khundi only records.)
 
+> **v2 WELFARE DEEPENING (build-step 27).** `welfare_cases` gains: **fund source** (`zakat` | `general` | `endowment` — Zakat carries eligibility rules, so the source is explicit and reportable separately), richer **case types** (Khundi-configurable categories + sub-types via the form-builder, beyond the four seed categories), structured **case fields**, **document upload** on a case (attachments → R2), and an **inquiry/investigation report** record (a case can require an inquiry step + findings before approval/disbursement). All no-auto-action rules hold (disburse only after approval).
+
 ### 7.8 Events & Meetings
 - **events** — `id`, `tenant_id`, `type` (meeting/gathering/prize/welfare_drive/sports), `title`, `datetime`, `venue`, `budget`, `status`, `archived`.
 - **event_registrations** — `event_id`, `member_id`, `rsvp_status`, `attended` (bool, QR-set).
 - **meeting_minutes** — `event_id` (or standalone), `tenant_id`, `minutes`, `resolutions` (JSON list), `attendance_ref`.
 
+> **v2 EVENTS DEEPENING (build-step 28).** Full **datetime + budget**, proper **RSVP management**, real **attendance/registration** (human mark or QR — never auto), **structured resolutions**, and **archive**. Prize ceremonies link to an event (typically the Annual Meeting). All Simple/Pro-aware.
+
 ### 7.9 Cards, Documents, Notifications
-- **cards** — `id`, `tenant_id`, `member_id`, `type` (membership/qr/attendance), `qr_payload`, `template`, `printed`. (Khundi cards = non-constitutional.)
-- **documents** — `id`, `tenant_id`, `category` (minutes/notice/constitution/financial/historical/prize_doc), `file_ref`, `access_roles` (JSON), `uploaded_by`.
+- **cards** — `id`, `tenant_id`, `member_id`, `type` (membership/qr/attendance), `qr_payload`, `template`, `printed`. (Khundi cards = non-constitutional. QR encodes the OMJ card number + ids only — never a CNIC/secret, §2.4/§17.)
+- **documents** — `id`, `tenant_id`, `category` (minutes/notice/constitution/financial/historical/prize_doc), `file_ref`, `access_roles` (JSON), `uploaded_by`, `uploaded_at`, `size`, `mime`.
 - **messaging_config** — `tenant_id`, `provider` (twilio/infobip/...), `credentials` (encrypted), `enabled`.
 - **notifications** — `id`, `tenant_id`, `type`, `channel` (sms/whatsapp), `recipients`, `body`, `sent_at`, `status`. (Communication log.)
+
+> **v2 DOCS & CARDS DEEPENING (build-step 30).** Documents get **real file upload to R2** (not a raw "file ref" string), metadata (uploader/date/size/mime), **search**, and a proper **role-ACL editor UI**. Cards get a **visual rendered membership/QR card** (never raw payload strings on screen), card **templates**, **print** and **digital-wallet** views. **Prize Distribution** gains its own data model in build-step 29 (form definitions, open/close windows, submissions, configurable categories/criteria incl. Hifz milestones, position naming, gift/prize assignment, **certificate canvas** templates with relative-coordinate placeholders, bulk certificate generation, Excel + announcement-list exports).
 
 ### 7.10 AI Insights
 - **ai_config** — `owner_altitude` (vendor/omj/tenant), `tenant_id` (nullable), `provider` (openai/claude/...), `api_key` (encrypted), `enabled`, `managed_by`.
@@ -691,6 +731,29 @@ The name is intentionally community-neutral (not OMJ-specific), supporting Phase
 | 17 | Audit, backups, i18n/Urdu polish, accessibility | `feat/17-audit-i18n` | — |
 | 18 | Phase-2 modules (welfare, bereavement/graves, prize, events, MoM, docs, cards, QR) | `feat/18-phase2` | — |
 
+> **Build-steps 1–18 are FEATURE-COMPLETE (the MVP).** They shipped the full module surface but at MVP depth — several modules are intentionally thin. **Build-steps 19–30 are the v2 DEPTH PASS:** they correct the data model and re-build the thin modules to professional, dynamic depth, plus add three new cross-cutting subsystems (form-builder, Simple/Pro mode, certificate canvas). The agent classifies each as **FEATURE** (new subsystem) or **FIX** (deepening shipped behaviour) per its WORK-TYPE rule. This is the priority work before any production promotion.
+
+### v2 Depth Pass (build-steps 19–30)
+
+| # | Build-step | Branch | Checkpoint |
+|---|-----------|--------|-----------|
+| 19 | **Data-model correction** — `is_okhai_by_birth` replaces `member_type`/`is_honorary`; drop Khundi/Group-code from members (read from tenant); add `marital_residence` + husband-side facts (non-Okhai husband, §2.3); all categories derived; membership-vs-census split. Migration + RLS-preserving. | `feat/19-datamodel` | 🛑 |
+| 20 | **Shared Form-Builder engine** (new subsystem §32) — locked-core + custom fields, per-field option sets with light/detailed styles, multi-step, validation; consumed by Census + Prize (+ future). | `feat/20-form-builder` | 🛑 |
+| 21 | **Simple/Pro mode framework** (new subsystem §33) — per-user saved preference per module, lossless, role-aware ceiling; the contract every later UI module implements. | `feat/21-mode-framework` | 🛑 |
+| 22 | **Global UI/UX layer** (§34) — human-readable label formatting everywhere (no raw enums), Table/Card toggle on every listing, per-Khundi column chooser in settings, professional list components, design-bar pass. | `feat/22-ui-layer` | — |
+| 23 | **Members deepen** — full Add-Member field set (minus dropped fields), child handling, female/non-Okhai-husband form path, professional list (table+card), professional family-tree visualization. Simple/Pro faces. | `feat/23-members-v2` | 🛑 |
+| 24 | **Census deepen** — form-builder-driven, multi-step public UX, income/education/profession option sets, finalized membership-vs-census split, demographics/insights wiring. Simple/Pro faces. | `feat/24-census-v2` | 🛑 |
+| 25 | **Lawazim deepen** — liable-only register, carry-forward arrears ledger + running balance, remove OMJ-100 from collection screen (remittance → expense side), professional dues/partial-payment UX. | `feat/25-lawazim-v2` | 🛑 |
+| 26 | **Accounting deepen** — full double-entry depth; professional Simple cashbook (clean in/out + expenses) and Pro ledger/vouchers/receipts/bank-rec/statements/reports. Core module — must be perfect. | `feat/26-accounting-v2` | 🛑 |
+| 27 | **Welfare deepen** — fund source (Zakat/General/Endowment), configurable case types/sub-types, structured fields, document upload, inquiry/investigation report step. Simple/Pro faces. | `feat/27-welfare-v2` | 🛑 |
+| 28 | **Events deepen** — datetime/budget/RSVP/attendance(human+QR)/structured resolutions/archive; ceremony↔event linkage. Simple/Pro faces. | `feat/28-events-v2` | — |
+| 29 | **Prize deepen** — form-builder forms with announce/open/close windows, configurable categories+criteria (academic + Hifz milestones), submission by members & controllers, approve→assign, position naming, **certificate canvas + bulk generate**, Excel eligibles export + printable announcement list. | `feat/29-prize-v2` | 🛑 |
+| 30 | **Documents & Cards deepen** — real R2 file upload, metadata/search, role-ACL editor UI; visual rendered membership/QR card, templates, print + wallet (no raw payloads). Simple/Pro faces. | `feat/30-docs-cards-v2` | 🛑 |
+
+> **After 30 — Final Surfaces Polish Pass (tracked as 31+ when specced):** apply the same depth/professional/Simple-Pro/label/list standards to every remaining surface — Dashboard, My Portal, AI Insights, OMJ Sync, Notifications, Member PWA, Billing, Bereavement/Graves, Reports/BI, OMJ super-user oversight, Vendor analytics. Specced after 19–30 land.
+
+> **v2 checkpoint guidance:** steps 19, 23, 24, 25, 26, 27, 29, 30 change the data model / RLS / money handling and are 🛑 by the general rule; 20, 21 are foundational subsystems (🛑); 22, 28 are softer. The agent still applies the general checkpoint rule on ANY step that touches schema/RLS/auth/permissions/production.
+
 > **General checkpoint rule (applies on ANY build-step):** the agent also prints `[CHECKPOINT]` whenever it changes the data model, touches RLS/`tenant_id`, changes auth or permissions, or does anything production-affecting — not only on the four fixed steps above. Err toward more checkpoints. (Full rule in AGENT.md.)
 
 > **Each module must ship with:** its data model + migrations + RLS, its permission keys, its module-flag gate, its API, its SPA UI (animated, Urdu-ready), and its audit hooks. Build, test, and verify each module before the next.
@@ -740,8 +803,30 @@ OMJ_API_BASE_URL          # OMJ member-fetch endpoint (platform-level) — place
 ENCRYPTION_KEY            # for CNIC + API-key encryption at rest
 R2_ACCOUNT_ID, R2_ACCESS_KEY, R2_SECRET, R2_BUCKET
 PLATFORM_BASE_DOMAIN      # placeholder in example
+NEXT_PUBLIC_PLATFORM_BASE_DOMAIN   # PUBLIC — inlined into the web bundle at BUILD time (must match PLATFORM_BASE_DOMAIN)
 # NOTE: tenant messaging keys & AI keys are stored encrypted in DB, entered via UI — NOT here
 ```
+
+**WEB BUILD-time vars vs API RUNTIME vars (permanent build-correctness rule).**
+There are two distinct classes of env var and confusing them breaks deploys:
+
+- **API RUNTIME** — read by the NestJS process at run time (PM2 env). All server
+  secrets (`DATABASE_URL`, `JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET`,
+  `ENCRYPTION_KEY`, `R2_*`, any API keys) are RUNTIME-only and **never** reach the
+  browser.
+- **WEB BUILD** — `NEXT_PUBLIC_*` vars are **inlined into the client bundle at
+  `next build` time**, not read at runtime. They are **public** (shipped to every
+  browser). `next build` runs with `apps/web` as cwd and reads `.env` from the
+  **app directory**, NOT the monorepo-root `.env` — and turbo's strict env mode
+  strips undeclared vars. So a plain `turbo run build` does **not** automatically
+  bake a root-`.env` `NEXT_PUBLIC_*` value into the bundle. **`deploy.sh` (§28.6
+  step 5b) writes an explicit ALLOWLIST of `NEXT_PUBLIC_*` values to
+  `apps/web/.env.local` before building**, and the same vars are declared in
+  `turbo.json`'s build-task `env` for cache correctness. **The allowlist is the
+  security boundary**: only public vars are copied; a server secret must NEVER be
+  added to it or exposed via a `NEXT_PUBLIC_*` name. `deploy.sh` grep-asserts the
+  expected value landed in `.next/static` AND scans `.next/static` for leaked
+  secret values, failing the deploy on either fault.
 
 ### 28.6 Deployment Flow — `deploy.sh` Specification (the agent authors the file during the build)
 
@@ -764,7 +849,13 @@ PLATFORM_BASE_DOMAIN      # placeholder in example
 
 4. **Database migrations** — `npx prisma migrate deploy` (apply committed migrations only; **never** `migrate reset` or any destructive DB op — those are fence-blocked and forbidden).
 
-5. **Fresh `BUILD_ID` before build** — set `BUILD_ID` to a fresh value every run (timestamp + short git SHA), export it, log it, then `npm run build`. (Matches the GarageBrainPro learning that a stale `BUILD_ID` causes broken builds.)
+5. **Fresh `BUILD_ID` before build** — set `BUILD_ID` to a fresh value every run (timestamp + short git SHA), export it, log it, then `npm run build`. (Matches the GarageBrainPro learning that a stale `BUILD_ID` causes broken builds.) This step has three build-correctness sub-steps, all **permanent rules**:
+
+   - **5a. Purge stale build artifacts BEFORE building.** `nest build` uses `deleteOutDir:true`; combined with a leftover `*.tsbuildinfo` the incremental compiler sees "no source changes", emits **zero** files, yet `dist/` was already wiped — an exit-0 build with an **empty `dist/`** that crashes the API with `Cannot find module './config/env.validation'`. We removed `"incremental": true` from `apps/api/tsconfig.json`, AND deploy.sh deletes all `*.tsbuildinfo` (outside `node_modules`), `apps/api/dist`, and the turbo cache (`.turbo`, `node_modules/.cache/turbo`) before building, so a clean full compile and a no-stale-cache run are guaranteed every deploy. (This is the **incremental-no-op trap** — a permanent build rule alongside *prisma-generate-before-build* and *npm-ci-include-dev*.)
+
+   - **5b. Bake allowlisted `NEXT_PUBLIC_*` into the web build.** Before `npm run build`, write an explicit ALLOWLIST (`NEXT_PUBLIC_PLATFORM_BASE_DOMAIN`, `NEXT_PUBLIC_OTP_LOGIN_ENABLED`, `NEXT_PUBLIC_MESSAGING_PROVIDER`) from the sourced `.env` into `apps/web/.env.local` (Next.js reads `.env` from the **app** dir at build, not the monorepo root — see §28.5). ONLY allowlisted public vars are copied; **no server secret is ever written there**.
+
+   - **5c. Build-output assertions (fail the deploy, never restart PM2 onto a broken build).** After building: assert `apps/api/dist/main.js` AND `apps/api/dist/config/env.validation.js` exist; assert the `NEXT_PUBLIC_PLATFORM_BASE_DOMAIN` value appears in `apps/web/.next/static` (the redirect is silently dead otherwise); and scan `apps/web/.next/static` for the literal values of server secrets (`DATABASE_URL`, `JWT_*`, `ENCRYPTION_KEY`, `R2_*`) and abort if any leaked. Any failure exits non-zero **before** the PM2 restart.
 
 6. **Graceful per-process PM2 restart** — use **`pm2 restart`** (NOT `reload`), per project convention. Iterate the process list `kc-api`, `kc-web`, `kc-worker`, `kc-scheduler`:
    - if `pm2 describe <proc>` succeeds → `pm2 restart <proc> --update-env` and log it;
@@ -882,6 +973,50 @@ The agent **prints `[CHECKPOINT]` and pauses** for APPROVE/REJECT after these fi
 - **Controller guardrails:** STOP kill switch, 3-consecutive-error auto-pause, usage-limit auto-pause, a dangerous-command fence (blocks `rm -rf /`, drop database, force-push, anything matching "production"/"prod"), and **auto-commit + push after every successful task**.
 - On **resume after any pause**, the agent **re-reads `PROGRESS.md` to recover state** — it never assumes continuity.
 - Full operating rules, the checkpoint token format, the Telegram reporting format, and branch rules are in **AGENT.md.**
+
+---
+
+## 32. Shared Form-Builder Engine (v2 subsystem — build-step 20)
+
+A single, reusable form-definition engine that powers **Census** (build-step 24) and **Prize Distribution** (build-step 29), and is available to future modules. It is the architectural answer to "ship a default form, let each Khundi customize it, keep core fields comparable."
+
+**Core model (tenant-scoped, RLS):**
+- **form_definitions** — `id`, `tenant_id`, `purpose` (`census` | `prize` | …), `version`, `label`, `is_default` (the shipped default this Khundi started from), `steps` (JSON: ordered multi-step layout), `status` (draft/active/archived), `created_by`, `created_at`. A Khundi can clone the default and edit per round; each census round / prize ceremony references a specific definition.
+- **form_fields** — `id`, `form_definition_id`, `tenant_id`, `key`, `label`, `type` (text/number/date/select/multiselect/boolean/file/…), `is_locked_core` (bool — cannot be removed or have its key changed), `required`, `order`, `step_index`, `option_set_id` (nullable), `validation` (JSON).
+- **option_sets** — `id`, `tenant_id`, `field_key`, `style` (`light` | `detailed`), `options` (JSON ordered list, each {value,label}), `allow_other` (bool). A Khundi authors its own option sets for Profession, Education, income, etc., choosing a **light** style (e.g. Below Average / Average / Above Average) or a **detailed** style (actual ranges/lists), with an optional "Other" free-text.
+- **form_submissions** — the consuming module owns the answer rows (e.g. `census_entries.data`, prize submissions). The engine validates answers against the definition; it does not duplicate storage.
+
+**Locked-core rule:** every `purpose` declares a **locked-core field set** (code-seeded) that a Khundi **cannot remove** (only restyle its options / reorder / mark light-vs-detailed). Locked core guarantees population math + cross-Khundi comparability. **Custom fields** are unlimited and Khundi-owned.
+
+**Cross-Khundi rule (ties to §7.5):** OMJ receives **all** answers including custom fields (per-Khundi view), but **cross-Khundi aggregation / Jamat-AI uses ONLY locked-core fields** (custom fields aren't comparable). Custom fields still appear in that Khundi's own reports/insights.
+
+**UX:** a builder UI for controllers (add/reorder/restyle fields, author option sets, arrange steps) and a **multi-step, low-literacy public renderer** (large targets, minimal typing, select-driven, Urdu/RTL). Versioned + non-destructive: editing a form never alters already-submitted answers.
+
+## 33. Simple ↔ Pro Mode Framework (v2 subsystem — build-step 21)
+
+A platform-wide progressive-disclosure framework (the GarageAxon pattern), so any applicable module presents a **Simple** or **Pro** face over the **same data**.
+
+**Core rules (locked):**
+- **Lossless:** mode is presentation only — every module always records full detail regardless of mode; switching never migrates or loses data.
+- **Per-user preference (KhundiConnect's chosen scope):** mode is a **saved per-user preference per module**, persisted, so a Councilor can keep Accounting on Simple while the President keeps it on Pro, set once. (A Khundi-level default may seed the initial value; the user's own toggle wins for them.)
+- **Role-aware ceiling:** effective mode = `min(userPreference, roleCeiling)` where a role may cap a user at Simple. Some modules are Simple-only or Pro-only by nature (declared in a registry).
+- **Scope of modules:** Accounting, Members, Census, Welfare, Events, Prize, Documents, Reports get a toggle; Lawazim stays single-mode. (Registry-declared.)
+
+**Data model (tenant-scoped, RLS):**
+- **module_registry** (code-seeded, global): `module_key`, `label`, `supports_simple`, `supports_pro`, `default_mode`.
+- **user_mode_preference** (tenant-scoped): `id`, `tenant_id`, `user_id`, `module_key`, `mode` (simple/pro), `updated_at`. The per-user saved preference.
+
+**Contract:** a `useMode(moduleKey)` hook (web) returning the effective mode for the current user (applies the role-ceiling min + module nature); an API-side `getEffectiveMode(userId, moduleKey)`; each module exports a `Simple<Module>` and `Pro<Module>` view; a wrapper picks based on `useMode`. Documented in `packages/ui/MODE_CONTRACT.md` so every later module conforms. **Mode shapes presentation; permissions gate access — mode must never withhold data a user is permitted to see.**
+
+## 34. Global UI/UX Layer (v2 subsystem — build-step 22)
+
+The cross-cutting presentation standards every module must meet (the answer to "many things are in small letters / not professional / lists are crude").
+
+- **Human-readable labels everywhere:** no raw enum/machine values ever reach the user. A central label-formatter maps stored values → proper display (e.g. `medical`→"Medical", `open`→"Open", `non_member_okhai`→derived "Non-Member (Okhai by birth)"), with **Urdu translations** of those labels. Stored values are unchanged; only display is formatted. Applies to every status chip, type dropdown, and enum surface.
+- **Table ⇄ Card toggle on every listing:** each list (Members first, then everywhere applicable) offers a professional **table** view and a **card** view, user-toggleable.
+- **Per-Khundi column chooser:** a controller setting in **Khundi Settings** selects which columns appear in each list; applied across all listings. (Column visibility is per-Khundi/controller-set; the Simple/Pro mode is per-user — this asymmetry is intentional.)
+- **Professional list components:** collapsible filter panels, "show N entries", export, pagination/virtualization, skeleton loaders, consistent design tokens — matching the quality bar of the OMJ Lawazim reference software, not raw output.
+- **Design bar is part of every module's definition of done** (tokens, light/dark, RTL, animation, accessibility). A module is not "done" if its UI is unstyled or exposes raw values.
 
 ---
 
