@@ -108,6 +108,8 @@ A Khundi is fundamentally an **extended paternal family**. Membership flows **fa
 - **Grave eligibility extends to anyone "Okhai by birth"** — not strictly a registered member. So a death/grave record may attach to a person who is **not** an active member.
 - **Graveyards and grave numbers are issued by OMJ.** The Khundi only **records** the issued graveyard name + grave number (no allocation logic, no master registry, no collision-prevention in this software — pure record-keeping). OMJ super-users can view these records across Khundis.
 
+> **v3 BEREAVEMENT CORRECTION (build-step 47).** Bereavement becomes its **own top-level module** (extracted from Welfare). Two corrections to the above: (1) **Bus Service is removed** — the free bus is a **Jamat-provided** service, not a Khundi record, so it is not tracked in this software (the `bus_service_recorded` field is dropped). (2) Graveyards are **no longer assumed OMJ-only** — a grave may be recorded in an OMJ graveyard **or any external/other graveyard** (graveyard name remains free-text/lookup; still pure record-keeping, no allocation logic). A bereavement payment posts a balanced expense to accounting (explicit human act, no-auto).
+
 ### 2.7 Council & Governance (CONTEXT ONLY — NOT BUILT)
 
 OMJ has a 36-member Managing Board, a Council of Councilors, Office Bearers, etc. **This governance layer is explained for understanding only and is NOT a software feature.** Do not build board/council election management. The only governance artifacts that surface in software are **roles** (e.g. a Khundi may have President, General Secretary, Councilor, etc. as *roles*) — see the dynamic role system.
@@ -156,6 +158,7 @@ Chosen for: SPA smoothness, multi-tenancy, scalability to 100+ tenants, modern d
 - **Nginx** reverse proxy; **PM2** or container orchestration for process management.
 - **Cloudflare** for CDN, DNS, custom-domain mapping (white-label), and TLS.
 - **Object storage** (S3-compatible, e.g. Cloudflare R2) for documents, uploads, card images, census attachments.
+  - **v3 (build-step 46):** add a **Google Drive** backend (ENV-selectable via `STORAGE_BACKEND`, behind the same `StorageService` contract; R2 + DEV fallback preserved), enforce a **per-Khundi storage quota** (configurable MB cap, checked on upload), and **auto-compress + dimension-reduce** every processable file (images/PDFs) before storing. Users only ever see **upload controls** — never a raw key/URL.
 
 ### Cross-cutting
 - **Auth:** JWT (access + refresh). OMJ Card Number as login identifier + OTP-to-phone or password. **[DECIDE AT BUILD]** — OTP-to-phone recommended for low-literacy audience.
@@ -261,17 +264,22 @@ High-level relational design. Names indicative; the building agent should implem
   - **Husband-side facts** (only for a female married to a non-Okhai husband — §2.3; attached facts, NOT a Khundi/Group code): `husband_name`, `husband_father_name`, `husband_grandfather_name`, `husband_cnic` (encrypted, nullable), `husband_community` (biradari), `husband_surname`, `husband_community_membership_no` (nullable). Stored as a nullable JSON block on the member (or a 1:1 side table).
   - **NO `member_type`. NO `is_honorary`. NO `khundi`/`group_code` columns** — Khundi family, sub-group, and group code are read from the **tenant**, auto-assigned, never on the member.
   - **Derived (computed on read, never stored, never hand-set):** `is_voting_eligible` = active ∧ male ∧ age≥18 ∧ is_okhai_by_birth; `is_honorary` = (gender=female); `is_child` = age<18; `is_non_member_okhai` = is_okhai_by_birth ∧ no active card/membership; `is_pending_voting_activation` = male ∧ okhai ∧ just-turned-18 ∧ active (flag, never auto-activate). These power the threshold count (counts only eligibles).
+
+> **v3 MEMBER/IDENTITY NOTE (build-steps 45, 48).** **CNIC** is promoted to the **stable cross-context member anchor** (the one identifier a member cannot deny) — captured/validated, **encrypted at rest, masked on display** (e.g. `*****-*******-*`), permission-gated + audited on any reveal, never returned raw; **OMJ Card Number is kept** as the canonical OMJ identity. A **household / living-arrangement grouping** is added (build-step 45): who **lives together** vs **separately**, independent of blood relationship (two related brothers may live in separate households; an in-law lives in by marriage). This grouping powers the family-tree household overlay and the welfare household-dedup (build-step 48), and is forward-compatible with the v4 cross-org ledger (§27.1). Tenant isolation stays ABSOLUTE in v3.
 - **households** — `id`, `tenant_id`, `head_member_id`, `address` (JSON), `notes`.
 - **relationships** — `id`, `tenant_id`, `from_member_id`, `to_member_id`, `type` (PARENT_OF / CHILD_OF / SPOUSE_OF / SIBLING_OF). In-law links derived through SPOUSE_OF. This table powers the navigable family tree (professional visualization rebuilt in build-step 23).
 - **member_status_history** — `member_id`, `tenant_id`, `old_status`, `new_status`, `reason`, `changed_by`, `at`.
 
 ### 7.4 OMJ Data Sync
 - **omj_api_config** — `tenant_id`, `api_key` (encrypted), `last_fetch_at`, `last_fetch_status`, `enabled`. (Base endpoint URL lives in env, not here.)
+  - **v3 (build-step 49):** the sync **key/connection moves to the OMJ/platform side** (one central connection) — Khundis no longer enter keys. A Khundi still **triggers** a sync from its side (key-less); the **review/conflict queue and no-silent-overwrite rule are preserved**.
 - **fetch_conflicts** — `id`, `tenant_id`, `match_key` (cnic/card), `incoming_data` (JSON), `local_member_id` (nullable), `conflict_type` (conflict/new/unchanged), `status` (pending/accepted/rejected/merged), `created_at`, `resolved_by`. (Cron updates existing pending conflict rather than stacking duplicates.)
 
 ### 7.5 Census
 - **census_snapshots** — `id`, `tenant_id`, `label` (e.g. "Census 2026"), `status` (open/finalized), `opened_at`, `finalized_at`, **`form_definition_id`** (the form-builder definition this round uses — build-step 24).
 - **census_entries** — `id`, `tenant_id`, `snapshot_id`, `member_id` (nullable for new persons), `submitted_by_user_id`, `data` (JSON: answers keyed by form-field, incl. household/relation/income-band/education/profession/welfare-need), `status` (pending/approved/rejected), `approved_by`, `approved_at`. (Approval by Councilor/President/Gen.Sec roles.)
+
+> **v3 CENSUS CORRECTION (build-step 53).** Census becomes **facts-only**: the **welfare-need flag is removed** from census entries (self-declared need is undignified + unreliable). New **fact** fields are added (family/household-centric): **home ownership** (own/rent/goodwill), **transport ownership**, **staged education** (school/college/university with in-vs-out per stage → retention-rate analysis), and a structured **needs/asks** capture (housing / business / education-finance / other — the family's expressed wants, distinct from a welfare case). A **vulnerability/priority indicator is DERIVED** from these facts (computed on read, like voting-eligibility — never a stored self-declaration) and surfaced as a **welfare outreach-suggestion view** (a prompt for humans; **never** auto-creates a welfare case — no-auto). Census also gains a **report/presentation generator** producing a shareable, chart-driven community report (the "Our Community, Our Plan" deck) from an approved round.
 - Family-tree data is read from **relationships** + **members**; census adds economic/welfare fields and snapshotting.
 - **census_progress** (view/derived) — per-tenant completion %, counts.
 
@@ -291,8 +299,11 @@ High-level relational design. Names indicative; the building agent should implem
 - **welfare_cases** — `id`, `tenant_id`, `category` (medical/student/widow/emergency), `subject_member_id`, `confidential` (true), `notes` (restricted), `status`, `approval_workflow_state`.
 - **welfare_disbursements** — `case_id`, `amount`, `disbursed_at`, `disbursed_by`, `journal_entry_id`.
 - **death_records** — `id`, `tenant_id`, `deceased_person` (member_id nullable — supports Okhai-by-birth non-members), `name`, `date_of_death`, `bereavement_amount`, `bus_service_recorded` (bool), `graveyard_name`, `grave_number`, `grave_issued_date`, `recorded_by`. (Graveyard/grave = OMJ-issued, Khundi only records.)
+  - **v3 (build-step 47):** `bus_service_recorded` is **dropped** (Jamat-provided, not a Khundi record). Add a graveyard **source** indicator (OMJ vs external) so non-OMJ graveyards are supported; `graveyard_name`/`grave_number` stay free-text (no allocation logic). Add `journal_entry_id` linking the bereavement payment to accounting (build-step 26). Bereavement moves to its own module surface.
 
 > **v2 WELFARE DEEPENING (build-step 27).** `welfare_cases` gains: **fund source** (`zakat` | `general` | `endowment` — Zakat carries eligibility rules, so the source is explicit and reportable separately), richer **case types** (Khundi-configurable categories + sub-types via the form-builder, beyond the four seed categories), structured **case fields**, **document upload** on a case (attachments → R2), and an **inquiry/investigation report** record (a case can require an inquiry step + findings before approval/disbursement). All no-auto-action rules hold (disburse only after approval).
+
+> **v3 WELFARE DEEPENING (build-step 48).** Welfare gains: **per-fund available balances** (Zakat/Endowment/General — Zakat never mixed with general/endowment in reporting), tied to accounting; a **recipient + family/household welfare-history** view shown in the case flow (confidential, dignity-preserving, welfare-access gated); **household-aware dedup** — using the household/living-arrangement grouping (build-step 45), the system **flags** when a same-household member has an open/recent request of the same type (e.g. ration) so the team approves only one (a human prompt, **never** an auto-reject); enforcement that **every payment across all modules posts to accounting** (corrections via reversal, not silent edit); an optional, per-Khundi-authorable **Sharia Compliance form** (form-builder; a truthfulness declaration / deterrent layer; immutable acceptance snapshot); and **CNIC as a forward-compatible member anchor** (captured/validated, masked on display, permission-gated, audited; OMJ Card kept). **Tenant isolation stays ABSOLUTE in v3** — the CNIC anchor only makes the model ready for the v4 cross-org ledger (§27.1); no cross-tenant welfare data is shared in v3.
 
 ### 7.8 Events & Meetings
 - **events** — `id`, `tenant_id`, `type` (meeting/gathering/prize/welfare_drive/sports), `title`, `datetime`, `venue`, `budget`, `status`, `archived`.
@@ -311,6 +322,7 @@ High-level relational design. Names indicative; the building agent should implem
 
 ### 7.10 AI Insights
 - **ai_config** — `owner_altitude` (vendor/omj/tenant), `tenant_id` (nullable), `provider` (openai/claude/...), `api_key` (encrypted), `enabled`, `managed_by`.
+  - **v3 (build-step 49):** AI keys/config **move to the OMJ/platform altitude** — Khundis no longer manage API keys. OMJ generates an **overall Jamat-wide insight + per-Khundi insights** in one run; each Khundi **receives and views its own** (read-only, tenant-scoped; isolation enforced). Generation is an explicit OMJ action (no-auto); insights are advisory prompts.
 - **ai_insights** — `id`, `scope` (JAMAT/KHUNDI), `tenant_id` (nullable; set for KHUNDI scope), `generated_by_altitude` (vendor/omj/tenant), `generated_by_user`, `provider`, `model`, `data_snapshot_ref` (which census snapshot), `content` (JSON/markdown), `generated_at`, `is_stale` (bool). Cached & shared per the visibility rules (§11).
 
 ### 7.11 Audit
@@ -750,13 +762,73 @@ The name is intentionally community-neutral (not OMJ-specific), supporting Phase
 | 29 | **Prize deepen** — form-builder forms with announce/open/close windows, configurable categories+criteria (academic + Hifz milestones), submission by members & controllers, approve→assign, position naming, **certificate canvas + bulk generate**, Excel eligibles export + printable announcement list. | `feat/29-prize-v2` | 🛑 |
 | 30 | **Documents & Cards deepen** — real R2 file upload, metadata/search, role-ACL editor UI; visual rendered membership/QR card, templates, print + wallet (no raw payloads). Simple/Pro faces. | `feat/30-docs-cards-v2` | 🛑 |
 
-> **After 30 — Final Surfaces Polish Pass (tracked as 31+ when specced):** apply the same depth/professional/Simple-Pro/label/list standards to every remaining surface — Dashboard, My Portal, AI Insights, OMJ Sync, Notifications, Member PWA, Billing, Bereavement/Graves, Reports/BI, OMJ super-user oversight, Vendor analytics. Specced after 19–30 land.
+### v2 Final-Surfaces Polish Pass (build-steps 31–37) — COMPLETE
 
-> **v2 checkpoint guidance:** steps 19, 23, 24, 25, 26, 27, 29, 30 change the data model / RLS / money handling and are 🛑 by the general rule; 20, 21 are foundational subsystems (🛑); 22, 28 are softer. The agent still applies the general checkpoint rule on ANY step that touches schema/RLS/auth/permissions/production.
+Applied the same depth/professional/Simple-Pro/label/list standards to every remaining surface.
+
+| # | Build-step | Branch | Checkpoint |
+|---|-----------|--------|-----------|
+| 31 | **Dashboards deepen** (3 altitudes) — animated KPIs/charts, Khundi + OMJ + Vendor; cross-Khundi oversight read views. | `feat/31-dashboards-v2` | — |
+| 32 | **Member PWA deepen** — card-gated self-service: profile/update-requests, family census entry, fee view, card wallet, notifications. | `feat/32-member-pwa-v2` | 🛑 |
+| 33 | **AI Insights deepen** — adapter + cache + scope/visibility + permissions; Khundi + Jamat insights (bring-your-own-key at the time). | `feat/33-ai-insights-v2` | 🛑 |
+| 34 | **OMJ Sync deepen** — manual + cron fetch, CNIC/card matching, conflict review queue (no silent overwrite). | `feat/34-omj-sync-v2` | 🛑 |
+| 35 | **Notifications deepen** — adapter + Twilio/Infobip, templates, communication log. | `feat/35-notifications-v2` | 🛑 |
+| 36 | **Billing & White-Label deepen** — plans/subscriptions/module toggles; branding/logo/colors/subdomain. | `feat/36-billing-whitelabel-v2` | 🛑 |
+| 37 | **Bereavement/Graves + Audit deepen** — death/grave register surface; polished immutable audit viewer. | `feat/37-bereavement-audit-v2` | 🛑 |
+
+> **v2 PROGRAM COMPLETE (19–37):** data-model correction (19), three subsystems (20–22), eight module deepens (23–30), seven final-surface polishes (31–37). Every shipped surface at professional depth with Simple/Pro faces, human labels, global UI layer.
+
+### v3 — Experience + Capability Pass (build-steps 38–53)
+
+v3 has two phases. **v3-A (38–46) ships first** (the experience layer — it unblocks showing the team); **v3-B (47–53) follows** (new capability). The cross-org welfare ledger is deferred to **v4** (see §27.1) but stays in KhundiConnect; v3's data model is built forward-compatible with it. Tenant isolation remains ABSOLUTE throughout v3 — no cross-org seam is opened.
+
+**v3-A — Experience layer**
+
+| # | Build-step | Branch | Checkpoint |
+|---|-----------|--------|-----------|
+| 38 | **Global IA + design system** — heavy modules → tabs/sub-nav (no long-scroll); shared date/currency/number components (kill US `mm/dd/yyyy`); empty states; density; Simple/Pro toggle → top bar (only on applicable pages). | `fix/38-ia-design-system` | 🛑 |
+| 39 | **Modals/selectors/uploads** — all create/add/edit → modals/drawers (no inline-expand); member autocomplete (scales to 1000s) + role/value searchable multi-select; file **upload** controls everywhere (no R2/key/URL shown). | `fix/39-modals-selectors-uploads` | 🛑 |
+| 40 | **Enum-label sweep + de-jargon copy** — no machine value (`incomeBand`, `below_15K`, `relation_to_head`…) ever shown; strip all §-citations / "never auto" / internal notes from user copy → one short human line per module/section. | `fix/40-label-sweep-copy` | 🛑 |
+| 41 | **RTL layout fix + full Urdu translation coverage** — clean RTL across all surfaces + primitives; zero English leakage in Urdu mode (en/ur key parity). | `fix/41-rtl-urdu` | 🛑 |
+| 42 | **Edit/Delete everywhere applicable** — add edit/delete to create-only records; hard vs soft-delete rule; audit-log + posted-financial stay immutable. | `fix/42-edit-delete` | 🛑 FIXED |
+| 43 | **Settings consolidation + Role editor UI** — Branding, Display Mode, List Columns, providers, storage under one Settings area; the missing create/edit-roles screen. | `feat/43-settings-roles` | 🛑 FIXED |
+| 44 | **Correctness fixes** — tenant-name bleed; audit noise (stop logging token refreshes); member hygiene (no expired/inactive/married-out in active pickers/RSVP); fix all-zeros Jamat insight aggregation; minutes-only-when-completed. | `fix/44-correctness` | 🛑 |
+| 45 | **Family tree → modal/focused view** + relationship lenses (By Birth / By Marriage / Both) + household/living-arrangement grouping (substrate for 48 dedup). | `feat/45-family-tree` | 🛑 |
+| 46 | **Storage rework** — Google Drive backend (ENV-selectable, behind `StorageService`); per-Khundi MB quota (enforced); auto-compression + dimension reduction before storage. | `feat/46-storage-drive-quota` | 🛑 FIXED |
+
+**v3-B — New capability**
+
+| # | Build-step | Branch | Checkpoint |
+|---|-----------|--------|-----------|
+| 47 | **Bereavement as its own module** — extract from Welfare; deceased register; OMJ **and external** graveyards; **remove Bus Service** (Jamat-provided); bereavement payment → accounting. | `feat/47-bereavement-module` | 🛑 |
+| 48 | **Welfare deepening** — per-fund available balances (Zakat/Endowment/General, Zakat never mixed); recipient + family welfare history; household-aware dedup (the ration case, human prompt not auto-reject); enforce every-payment→accounting; optional per-Khundi **Sharia Compliance form**; **CNIC anchor** (v4-forward-compatible, isolation kept absolute). | `feat/48-welfare-deep` | 🛑 FIXED |
+| 49 | **Centralize AI Insights + OMJ Sync at OMJ** — keys/config move to OMJ altitude; OMJ generates Jamat-wide + per-Khundi insights (each Khundi receives its own); Khundi triggers sync key-less; review queue + no-silent-overwrite preserved. | `feat/49-omj-centralize` | 🛑 FIXED |
+| 50 | **Prize recognition awards** — categories beyond academic/Hifz (most senior, most active…); Khundi-**assigned** recognition flow (no application cycle) alongside application-based prizes. | `feat/50-prize-recognition` | 🛑 |
+| 51 | **Form Builder per-instance binding** — bind a specific form to a specific Census round / Prize ceremony (2026 ≠ 2025); mark a form default. | `feat/51-form-binding` | 🛑 |
+| 52 | **Notifications channels & providers** — PWA push + SMS + WhatsApp; pluggable providers (generic REST, Twilio, Infobip, WhatsApp Business API; separate SMS/WhatsApp APIs); provider config in Settings. | `feat/52-notifications-channels` | 🛑 FIXED |
+| 53 | **Census report generator + new fields** — shareable chart-driven community report (the Gatta-G deck); add home ownership, transport, staged education (in/out + retention), structured needs/asks; **remove the welfare-need flag** → derive a vulnerability indicator → welfare outreach-suggestion view (human prompt, never auto-case). | `feat/53-census-report` | 🛑 FIXED |
+
+> **v3 checkpoint guidance:** 42, 43, 46, 48, 49, 52, 53 are 🛑 FIXED (money / identity / access-control / storage-backend / cross-tenant generation). 38–41, 44, 45, 47, 50, 51 are 🛑 by the general rule. The general checkpoint rule still applies on ANY step touching schema/RLS/auth/permissions/production.
+
+> **v3 ordering (within phases):** 38 is the foundation (shell/components/top-bar mode) — 39–46 assume its primitives. 40 before 41 (translate final human copy, not soon-to-be-rewritten strings). 45's household grouping is a deliberate dependency for 48's welfare dedup. 44's insight-aggregation fix precedes 49's move of generation to OMJ. 51's per-instance forms feed 53 (round-bound census fields) and 50 (application-based categories). 46's storage abstraction backs 39's uploads and 53's report export.
 
 > **General checkpoint rule (applies on ANY build-step):** the agent also prints `[CHECKPOINT]` whenever it changes the data model, touches RLS/`tenant_id`, changes auth or permissions, or does anything production-affecting — not only on the four fixed steps above. Err toward more checkpoints. (Full rule in AGENT.md.)
 
 > **Each module must ship with:** its data model + migrations + RLS, its permission keys, its module-flag gate, its API, its SPA UI (animated, Urdu-ready), and its audit hooks. Build, test, and verify each module before the next.
+
+### 27.1 v4 — Cross-Organization Welfare Ledger (DOCUMENTED, NOT BUILT IN v3)
+
+Deferred from v3 by decision; **stays within KhundiConnect** (same product). Build-steps **54+**. **Do not build any of this during v3 (38–53).** Tenant isolation remains ABSOLUTE through v3; v3 only makes the data model forward-compatible (CNIC anchor, household grouping, per-member/household welfare history — build-steps 45/48).
+
+**Problem.** Under OMJ, multiple support organizations serve all Khundis — e.g. **Okhai Memon Youth Services (OMYS)** (dowry/Jehaz, monthly ration, education), **Humaira Bai Foundation**, **Okhai Memon Anjuman (OMA)**, and OMJ itself. A member can collect from each separately and exceed/fabricate their stated need (e.g. needs Rs 5 lacs, collects 6.5 by going org-to-org), invisibly to any single organization.
+
+**Concept.** A centralized, **CNIC-anchored** cross-organization welfare/support ledger: when any organization gives a member funds, it is recorded centrally, so any **authorized** organization (and the member's Khundi) can see the member's — and their family's — support history **before approving**, with a **need-vs-collected** tally per request.
+
+**Altitude (refined).** GeekAxon (Pvt) Ltd (Vendor, sees all) → **OMJ** (sees all; **governs** what each support-org may see) → **support organizations** (scoped by OMJ; a **Welfare-only module**, not full accounting — they manage their own welfare funds/cases) → **Khundi** (tenant).
+
+**Key components (need a dedicated design round).** (1) Support orgs as tenants with a **Welfare-only** module. (2) **CNIC** (tokenized/hashed) as the cross-org anchor; OMJ Card kept. (3) A **governed shared welfare-history domain** above tenants (deliberately designed — the opposite of strict per-tenant RLS — read by authorized orgs through OMJ-scoped, category-scoped, **dignity-preserving** views). (4) **Need-vs-collected** tracking per request. (5) **OMJ-governed visibility** (the build-step 49 "OMJ-governs / Khundi-consumes" pattern is the template). (6) **Sharia Compliance** (built per-Khundi in build-step 48) extended as a cross-org deterrent layer.
+
+> **Recommendation:** a design-first architecture round (produce the cross-org data-domain design + ARCHITECTURE additions) before any build, given the isolation-model change and the CNIC cross-org privacy/legal weight.
 
 ---
 
