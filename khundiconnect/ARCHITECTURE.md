@@ -22,6 +22,8 @@ The platform serves **three access altitudes**:
 
 The flagship capability is **Census** — a crowdsourced, family-tree-based community data system feeding **AI Insights** that drive welfare and growth decisions.
 
+> **PROGRAM STATUS.** MVP (build-steps 1–18), the v2 depth pass (19–37), and v3 (38–53) are **complete and on staging**. The current program is **v3.1 (build-steps 54+)** — a foundation-first experience-overhaul + new-capability program (shared UI primitives, member model + timeline, form engine + census, finance + community modules, communication + access + a new Polling/Elections module, PWA + Reporting). v3.1 runs **continuous development** (auto-approve → staging → continue; production stays manual). The cross-org welfare ledger remains deferred to **v4** (§27.1). See §27 for the canonical build order and `specs/README-v3.1.md` for the v3.1 decision register.
+
 ---
 
 ## 2. Cultural & Domain Model (Critical Context for the Builder)
@@ -61,8 +63,9 @@ A Khundi is fundamentally an **extended paternal family**. Membership flows **fa
 - `marital_residence` (light indicator: `lives_in_khundi` | `married_out`) — only meaningful for women; lets the tree/census show a daughter who married out without inventing a member-type.
 
 **Everything else is DERIVED, never stored, never hand-set:**
-- **Voting-eligible** = `status=active` AND `gender=male` AND `age≥18` AND `is_okhai_by_birth=true`. Computed on read (age moves with the calendar). Never a manual flag.
-- **Honorary** = `gender=female` (no vote, **not counted** toward any constitutional headcount). Derived from gender alone — there is no stored `is_honorary`.
+- **Voting-eligible** = `status=active` AND `gender=male` AND `age≥18` AND `is_okhai_by_birth=true`. Computed on read (age moves with the calendar). Never a manual flag. **(v3.1 note: voting-eligibility is a simple derived filter used only for building audiences/segments and messaging — it carries no special module behaviour and is not OMJ-API-dependent. Its scope is OMJ-constitution franchise; Khundi-level polls/elections set their OWN per-poll eligibility rules — see the Polling module, build-steps 54+.)**
+- **(v3.1 — "honorary" REMOVED.)** The term *honorary* is dropped entirely from the product. A female member is simply a member; where a demographic split is needed, **split by gender**, never by an "honorary" label. The old `isHonorary` derivation (= female) is removed from code, counts, badges, dashboards, and copy.
+- **Married-In (v3.1 — replaces the old "honorary female married in" idea):** a **non-Okhai female married to an Okhai male** is recorded with full OMJ-facility access (she is NOT OMJ-issued a membership; her children ARE full OMJ members). She is marked **"Married-In"**, a marker **DERIVED by relationship** (linked as spouse to an Okhai male + `is_okhai_by_birth=false`) — not a stored flag. On **divorce**, removing the marriage link sets her to **Inactive** (after a confirmation dialog); history is preserved (the closed marriage link + a timeline entry), never deleted; a re-marriage opens a new link.
 - **Child** = `age<18`. **Adult** = `age≥18`. Derived from `dob`.
 - **Non-member Okhai-by-birth** = `is_okhai_by_birth=true` AND no active membership / no card — e.g. a deceased person needing a grave record (§2.6). Derived from the facts, not a stored type.
 - **Khundi / Group Code are NOT member fields.** The tenant *is* the Khundi; Khundi family + sub-group + group code are read from the tenant. Auto-assigned from the selected/current Khundi — never entered on the member form. (Removed from the member table in build-step 19.)
@@ -70,9 +73,9 @@ A Khundi is fundamentally an **extended paternal family**. Membership flows **fa
 **Children & the turning-18 flag:** children are recorded under their father; a **male child (Okhai-by-birth) turning 18 and active** becomes voting-eligible and counts toward thresholds — the system **flags this for human confirmation, never auto-activates.**
 
 **Women & marriage (the corrected, fuller model — build-step 19):**
-- A woman is **born into her father's Khundi** and stays an **honorary member of that Khundi (the tenant)**. On marriage she joins her husband's household; KhundiConnect keeps her on her father's-Khundi roster with `marital_residence=married_out` rather than moving her.
-- **Female married to an Okhai groom:** standard honorary record; husband resolvable by OMJ card.
-- **Female married to a NON-Okhai husband (NEW — KhundiConnect registers her; the OMJ Lawazim software does not):** she is still `is_okhai_by_birth=true`, an honorary member of her father's Khundi. We additionally capture **husband-side facts** (not a Khundi/Group code): husband name, husband father name, husband grandfather name, husband CNIC, husband community/biradari, surname, and his community-membership number if any. These are attached facts for census/relationship context — they never make her a member of a non-existent tenant.
+- A woman is **born into her father's Khundi** and stays a **member of that Khundi (the tenant)**. On marriage she joins her husband's household; KhundiConnect keeps her on her father's-Khundi roster with `marital_residence=married_out` rather than moving her.
+- **Female married to an Okhai groom:** standard member record; husband resolvable by OMJ card.
+- **Female married to a NON-Okhai husband (NEW — KhundiConnect registers her; the OMJ Lawazim software does not):** she is still `is_okhai_by_birth=true`, a member of her father's Khundi. We additionally capture **husband-side facts** (not a Khundi/Group code): husband name, husband father name, husband grandfather name, husband CNIC, husband community/biradari, surname, and his community-membership number if any. These are attached facts for census/relationship context — they never make her a member of a non-existent tenant.
 
 **Thresholds & dissolution (unchanged):**
 - **Khundi formation/split threshold:** a group must have **≥ 20 active 18+ male Okhai-by-birth voting-eligible members** to be recognized as a Khundi (applies at creation and when splitting off a new sub-group). Below 20 it is not a Khundi.
@@ -83,7 +86,7 @@ A Khundi is fundamentally an **extended paternal family**. Membership flows **fa
 
 - OMJ issues a **centralized Membership Card** with an **OMJ Card Number** to each member. This is the **canonical identity** and constitutionally meaningful ID. Master member identity is OMJ-owned.
 - Khundi-printed cards have **no constitutional value** (cosmetic/internal only).
-- **OMJ Card Number gates app login:** a member can log into the PWA **only if they hold an OMJ Card Number** — including honorary (female) members. Members without a card are *records*, not *users*.
+- **OMJ Card Number gates app login:** a member can log into the PWA **only if they hold an OMJ Card Number** — female members included. Members without a card are *records*, not *users*.
 - **CNIC** (national ID) is the **primary match anchor** for data reconciliation; **OMJ Card Number** is the secondary/fallback anchor.
 
 ### 2.5 Fees & Lawazim
@@ -97,7 +100,7 @@ A Khundi is fundamentally an **extended paternal family**. Membership flows **fa
   - The system records reality as humans enter it; it never moves money between Khundi and OMJ automatically.
 
 > **v2 LAWAZIM CORRECTIONS (build-step 25).** Refinements from real-world use, applied when the Lawazim module is deepened:
-> - **Liable set is exactly the voting-eligible set:** active, male, 18+, Okhai-by-birth member. A man stays liable every year **until death** (e.g. liable at 79). Honorary females, children, non-members, suspended/inactive/expired are **never** in the collection register. The member picker and register list **only liable members** — never the full roster.
+> - **Liable set is exactly the voting-eligible set:** active, male, 18+, Okhai-by-birth member. A man stays liable every year **until death** (e.g. liable at 79). Females (non-liable), children, non-members, suspended/inactive/expired are **never** in the collection register. The member picker and register list **only liable members** — never the full roster.
 > - **The Lawazim collection screen shows ONLY Khundi-fee collection.** The Rs 100 OMJ fee is part of **expenses** — it must **not** appear as a "+ OMJ Rs 100/member" note on the collection screen, and the **OMJ remittance is recorded on the expense/accounting side**, not as a block on the Lawazim collection view. (The remittance data model is unchanged; only its placement is corrected — it belongs with expenses.)
 > - **Carry-forward arrears ledger:** dues are a **running per-member balance**, not year-isolated. A member may pay in parts within a year, pay partially across years, or clear two years' fees in a later year after defaulting. The system maintains **outstanding/dues per member carried forward** and always shows the running balance. Professional partial-payment handling + payment history + clear outstanding tracking.
 
@@ -263,7 +266,9 @@ High-level relational design. Names indicative; the building agent should implem
 - **members** — `id`, `tenant_id`, `omj_card_number` (nullable; canonical identity when present), `cnic` (encrypted, nullable), `full_name`, `father_name`, `grandfather_name`, `gender`, `dob`, **`is_okhai_by_birth`** (bool — the single okhai/honorary input; replaces `member_type`+`is_honorary`), `status` (active/suspended/expired/inactive), **`marital_residence`** (`lives_in_khundi` | `married_out`, nullable), `blood_group` (nullable), `marital_status` (nullable), `education` (nullable), `occupation` (nullable), `income_band` (nullable), `disability` (nullable), `contact` (JSON: cell/landline/whatsapp/email/emergency), `address` (JSON), `household_id`, `provenance` (omj_fetch/manual), `photo_ref` (nullable), `remarks` (nullable), `created_at`.
   - **Husband-side facts** (only for a female married to a non-Okhai husband — §2.3; attached facts, NOT a Khundi/Group code): `husband_name`, `husband_father_name`, `husband_grandfather_name`, `husband_cnic` (encrypted, nullable), `husband_community` (biradari), `husband_surname`, `husband_community_membership_no` (nullable). Stored as a nullable JSON block on the member (or a 1:1 side table).
   - **NO `member_type`. NO `is_honorary`. NO `khundi`/`group_code` columns** — Khundi family, sub-group, and group code are read from the **tenant**, auto-assigned, never on the member.
-  - **Derived (computed on read, never stored, never hand-set):** `is_voting_eligible` = active ∧ male ∧ age≥18 ∧ is_okhai_by_birth; `is_honorary` = (gender=female); `is_child` = age<18; `is_non_member_okhai` = is_okhai_by_birth ∧ no active card/membership; `is_pending_voting_activation` = male ∧ okhai ∧ just-turned-18 ∧ active (flag, never auto-activate). These power the threshold count (counts only eligibles).
+  - **Derived (computed on read, never stored, never hand-set):** `is_voting_eligible` = active ∧ male ∧ age≥18 ∧ is_okhai_by_birth; `is_child` = age<18; `is_non_member_okhai` = is_okhai_by_birth ∧ no active card/membership; `is_pending_voting_activation` = male ∧ okhai ∧ just-turned-18 ∧ active (flag, never auto-activate). These power the threshold count (counts only eligibles). **(v3.1: the old derived `is_honorary` = female is REMOVED — split by `gender` where needed. A new derived `is_married_in` = (linked SPOUSE_OF an Okhai male) ∧ `is_okhai_by_birth=false` marks a non-Okhai woman married into the Khundi; on divorce the link closes and her `status` becomes `inactive`.)**
+
+> **v3.1 MEMBER NOTE (build-steps 54+).** (1) **"Honorary" is removed** as a concept/label everywhere — gender split replaces it. (2) A **Married-In** marker (derived by relationship, above) is added and is filterable in lists/demographics. (3) A **per-member timeline** is added — a chronological history of life events (marriage/divorce, prize participation/win, academic results, status changes, census participation), partly **auto-written** by modules and partly **manually added**; immutable entries, newest-first, filterable by type. (4) A free-form **controller notes** field is added — private operator notes, **role-gated** (`members.notes`, controllers/admins only, never shown to the member or in member-visible exports), **audited** on write. (5) **Marriage/divorce history is never deleted** — links close with a date; current markers derive from the open link.
 
 > **v3 MEMBER/IDENTITY NOTE (build-steps 45, 48).** **CNIC** is promoted to the **stable cross-context member anchor** (the one identifier a member cannot deny) — captured/validated, **encrypted at rest, masked on display** (e.g. `*****-*******-*`), permission-gated + audited on any reveal, never returned raw; **OMJ Card Number is kept** as the canonical OMJ identity. A **household / living-arrangement grouping** is added (build-step 45): who **lives together** vs **separately**, independent of blood relationship (two related brothers may live in separate households; an in-law lives in by marriage). This grouping powers the family-tree household overlay and the welfare household-dedup (build-step 48), and is forward-compatible with the v4 cross-org ledger (§27.1). Tenant isolation stays ABSOLUTE in v3.
 - **households** — `id`, `tenant_id`, `head_member_id`, `address` (JSON), `notes`.
@@ -350,7 +355,7 @@ High-level relational design. Names indicative; the building agent should implem
 
 ### Khundi Tenant Feature Areas
 - **Khundi Admin & Roles** — Khundi Super Admin; tenant-managed dynamic roles/users.
-- **Member Management** — members, honorary, children, non-member-Okhai records; status & lifecycle; derived voting eligibility.
+- **Member Management** — members (by gender), children, non-member-Okhai records, Married-In members; status & lifecycle; per-member timeline + controller notes (v3.1); derived voting eligibility.
 - **Family Graph & Households** — relationships powering the navigable family tree.
 - **OMJ Data Sync** — API key config; manual + cron fetch; conflict review queue.
 - **Census** — snapshots, crowdsourced entry, approval workflow, live demographics, family tree, economic/welfare fields, progress.
@@ -383,6 +388,8 @@ High-level relational design. Names indicative; the building agent should implem
 ---
 
 ## 9. User Roles & Permissions Matrix
+> **v3.1 ADDITIONS (build-steps 54+).** (a) **Committee chairmen / volunteers** are modelled as **scoped custom roles** for v3.1 (e.g. "Census Chairman", "Prize Committee") using the existing role engine — a first-class Committees entity (with rosters, terms, and chairman elections via the Polling module) is a later/v4 add. (b) **Admin/config capabilities are NEVER mode-gated** (Simple/Pro is presentation only) — they are **permission-gated** only; the Simple/Pro toggle must never hide Roles & Permissions, provider config, user management, or accounting depth. (c) New permission `members.notes` (controller-only private member notes). (d) The **Polling & Elections module** adds per-poll, Khundi-configurable eligibility (who may vote / who may stand), independent of OMJ voting-eligibility.
+
 
 Roles are **dynamic**; below are **seed/default** roles the system ships with. Tenants/OMJ can create more.
 
@@ -431,12 +438,12 @@ Rendered from any chosen person; pivots to **father's side** or **mother's side*
 - **Optional blocks** (children's spouses, grandchildren, in-laws, siblings): if empty, **remove/hide** entirely.
 
 ### 10.3 Crowdsourced Entry + Approval
-- **Any card-holding member (including honorary/female)** can enter/update their family's census via the PWA.
+- **Any card-holding member (female included)** can enter/update their family's census via the PWA.
 - Each submission/update is **pending** until approved by a **Councilor / President / General Secretary** (role with `census.approve`).
 - On approval → official, counts in demographics, and becomes **visible to OMJ** (cross-tenant view).
 
 ### 10.4 Live Demographics + Dated Snapshots (Option C)
-- **Live roll-up:** demographics (population, age bands, voting members, honorary, children, seniors, education, occupation, income/below-threshold) **derived continuously** from member + family data.
+- **Live roll-up:** demographics (population, age bands, voting members, gender split, children, seniors, education, occupation, income/below-threshold) **derived continuously** from member + family data.
 - **Dated snapshot:** run a formal "Census {year}", capturing extra economic/welfare fields, then **finalize** to freeze it for year-over-year comparison and AI analysis.
 
 ### 10.5 Census Data Captured (beyond routine member fields)
@@ -489,6 +496,8 @@ AI is **not** vendor-funded by default. Whoever wants insights **plugs in their 
 ---
 
 ## 12. Notifications — Bring-Your-Own Messaging Provider
+> **v3.1 OVERHAUL (build-steps 54+).** One notification/announcement engine: media attachments; show only ACTIVE channels; multi-member + multi-role + **custom saved-filter audiences** (one filter engine shared with table filters); **per-notification-type channel routing** + **per-channel templates** (OMJ ships defaults, Khundi overrides); a fixed scheduler; verified push tenant-scoping. **Announcement landing pages**: login-required (logged-in + tenant-eligible only) vs public-shareable (hard-restricted from welfare/CNIC/financial/confidential content), with URL shortening; Khundi pages on the Khundi subdomain, OMJ pages on a central OMJ URL. **OMJ-level cross-Khundi announcements** (all-members / specific-Khundi / councilors / roles / all-males / all-females / custom-filter audiences). **Login credentials:** password-primary; OTP optional and only offered where a Khundi has an SMS/WhatsApp provider configured (Khundi chooses the OTP channel); auto-generated passwords shown once and embedded in the WhatsApp/SMS credential template; a `wa.me` click-to-send handoff works without any provider API.
+
 
 - Each Khundi enters **their own** messaging API credentials in Settings → messaging cost sits with the **tenant**, not the vendor.
 - **Provider dropdown:** seed with **Twilio** and **Infobip** (both SMS + WhatsApp); extensible.
@@ -500,6 +509,8 @@ AI is **not** vendor-funded by default. Whoever wants insights **plugs in their 
 ---
 
 ## 13. UI/UX & Dashboard Structure
+> **v3.1 FOUNDATION (build-steps 54+).** The shared list surface (`DataList`) is redesigned: the **Actions column is FIRST** in table view and actions sit in the **card footer** in card view, with responsive **colored-icon ↔ label** controls and a **fail-loud** error on an unregistered list key. **Column preferences become per-USER**, set from the table header (over a tenant-wide admin default). **Filters** become dynamic/fuzzy/collapsible with automatic client-vs-server sourcing by row-count and debounced partial search (incl. debounced partial CNIC lookup where permitted). A real **toast system** + **inline field validation** replace the static banner. **Modals/keyboard**: ESC closes every popup, Cmd/Ctrl+Enter saves, plus rush-time shortcuts. **One project-wide pass** ensures human labels everywhere (no raw enums/keys/slugs) and complete Urdu/RTL coverage (hardcoded English is a defect). Member/other pages gain dashboard-style info-boxes. A dedicated **Reporting module** (hybrid server-side PDF + Excel) and a polished **census PDF report** are added.
+
 
 ### 13.1 Design Language
 - **Modern, professional, polished.** Clean shadcn/ui components, generous spacing, consistent design tokens, light/dark mode.
@@ -566,6 +577,8 @@ When the vendor enables the White-Label module for a tenant (billed), the tenant
 ---
 
 ## 16. Mobile App Strategy
+> **v3.1 PWA (build-steps 54+).** Full installable PWA: install banner (authenticated pages only), **white-label per Khundi** via a dynamic per-subdomain manifest + per-Khundi icon/splash/theme, smart update prompts, offline app-shell (never cache `/api`), and a 90-day refresh session with silent refresh. The architecture is kept **realtime-ready** (announcements/attendance/poll surfaces designed so a Socket.io layer can drop in without rework), but the socket layer itself is **deferred** (built when live results/dashboards become a priority).
+
 
 - **Phase 1: PWA** — single codebase, installable, offline census, push notifications, camera QR scanning, card wallet. No app stores.
 - **Phase 2 (only if needed):** native wrapper (Capacitor) reusing the PWA, for store presence / deeper device features.
@@ -588,6 +601,8 @@ When the vendor enables the White-Label module for a tenant (billed), the tenant
 ---
 
 ## 18. Accounting — Dual-Mode Detailed Design
+> **v3.1 ADDITIONS (build-steps 54+).** Surface the existing **hierarchical chart of accounts** (Pro) and clean up reconciliation. Add **Funds + Donations**: OMJ-standard core funds — **Business Aid, Ration Aid, Zakat, General, Donations, Dowry, Educational** — plus Khundi-authored custom funds; a **lightweight donor record** for non-member donors; the fund model is kept **v4-forward-compatible** (the cross-org ledger is the same domain at a higher altitude). Every money path posts a balanced entry; corrections are reversal-not-edit. Bereavement adds per-record **expense lines + invoices** that post here.
+
 
 **Principle: one double-entry engine underneath; mode only changes the interface and how much the user enters.**
 
@@ -816,6 +831,25 @@ v3 has two phases. **v3-A (38–46) ships first** (the experience layer — it u
 
 > **Each module must ship with:** its data model + migrations + RLS, its permission keys, its module-flag gate, its API, its SPA UI (animated, Urdu-ready), and its audit hooks. Build, test, and verify each module before the next.
 
+### v3.1 — Experience-overhaul + new-capability program (build-steps 54+)
+
+> **v3.1 is one large foundation-first program** building on top of v3, derived from a 40-concern + 5-new-capability review of the deployed app (see `specs/README-v3.1.md` for the full decision register). It is sequenced in **six waves**: (1) shared UI primitives, (2) member model + identity, (3) form engine + census, (4) finance + community modules, (5) communication + access + polling, (6) platform experience. Foundations land before the features that sit on them. The cross-org welfare ledger stays deferred to **v4** (§27.1); v3.1 keeps tenant isolation ABSOLUTE.
+>
+> **Checkpoint mode for v3.1 — CONTINUOUS DEVELOPMENT.** Unlike v2/v3 (which used fixed manual stops), v3.1 runs continuously: the agent ends **every** build-step with `[CHECKPOINT]` (no `[FIXED_CHECKPOINT]`), the controller auto-approves, merges the branch to **staging**, deploys staging, and proceeds to the next step. The build stops ONLY when a spec is missing (`[HUMAN_REQUIRED]`), an infra problem is not code-fixable, or after repeated failure. **Production promotion stays manual (operator-only); staging is the testing gate.** Data-model / RLS / auth / permission changes are still flagged in the step summary, but they do not halt the loop.
+
+The exact build-step numbers (54+) and per-step branch slugs are assigned in the v3.1 specs. The wave ordering:
+
+| Wave | Theme | Work-items |
+|------|-------|-----------|
+| 1 | **Core UI primitives & cross-cutting** | Shared `DataList` redesign (actions-first column / card-footer actions, responsive colored-icon↔label, fail-loud on bad list key); per-USER column preferences from the table header; dynamic/fuzzy/collapsible filters (auto client/server by row-count, debounced); toast system + inline field-validation; validation/masking layer + phone library (CNIC/OMJ masks, two-level validation); modal/keyboard fix (ESC everywhere, Cmd/Ctrl+Enter, rush-time shortcuts); **mode-gating fix (admin/config NEVER mode-gated, only permission-gated)** + human-labels/Urdu pass + image-ref→URL fix + repo hygiene. |
+| 2 | **Member model & identity** | **Marriage-linkage model** (Married-In derived by relationship; divorce → Inactive after confirmation, history preserved; **remove "honorary" entirely** → gender split); **member timeline** (auto + manual events) + role-gated audited **controller notes**; members info-boxes; card system (OMJ official / Khundi optional / **OMYS number**) + certificate/card canvas (bg + font/size/color); family-tree fix (children→marriage lens; two-lineage no-doubling). |
+| 3 | **Form engine & census** | Advanced **form builder** (inline options, auto-slug/no keys shown, no enums to users, radio/checkbox/member/searchable types, **multi-level conditional/cascading logic**); **taxonomy governance** (OMJ standard + Khundi-local-immediate + OMJ review queue with promote / merge-alias / re-map); **census redesign** (auto-fill, marriage/household fill, full Gatta-G field set, unify "Other"); polished **census PDF report**; **instance/season pattern** (Census rounds + Prize ceremonies: active-latest + archived-viewable + cross-instance report). |
+| 4 | **Finance & community modules** | Accounting (surface hierarchical chart of accounts in Pro + reconciliation cleanup); **Funds + Donations** (OMJ core funds: Business Aid / Ration Aid / Zakat / General / Donations / Dowry / Educational + Khundi custom; lightweight donor record; v4-forward-compatible); **Bereavement** (expense-lines per record + invoices → accounting; mark member expired + notify OMJ; janaza announcement; eligibility flag-not-block; drop grave-issued-date & relation-non-member field); **Events/attendance** (multi-type + agenda; focused fast roll-call surface — bulk, multi-field lookup incl. debounced partial CNIC, optional QR; inline lawazim collection; announce-prompt-on-create + soft-reminder); Prize fixes (ceremony-scoped applications, reopen, category selectability); **graveyard registry** (OMJ-managed, merge-on-remove). |
+| 5 | **Communication, access & polling** | **Notification/announcement engine** (media, active-channels-only, multi-member/multi-role + **custom audience builder**, per-type channel routing, per-channel templates, scheduler fix, push tenant-scope verify); **announcement landing pages** (login-gated + tenant-eligible + public-shareable + link shortening + public-content restrictions) + **OMJ-level cross-Khundi announcements**; Access (My-Access readability; user onboarding; **password-primary credentials** + auto-generate + WhatsApp `wa.me` handoff; OTP optional only where a provider is configured; scoped committee roles); **CSV bulk member import** (+ sample, server validation, error report); **Polling & Elections module** (full: nominations, secret ballot, configurable winning rules, certification; Khundi-configurable per-poll eligibility; also decision-polls). |
+| 6 | **Platform experience** | Full **PWA** (install banner, white-label per-subdomain manifest/icon/splash, smart updates, offline, 90-day session, **realtime-ready but Socket.io deferred**); **Reporting module** (dedicated report library — member directory w/ filters, financial statements, lawazim defaulters, welfare, census-filtered e.g. doctors, printable per-member family tree, etc.; hybrid server-side PDF + Excel; RTL/Urdu). |
+
+> **v3.1 deferrals (to v4 / later):** the cross-org CNIC-anchored welfare ledger (§27.1); a realtime/Socket.io layer (architecture kept realtime-ready in v3.1); a first-class **Committees** entity (v3.1 uses scoped roles; committee-chairman elections via the polling module is a natural later add); true row-level "own record only" volunteer scopes (v3.1 uses task-limited roles — row-level scoping touches the safety-critical permission engine and warrants its own design round).
+
 ### 27.1 v4 — Cross-Organization Welfare Ledger (DOCUMENTED, NOT BUILT IN v3)
 
 Deferred from v3 by decision; **stays within KhundiConnect** (same product). Build-steps **54+**. **Do not build any of this during v3 (38–53).** Tenant isolation remains ABSOLUTE through v3; v3 only makes the data model forward-compatible (CNIC anchor, household grouping, per-member/household welfare history — build-steps 45/48).
@@ -1008,12 +1042,12 @@ The agent will produce a step-by-step runbook; high level:
 - **NO-AUTO-ACTION RULES:** assert the system does NOT auto-dissolve a Khundi below 20 members, does NOT auto-deduct/transfer the Rs 100 OMJ fee, does NOT auto-suspend, and does NOT silently overwrite on OMJ fetch (conflicts go to review queue).
 - **SECRET HANDLING:** assert CNIC and API keys are encrypted at rest and never appear in logs, API responses (unless authorized), or URLs.
 - **AI PRIVACY:** assert census data sent to LLM is aggregated/anonymized and contains no CNIC/identifying detail.
-- **VOTING-ELIGIBILITY DERIVATION:** assert `is_voting_eligible` is computed (active + male + 18+), never settable manually; assert females are honorary/uncounted; assert the 20-member threshold counts only eligible members.
+- **VOTING-ELIGIBILITY DERIVATION:** assert `is_voting_eligible` is computed (active + male + 18+ + Okhai-by-birth), never settable manually; assert females are uncounted toward the voting threshold (no "honorary" concept — split by gender); assert the 20-member threshold counts only eligible members.
 
 ### 31.3 Dummy Data Seeding (agent must create, for testing)
 The agent generates a **seed script** producing a realistic test community so every feature is testable and demos look real:
 - **≥3 tenants:** `Jafrani-B`, `Toberiya-A`, `Kath-A` (so isolation is always testable).
-- Per tenant: **30–60 members** mixing male 18+ (voting), honorary females, children (incl. a male child near 18 to test the turning-18 flag), seniors, a few suspended/inactive, and a non-member "Okhai-by-birth" person (for the grave record case).
+- Per tenant: **30–60 members** mixing male 18+ (voting), females, children (incl. a male child near 18 to test the turning-18 flag), seniors, a few suspended/inactive, a non-member "Okhai-by-birth" person (for the grave record case), and (v3.1) a Married-In non-Okhai female to test the derived marker + divorce→inactive path.
 - **Family relationships** wired up (fathers, mothers, spouses, children, siblings) so the **family tree renders** with both required (filled + a few empty) and optional (present + absent) blocks.
 - **Lawazim** payments across 2–3 years with some defaulters; one **OMJ remittance** expense entry.
 - **Accounting** entries in both default heads; a tenant in Simple mode and one in Detailed mode.
