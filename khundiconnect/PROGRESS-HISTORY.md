@@ -843,3 +843,51 @@ typecheck (shared+api+web) ✅ · lint (web) ✅ · build (api+web, `/polls` + `
 - **Voter identity** is always the signed-in user's own member record — no `voterMemberId` is ever accepted from the client, so no one can vote as another.
 - **Eligibility** is per-poll (audience/rule) through the single shared filter language; `voting_eligible` is ONE option, not the hardcoded rule (a Khundi may enfranchise differently).
 - **OMJ poll casting** is intentionally not exposed at the platform altitude (a vote is a Khundi member's act resolved inside that Khundi's tenant context); OMJ supports management + lifecycle + certify + results.
+
+---
+
+## Build-step 86 — Permissions & roles correctness — `feat/86-permissions-fix-v32` (built 2026-06-28)
+
+**WORK TYPE: FIX** (v3.2 Wave 1 / item 1 — PRIORITY; the testing BLOCKER). Spec `specs/86-permissions-fix-v32.md`; CODEREF `specs/86-91-CODEREF.md`. **PERMISSION-SENSITIVE — flagged.** First step of the v3.2 concern-resolution program (build-steps 86–93, `specs/README-v3.2.md`).
+
+### The problem (operator concern, verified in code)
+`SUPER_ADMIN_KEYS` (`apps/api/src/provisioning/default-roles.ts`) is correctly DYNAMIC — `ALL_PERMISSION_KEYS.filter(k => !NON_TENANT_KEYS.has(k))`, i.e. "every tenant-applicable permission" — but it is materialised into `role_permissions` **only at provisioning/seed time**. When later build-steps added permissions (`reports.view` build-step 84-era, `polls.view/manage/vote` build-step 81), **already-provisioned tenants' protected Khundi Super Admin roles never gained them** (no reconcile). Result: an existing Khundi Super Admin could not access Reporting/Polls — blocking the operator from testing those modules. New tenants were fine; existing ones stale.
+
+### Scope decision — shipped §2.1, split §2.2 (spec-sanctioned)
+The spec explicitly authorises splitting: "ship 2.1 (the reconcile — the actual blocker) in 86, and 2.2 (fork-on-edit) as 86b/87. 2.1 is the must-have." I shipped **§2.1 (the reconcile)** fully and split **§2.2 (fork-on-edit of non-protected seeded roles)** to a follow-up **86b**. Rationale: in this codebase each tenant already owns physical copies of the seeded roles (President/Accountant/… are TENANT rows with `tenantId`), and `isBuiltInRole` is NAME-based (`DEFAULT_TENANT_ROLE_NAMES.has(role.name)`). A faithful "fork, don't block" therefore needs an identity/schema decision (`derivedFromRoleId` + override row vs clone-on-first-edit with a non-protected flag) and risks regressing the working name-based role editor + its tests — too large to fold into the blocker fix safely.
+
+### What shipped (§2.1 — the reconcile, two hooks)
+1. **Idempotent one-shot data migration** `apps/api/prisma/migrations/20260724000000_superadmin_perm_reconcile/migration.sql` (PURE SQL — the authz backbone `roles`/`role_permissions`/`permissions` is GLOBAL by design, **no RLS**, docs/PERMISSIONS.md — so no `runWithTenant`/GUC needed). A single `INSERT … SELECT` cross-joins every **protected TENANT-altitude** role (`altitude='tenant' AND is_protected=true` — the Khundi Super Admin) with every permission whose `key` is NOT in the platform/OMJ exclusion list (the 8 `NON_TENANT_PERMISSION_KEYS` inlined verbatim), guarded by `NOT EXISTS` on the existing grant. Therefore: **idempotent** (a second run inserts nothing), **isolated** (each role reconciled against its OWN grants — one tenant's Super Admin is never widened from another's), and the Super Admin **never gains an OMJ/Vendor power**. Uses `gen_random_uuid()` (already used by the build-step-74 graveyard backfill). **NO schema change** — `schema.prisma` untouched; this is a data backfill only. Fixes the operator's existing test Khundi NOW.
+2. **Boot-time safety net** `PermissionService.reconcileSuperAdminGrants()` (`apps/api/src/permissions/permission.service.ts`), called from a new `onApplicationBootstrap()` (`implements OnApplicationBootstrap`). It loads the assignable permission rows for `SUPER_ADMIN_KEYS` (imported from `default-roles.ts` — DYNAMIC, so any FUTURE permission added to the catalog is included with **no new backfill**) and, for each protected TENANT role, `createMany({…, skipDuplicates:true})` the missing grants. Read/written on the audited platform path (`runAsPlatform`). **Never crashes boot** — a transient DB outage (PrismaService boots regardless) is caught, logged (`logger.warn`), and skipped; the next bootstrap or the migration reconciles. Audit-logs `permissions.reconcile roles=N grantsAdded=M actor=system` only when something changed. This is the "most robust available hook" the spec asks for (§2.1 b).
+
+### Preserved (already-correct guards — verified, not regressed)
+- Protected Super Admin/Owner role stays **non-editable** (`updateRole`/`deleteRole` still throw `Built-in roles cannot be edited/deleted` for `isBuiltInRole`).
+- `sanitisePermissionKeys` still filters every tenant role edit through `ASSIGNABLE_KEYS` (`TENANT_ASSIGNABLE_PERMISSIONS`) — a Khundi can never grant platform/OMJ powers.
+- Role queries stay `altitude: TENANT` + `tenantId`-scoped (a Khundi only sees/edits its own roles).
+- The ≥1-Super-Admin-holder lock-out guard (`removeMemberFromRole`).
+- `NON_TENANT_KEYS` exclusion (Super Admin never gets OMJ/Vendor powers) — enforced by both the migration's `NOT IN` list and the reconcile's `SUPER_ADMIN_KEYS` derivation.
+
+### Files
+- NEW `apps/api/prisma/migrations/20260724000000_superadmin_perm_reconcile/migration.sql` (data backfill).
+- EDIT `apps/api/src/permissions/permission.service.ts` (+`OnApplicationBootstrap` import, +`SUPER_ADMIN_KEYS` import, +`logger`, +`onApplicationBootstrap()`, +`reconcileSuperAdminGrants()`).
+- NEW `apps/api/src/permissions/superadmin-reconcile.migration.spec.ts` (real SQL on PGlite — the required migration regression).
+- NEW `apps/api/src/permissions/superadmin-reconcile.service.spec.ts` (the boot-time reconcile unit test).
+
+### Acceptance (spec §3) — coverage
+1. ✅ A stale protected Super Admin gains `reports.view`, `polls.*`, and every other current tenant permission — proven by the migration spec (seeds the catalog-minus-later-keys, asserts the full assignable set after backfill) AND the service spec (stale snapshot → full set; the dynamic `SUPER_ADMIN_KEYS` hook is what picks up a newly-added key). **Operator can now test Reporting & Polls as Super Admin.**
+2. ✅ Idempotent (second run inserts nothing — both specs) and tenant-isolated (each Super Admin reconciled against its own grants — migration spec asserts T1 & T2 independently; per-role `NOT EXISTS`).
+3. ⏭ Fork-on-edit (§2.2) — **split to 86b** (spec-sanctioned).
+4. ✅ Protected Super Admin/Owner remains non-editable/non-forkable — unchanged hard block (existing `role-editor.service.spec.ts` still green).
+5. ✅ A Khundi role still cannot receive any platform/OMJ permission — `sanitisePermissionKeys` regression covered by existing role-editor spec; reconcile excludes them by construction.
+6. ✅ Gates green (below); migration regression for the backfill shipped.
+
+### Gates
+- **typecheck** (`@kc/api`): clean.
+- **lint** (eslint, api): clean.
+- **build** (`nest build`): clean.
+- **api test suite**: **201 suites / 1649 tests pass** (+2 suites, +11 tests vs 199/1638). Includes the new migration-regression spec (backfill + idempotency + non-tenant exclusion + per-tenant isolation + roles/role_permissions stay no-RLS while `tenants` keeps RLS) and the new service spec (stale→full, idempotent, only-protected-TENANT touched, never grants platform keys, boot never throws).
+- **isolation**: the migration spec's RLS-regression assertion + existing isolation suites green. No tenant table's RLS policy touched (data-only migration).
+- web/shared/i18n gates: **N/A** — API-only change, no web/shared edits, **no new `t()` keys**.
+
+### Follow-up owed
+- **86b — fork-on-edit (§2.2):** when a Khundi edits a NON-protected seeded role (President/Accountant/…), create a Khundi-specific editable copy (decide `derivedFromRoleId`+override vs clone-on-first-edit with a non-protected marker; keep names unambiguous), still passing `sanitisePermissionKeys` and `altitude: TENANT`; the protected Super Admin/Owner stays locked.
