@@ -4,6 +4,28 @@
 
 ---
 
+- **Build-step 88 — Real international phone input (libphonenumber-js)** 🟢 **complete — `[CHECKPOINT]` (continuous mode).** branch `feat/88-phone-library-v32` (off the staging head after 87); **WORK-TYPE: FIX** (v3.2 Wave 1 / item 3 — replaces the build-step-58 hand-rolled phone layer with a real library and rolls it out). spec `specs/88-phone-library-v32.md`, CODEREF `specs/86-91-CODEREF.md`. **NO schema / RLS / auth / permission / migration — web client + shared validation + one server send-path strengthening.** Isolation gate ➖ (phone-number rule is non-tenant; the same shared rule runs client + server). Gates: typecheck (shared+api+web, 6/6) ✅ / web lint (no warnings) ✅ / web build (44 routes) ✅ / i18n parity + web-coverage ✅ / **full API suite 1653 passed (201 suites; +4 phone cases)** ✅.
+
+  **Problem (spec §1, concern [58]).** The build-step-58 phone layer was hand-rolled because the operator's offline registry couldn't guarantee an npm phone library at the time: a `<Select>` of **18 hardcoded countries**, **length-only** E.164 validation (`/^\+[1-9]\d{7,14}$/` — no per-country rules, so a too-short/too-long PK or UAE mobile was wrongly accepted), emoji flags (don't render on Windows), no as-you-type formatting, used in only ~4 places. The unvalidated number also fed the live SMS/WhatsApp send path (deliverability risk).
+
+  **Library decision (spec §2.1).** `libphonenumber-js@1.13.5` was already present in `node_modules` (transitive via `class-validator`) and the registry was reachable, so the original install blocker is gone. Declared it EXPLICITLY in `packages/shared` (validation, shared client+server) and `apps/web` (`AsYouType` formatting); confirmed at build — no `[HUMAN_REQUIRED]`. **Pure-JS, ARM-safe, no native deps.**
+
+  **Component decision (spec §2.3).** Kept the CUSTOM `<PhoneInput>` shell (over adopting `react-phone-number-input`) so it stays inside the design system (`field.tsx` `<Input>`), the i18n provider, RTL (`dir="ltr"` number field), and the build-step-57 inline-error pattern — and because rphi's default country select isn't searchable either, so the searchable combobox had to be built regardless. Backed it with `libphonenumber-js` for real per-country validation + `AsYouType` formatting, the FULL ITU country list, a searchable country combobox (filter by localized name / ISO / dial code), and reliable **SVG flags via `country-flag-icons`** (render on Windows, unlike emoji). Country names are localized at render via `Intl.DisplayNames([locale])` (EN + UR both read naturally) — so NO translated country table and **ZERO new i18n keys** (reused `common.country` / `common.typeToSearch` / `common.noMatches`).
+
+  **Shared rewrite (`packages/shared/src/index.ts`, build-step-58 block → 88).** `isValidE164` now requires a leading `+` then `isValidPhoneNumber()` (real per-country validity); `normalizePhoneE164` uses `parsePhoneNumberFromString(raw, defaultCountry)` (handles `+…`, `00…` IDD, bare-national with trunk-0) and returns validated E.164 or null; `parsePhoneE164` uses the library's precise country resolution (US/CA `+1` disambiguated by the number). `PHONE_COUNTRIES` is now derived from `getCountries()`+`getCountryCallingCode()` (full list, PK pinned first), `{ iso, dialCode }` only — name/flag became presentation. **All 12 pre-existing pure-rule test cases pass unchanged**; added cases proving real rejection of the wrong-length numbers the old rule accepted.
+
+  **Server send-path strengthening (spec §2.2, goal #2).** `normalizeRecipients` (the SMS/WhatsApp audience normalizer) now coerces every recipient phone to real E.164 via `normalizePhoneE164` and DROPS un-dialable ones (was lenient `isValidPhone`), de-duping by the E.164. So the dispatcher only ever receives sendable numbers — client and server reject the SAME numbers from ONE shared rule. Push is a separate path (`sendPush`, subscription-keyed) — untouched. The DTO validators (`@NormalizePhone`/`IsPhoneE164` in `apps/api/src/common/dto-validators.ts`) inherit the stronger rule automatically.
+
+  **Roll-out (spec §2.4).** Phone fields already on `<PhoneInput>` (member form ×3, `me` portal, providers test-send) now get the new engine for free. Converted the last single-phone raw `<Input>` → `<PhoneInput>` at `apps/web/app/platform/tenants/page.tsx` (Super-Admin contact phone). The one intentional exception is the notifications **bulk multi-recipient paste** field (comma/newline list) — left free-text by design (single-value `<PhoneInput>` can't model it); documented inline, and the server now normalizes each pasted entry to E.164. Grep confirms no other single-phone raw input remains.
+
+  **Bundle note.** The SVG flag set (~300 kB, 250+ components) is **lazily imported** into its own async chunk (`import('country-flag-icons/react/3x2')` on first `<PhoneInput>` mount, session-cached) — off every phone-bearing page's first-load JS (saved ~55 kB/page: members 530→475 kB, settings 408→353, `me` 403→348, tenants 393→338). Until the chunk lands the selector shows the ISO code, so the control is usable immediately.
+
+  **Do-not-break preserved:** E.164 storage shape, build-step-57 inline error, default country = PK, server-side messaging validation (now stronger, not removed), RTL number field `dir="ltr"`.
+
+  **Files:** `packages/shared/src/index.ts` (phone block + `normalizeRecipients`), `packages/shared/package.json` + `apps/web/package.json` (+ root `package-lock.json`) deps, `apps/web/app/ui/phone-input.tsx` (rewrite), `apps/web/app/platform/tenants/page.tsx` (roll-out), `apps/web/app/notifications/page.tsx` (exception comment), `apps/api/src/members/input-masking.spec.ts` (real-validation cases).
+
+---
+
 - **Build-step 85 — Brand / logo deployment** 🟢 **complete — `[CHECKPOINT]` (continuous mode). First step after v3.1 (54–84).** branch `feat/85-brand-logo-deploy-v31` (off the staging head after 84); **WORK-TYPE: FIX** (replaces the single placeholder `icon.svg` with the real KhundiConnect brand everywhere — favicon/PWA/maskable/iOS/login/header/push). spec `specs/85-brand-logo-deploy-v31.md`, CODEREF `specs/85-CODEREF.md`. **NO schema / RLS / auth / permission / module change — pure web client + public static assets.** Isolation gate ➖ (the assets are public-safe branding — a green-tile/white-K icon set + wordmark lockups; no tenant data path; the manifest/SW only ever carry branding, never member/auth data). Gates: typecheck (shared+api+web) ✅ / web lint (no warnings) ✅ / web build (44 routes, all icons emitted to static output) ✅ / i18n parity + web-coverage ✅ / `pwa-manifest.spec.ts` (6) ✅. Zero physical-direction Tailwind; RTL unaffected (login lockup is theme-toggled, not direction-toggled).
 
   **Problem (spec §1).** Every icon reference pointed at one generic `apps/web/public/icon.svg`, and the two brand surfaces rendered a letter-in-a-square (`APP_NAME.charAt(0)` on login; `name.charAt(0)` in the header) — unbranded. The operator pre-placed the approved brand set in `apps/web/public/`; this step WIRES those existing files (the agent generates no images). The KhundiConnect brand is the **DEFAULT** — the existing per-Khundi white-label flow (`logoUrl`, build-step 36/44) MUST still win when a Khundi uploaded its own logo.
@@ -939,3 +961,37 @@ build-step-56 engine + `filterConfig`/`getFilterValue`/`applyFilters`/`shouldFil
 
 ### Gates
 typecheck ✅ · lint ✅ (rules-of-hooks clean after the hook moves) · web build ✅ (44 routes) · i18n parity (`i18n.spec.ts`) + web-coverage (`audit/i18n-web-coverage.spec.ts`) ✅ · filter-engine spec (incl. new `labelDomainOptions` cases) ✅.
+
+---
+
+## Build-step 89 — CNIC/OMJ masking rollout (`feat/89-masking-rollout-v32`)
+
+**WORK TYPE: FIX (completion/roll-out).** v3.2 Wave 1 / item 4. Built 2026-06-28. Branch `feat/89-masking-rollout-v32`. **Web client only — NO schema/RLS/auth/permission/migration; NO shared change (reused existing `normalizeCnic`).** Isolation ➖.
+
+### Problem (concern [58])
+The build-step-58 masked-input (`apps/web/app/ui/masked-input.tsx` — `CnicInput` `#####-#######-#`, `OmjCardInput` uppercase/no-space) was wired into ONLY `member-form.tsx`. Every other CNIC/OMJ-card entry used a raw `<Input>` → inconsistent entry + dirty data.
+
+### What shipped — scope verified by audit
+A full grep of `apps/web/app` for CNIC/OMJ/Khundi/OMYS shows the ONLY remaining *entry* (typed, controlled-input) fields outside the reference member-form are three sites; all converted:
+1. **`apps/web/app/events/page.tsx`** — the attendance fast-search field. It is one input serving two modes; in **CNIC mode** it now renders `<CnicInput>` (masked), in name/card mode the plain `<Input>`. The debounced lookup now normalizes the masked value to bare digits via `normalizeCnic(term)` BEFORE the `/^\d{3,13}$/` length check and before the `cnic=` query param, so the `#####-#######-#` dashes never leak into the server search. Added `normalizeCnic` to the existing `@kc/shared` import + `CnicInput` import.
+2. **`apps/web/app/login/page.tsx`** — both OMJ-card credential inputs (OTP-request `#card` + password `#pcard`) → `<OmjCardInput>`. Uppercase+drop-space mask is purely beneficial for a credential field (cards are always uppercase; server normalizes anyway). `onChange={setCardNumber}` (component yields the formatted string directly).
+3. **`apps/web/app/platform/tenants/page.tsx`** — the Super-Admin OMJ card on the provision-Khundi form → `<OmjCardInput>` (sits next to the build-step-88 `<PhoneInput>` → consistent provisioning form).
+
+**Deliberately NOT changed (documented):**
+- **Khundi-card # / OMYS #** (member-form lines 412–413) stay raw `<Input maxLength={64}>` — they have **no canonical format/mask** (free-text optional local identifiers); the reference member-form itself leaves them raw, and Do-NOT-break #3 says keep the member form. Acceptance #2 ("no raw `<Input>` for these identifier fields") is read as the *maskable* CNIC/OMJ identifiers.
+- **members-import.tsx** — CSV upload + read-only preview table; corrections happen by re-uploading the CSV, no inline identifier entry.
+- **onboard-wizard / roles-section** — the OMJ card is taken from a selected member (display/payload), never typed.
+- **welfare/prize/census/graveyard/me(portal)** — grep confirms NO CNIC/OMJ entry fields at all.
+- **Notifications bulk-recipient paste** — out of scope (multi-value free text; build-step 88 already documented).
+
+### Do-NOT-break — honoured
+CNIC encryption/tokenisation + permission-gated reveal-audit (build-step 48) untouched — masking is presentation only, stored value still normalized server-side. The masked-input format rules unchanged. Member form's masking preserved.
+
+### i18n
+ZERO new keys — reused existing `events.phSearchCnic` / `events.phSearchMember` / `auth.omjCardNumber` / `platform.tenantsCardPlaceholder`.
+
+### Files
+`apps/web/app/events/page.tsx`, `apps/web/app/login/page.tsx`, `apps/web/app/platform/tenants/page.tsx` (3 web files; +2 imports each as needed). No shared/api change.
+
+### Gates
+typecheck ✅ (6/6) · lint ✅ (clean) · web build ✅ (44 routes) · i18n parity (`audit/i18n.spec.ts`) + web-coverage (`audit/i18n-web-coverage.spec.ts`) ✅ (8/8). Acceptance grep: no raw `<Input>` bound to CNIC/OMJ entry state remains.
