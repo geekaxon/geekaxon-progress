@@ -891,3 +891,51 @@ The spec explicitly authorises splitting: "ship 2.1 (the reconcile — the actua
 
 ### Follow-up owed
 - **86b — fork-on-edit (§2.2):** when a Khundi edits a NON-protected seeded role (President/Accountant/…), create a Khundi-specific editable copy (decide `derivedFromRoleId`+override vs clone-on-first-edit with a non-protected marker; keep names unambiguous), still passing `sanitisePermissionKeys` and `altitude: TENANT`; the protected Super Admin/Owner stays locked.
+
+---
+
+## Build-step 87 — Dynamic-filter rollout to every list (v3.2 Wave 1 / item 2)
+
+**Built:** 2026-06-28 · **WORK TYPE: FIX** (completion/roll-out) · **branch:** `feat/87-filter-rollout-v32` · **NO schema / RLS / auth / permission change** (web client + per-list filter configs; isolation ➖ — client/server filter over already-tenant-scoped, fully-loaded data).
+
+### Problem (concern [19])
+The build-step-56 dynamic-filter ENGINE (`<FilterBar>`, `applyFilters`, `shouldFilterServerSide`, `filtersToQuery`, the `filterConfig`/`getFilterValue` props on `<DataList>`) shipped and worked — but had been adopted on ONLY the members roster (1 of ~19 lists). Every other list had just the free-text search box.
+
+### Approach — configuration, not new engine
+Reused build-step 56 entirely. The ONLY new code in `@kc/shared` is one tiny PURE helper:
+- `labelDomainOptions(domain)` — enumerates a `LABEL_CATALOG` domain in catalog order → `FilterOption[]` (`{value, label:en}`). The `<FilterBar>` renders each option's label through `formatLabel(value,{domain,locale})` at render time, so the helper keeps every select filter in lock-step with the same `labelDomain` the column registry already declares — no raw enum ever reaches the screen, and a list can't drift from the catalog.
+
+Key realisation: each list's filterable fields ARE exactly the `labelDomain` columns already declared in `LIST_COLUMN_REGISTRY`, so the configs mirror the registry. Field labels reuse the EXISTING `col.*` i18n keys (status/type/fund/source/category/gender/kind/channel/income/education/employment/marital/ceremony/rsvp/method/matched_by/submitted_by/action/actor/date/when/graveyard_type/welfare_flag/posted/printed/attended/this_year/dues_running) ⇒ ZERO new web keys for the DataList pages.
+
+All target lists already fetch the WHOLE list (no server pagination except members), so every rollout config sets `clientRowCap: 100_000` ⇒ always client-side, instant, fuzzy — the honest match to a fully-loaded list. The members list keeps its proven server-side path (`onServerFilter` + refetch) unchanged.
+
+### Lists covered
+**DataList lists — `filterConfig` + `getFilterValue` (16):**
+- `census` (status/income/education/employment/marital selects + welfare boolean), `welfare` (caseType[governed taxonomy]/fundSource/status), `lawazim` (yearStatus + defaulter boolean), `prize_applications` (category[taxonomy]/status/submittedBy), `omj_sync` (type/status/gender/matchedBy), `notifications` (status/kind/channel), `deaths`/graveyard (graveyardSource/posted boolean/date-of-death range), `accounting_journal` (voucherType/source/date range), `accounting_ledger` (account type), `donations` (fund[dynamic]/method/date range), `documents` (category/uploaded-date range), `cards` (type/printed boolean), `events` (type/status/starts-date range), `event_registrations` (rsvp/attended boolean — config lives inside the `EventPanel` sub-component), `billing` (status/paid-date range), `audit` (action-namespace[dynamic, audit_domain]/actor/date range — and `platform_audit` gets it free via the shared `AuditViewer`).
+
+**Non-`DataList` lists — standalone `<FilterBar>` + `applyFilters` (2):**
+- `polls` (status/kind selects over the card list; options derived from the polls present, labelled via the existing per-status/per-kind dynamic `t()` keys), `taxonomy` (origin[taxonomy_option_origin] + status[taxonomy_status] over the per-domain value list).
+
+**members** — already done at build-step 56; kept verbatim (its config + server-side path are the reference, untouched).
+
+### Notable refactors
+- **AuditViewer** migrated from its bespoke toolbar (manual `<Select>`s + `<DateField>`s + a hand-rolled `filtered` useMemo + 4 pieces of state) to the standard collapsible accordion + active chips via `filterConfig`/`getFilterValue`. Dropped the now-unused `DateField`/`Select`/`useState` imports.
+- **documents** dropped its redundant category-toolbar `<Select>` in favour of the accordion's category filter; removed the dead `query`/`catFilter` state and the now-unused `filterDocuments` import (the page already loads all docs; `<DataList>`'s own search + the accordion cover it).
+- Hook-placement: for census/welfare/prize/omj-sync/notifications/billing the config `useMemo`/`useCallback` had to sit BEFORE the page's early `return`s (rules-of-hooks); placed accordingly.
+
+### i18n
+Zero new keys for the 16 DataList pages (reused `col.*`). TWO new keys for taxonomy — `filters.origin`/`filters.status` — authored in BOTH locales in `messages-extra.ts` (`MESSAGES_EXTRA_EN`/`_UR`) AND `i18n-deltas/filters.json`, then shared rebuilt. (polls' "no match" empty-state reuses `common.nothingToShow`.)
+
+### Out of scope (documented decisions)
+- `events_attendance` — owned by build-step 91 (the blank-table fix registers its listKey); left untouched.
+- `audiences` — the page IS the audience BUILDER, already centred on `<FilterBar>` over the member domain; its saved-segment list (named segments) has no enum dimension to filter, so a redundant accordion was deliberately not added.
+- platform billing catalogs (`billing_plans`/`billing_tenants`) — Vendor console, outside the spec's tenant-list scope.
+
+### Files
+`packages/shared/src/index.ts` (new `labelDomainOptions`), `packages/shared/src/messages-extra.ts` + `packages/shared/i18n-deltas/filters.json` (2 new filters keys ×2 locales), `apps/api/src/ui/filter-engine.spec.ts` (3 new `labelDomainOptions` cases), and the web pages: `census`, `welfare`, `lawazim`, `prize`, `omj-sync`, `notifications`, `bereavement`, `accounting/page` (journal+ledger), `accounting/funds-panel` (donations), `documents`, `events`, `billing`, `polls`, `taxonomy`, `ui/audit-viewer`.
+
+### Do-NOT-break — honoured
+build-step-56 engine + `filterConfig`/`getFilterValue`/`applyFilters`/`shouldFilterServerSide` unchanged; members list config kept; tenant scoping intact (filters are client-side over already-tenant-scoped data — they never widen); per-user column prefs (build-step 55) coexist (filters are a separate concern in `<DataList>`).
+
+### Gates
+typecheck ✅ · lint ✅ (rules-of-hooks clean after the hook moves) · web build ✅ (44 routes) · i18n parity (`i18n.spec.ts`) + web-coverage (`audit/i18n-web-coverage.spec.ts`) ✅ · filter-engine spec (incl. new `labelDomainOptions` cases) ✅.
