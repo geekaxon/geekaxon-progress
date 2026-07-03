@@ -10,6 +10,37 @@
 
 ---
 
+## Build-step 03 — Foundation: Authentication
+
+- **Work-type:** FEATURE (auth subsystem; always-on, never a flag). **Phase:** Foundation (item 3 of 39). **Branch:** `feat/03-auth` (stacked on `feat/02-tenancy-rls` → `feat/01-foundation-monorepo`; controller merges to `staging` at checkpoint).
+- **Depends on:** 01, 02. **Date:** 2026-07-03.
+- **Schema/migration:** NEW migration `20260703100000_auth`. Models: `User` (`id`,`tenantId @map(tenant_id)`,`branchId? @map(branch_id)`,`role Role`,`email?`,`passwordHash? @map`,`phone?`,`totpSecret? @map`,`totpEnabled @map`,`status UserStatus`,`failedLogins @map`,`lockedUntil? @map`,`createdAt`; `@@unique([tenantId,email])`,`@@unique([tenantId,phone])`,`@@index([tenantId])`; `@@map("users")`), `RefreshToken` (`userId @map`,`tokenHash @unique @map`,`familyId @map`,`revokedAt? @map`,`expiresAt @map`; `@@index([userId])`,`@@index([familyId])`; `@@map("refresh_tokens")`), `OtpChallenge` (`tenantId @map`,`phone`,`codeHash @map`,`purpose OtpPurpose`,`attempts`,`expiresAt @map`,`consumedAt? @map`; `@@index([tenantId,phone,purpose])`; `@@map("otp_challenges")`). Enums `Role` (17 values incl. SUPER_ADMIN…PATIENT), `UserStatus {ACTIVE,DISABLED}`, `OtpPurpose {LOGIN,VERIFY_PHONE,RESET}`. **RLS:** `SELECT apply_tenant_rls('users')` + `('otp_challenges')`. `refresh_tokens` is **intentionally un-scoped** (no `tenant_id`; addressed only by its unique high-entropy hash; tenant re-derived from the owning user under RLS). **Auth:** this IS the auth subsystem. **Feature-flags:** ➖ (auth always-on).
+- **Do-NOT-break honored:** `runWithTenant` unchanged; OTP delivery goes through `OtpTransport` (the exact interface the 09 engine will implement — stub swaps out with no API change); auth stays always-on.
+
+### Problem
+Two principal classes (trained staff vs password-averse patients) need different auth, plus mandatory 2FA for money/admin roles, full session hygiene (rotation, reuse detection, lockout, reset), a tenant-bound principal that drives `runWithTenant`, and auditability.
+
+### What changed
+- **@mp/config:** added `JWT_ACCESS_SECRET`/`JWT_REFRESH_SECRET` (min 32; dev fallbacks **rejected in production** via superRefine), `ACCESS_TOKEN_TTL` (15m), `REFRESH_TOKEN_TTL_DAYS` (30), `LOCKOUT_THRESHOLD`/`LOCKOUT_DURATION_MIN`, `OTP_TTL_SECONDS`/`OTP_MAX_ATTEMPTS`, `APP_HOSTS` (+`appHosts()` helper).
+- **@mp/db:** shared `hashPassword`/`verifyPassword` (argon2id via `@node-rs/argon2`, prebuilt — no node-gyp) used by BOTH API and seed so they never drift; re-exports `Role`/`UserStatus`/`OtpPurpose`; seed now creates the Ganatra **TENANT_OWNER** (no 2FA yet → first login forces enrollment; `SEED_OWNER_PASSWORD` overridable).
+- **API auth module (`apps/api/src/auth`):** repository seams (`UserRepo`/`RefreshRepo`/`OtpRepo`/`TenantRepo`) with Prisma impls threading `runWithTenant`; `TokenService` (access JWT + mfa/reset step-tokens + **rotating opaque refresh `<tenantId>.<random>` hashed at rest, rotation + reuse→revoke-family**); `TotpService` (otplib, ±1 window); `OtpService` (6-digit, argon2-hashed, single-use, attempt-capped, rate-limited); `AuthService` orchestration (lockout, MFA gating for `MFA_ROLES`=SUPER_ADMIN/TENANT_OWNER/ADMIN/FINANCE, tenant resolution from host/slug, patient upsert-on-verify, stateless reset); `AuthEventService` (structured recorder seam → 06 audit); `StubOtpTransport`.
+- **Endpoints (no `/api` prefix, all `@Public`):** `POST /auth/staff/login` (→ tokens or `mfa_required{mfaToken,enrollmentRequired}`), `/auth/staff/2fa`, `/auth/staff/2fa/enroll` + `/enroll/confirm` (accept mfaToken OR bearer), `/auth/staff/refresh`, `/auth/staff/password/reset/request`+`/confirm`, `/auth/patient/otp/request`+`/verify`, `/auth/logout`, and protected `/auth/me`.
+- **Wiring:** global deny-by-default `JwtAuthGuard` (APP_GUARD, `@Public` opt-out) populates `{userId,tenantId,branchId,role}`; new `TenantContextInterceptor` (APP_INTERCEPTOR) establishes ALS tenant context from the principal AFTER guards (subscription wrapped inside the async-local scope). AppModule imports AuthModule **before** TenancyModule so the auth guard runs first.
+- **Web (Simple/Pro n/a — public auth surfaces):** lean server-shell + client-island pages `/login` (staff→2FA/enroll), `/login/patient` (phone→OTP, big inputs, **Urdu default**), `/login/reset` (request + token-confirm). `AuthShell` + inline SVG mark + EN/UR toggle; `qrcode` **dynamically imported** for enrollment only (kept out of the login bundle). **i18n:** self-contained EN+UR dict (`lib/auth-i18n.ts`) — full framework in 08.
+- **Flags exposed:** none (auth is always-on infra).
+
+### Verification gates
+- **typecheck:** 16/16 ✅ · **lint:** 10/10 ✅ · **turbo build:** 10/10 ✅ (login First-Load JS ~108 kB; QR lib excluded via dynamic import).
+- **jest:** db **20/20** (3 suites; +5 — new `auth-isolation.spec.ts` runs the real 02+03 migrations on pglite and proves **T1/T2 user isolation**, otp_challenges scoped, refresh_tokens reachable by hash) + api **32/32** (7 suites; +18 — `auth.service.spec` covers Acceptance §1 rotation/reuse+logout, §2 mandatory-2FA enroll+verify, §3 OTP request/verify/expired/used/over-attempt, §4 lockout+reset, §5 tenant binding; `auth.e2e.spec` proves deny-by-default guard + `@Public` reachability over the real module graph; `tenant-context.interceptor.spec` proves ALS spans the async handler).
+- **i18n parity:** EN+UR present for every auth key ✅. **Isolation:** users T1/T2 proven in-CI ✅. **Flag/vertical smoke:** ➖ (none). **Performance/Lighthouse:** login built lean (server shell + single client island, system fonts, one inline SVG, no blocking JS) to meet the 90+ mobile target; automated Lighthouse gate lands with the 13 UI foundation. **White-label:** login chrome uses brand CSS vars/tokens (no hardcoded colour); full theming in 07.
+
+### Notes / follow-ups
+- Auth events currently log via `AuthEventService`; **06 (audit-log)** absorbs them into the durable trail by swapping the sink (no call-site change).
+- Password reset is a stateless short-TTL JWT; delivery is dev-logged until **09 (notifications)** provides the email/WhatsApp transport (same `OtpTransport`-style seam).
+- On the shared app host, staff/patient tenant comes from `tenantSlug` (web default `NEXT_PUBLIC_TENANT_SLUG=ganatra-clinic`); custom-domain host path stays dormant.
+
+---
+
 ## Build-step 02 — Foundation: Tenancy + RLS + Domain Resolver
 
 - **Work-type:** FEATURE (core, most security-critical foundation). **Phase:** Foundation (item 2 of 39). **Branch:** `feat/02-tenancy-rls` (stacked on `feat/01-foundation-monorepo`; controller merges to `staging` at checkpoint).
