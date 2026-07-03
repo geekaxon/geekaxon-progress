@@ -10,6 +10,40 @@
 
 ---
 
+## Build-step 04 — Foundation: RBAC + Permission Catalog
+
+- **Work-type:** FEATURE (authorization layer; always-on — the layer the flags sit atop). **Phase:** Foundation (item 4 of 39). **Branch:** `feat/04-rbac-permissions` (stacked on `feat/03-auth`; controller merges to `staging` at checkpoint).
+- **Depends on:** 02, 03. **Date:** 2026-07-03.
+- **Schema/migration:** NEW migration `20260703110000_rbac_permissions`. Models: `Permission` (`key @id`, `scope PermScope`, `createdAt`; `@@map("permissions")` — GLOBAL, RLS-OFF), `AppRole` (`id`, `tenantId? @map(tenant_id)`, `name`, `isProtected @map`, `isSystem @map`, `createdAt`; `@@index([tenantId])`; `@@map("app_roles")`), `RolePermission` (`roleId @map(role_id)`, `permissionKey @map(permission_key)`; `@@id([roleId,permissionKey])`, `@@index([roleId])`, `@@index([permissionKey])`; FKs to AppRole+Permission ON DELETE CASCADE; `@@map("role_permissions")`). Enum `PermScope {TENANT, NON_TENANT}`. Partial unique indexes: `app_roles_global_name_key (name) WHERE tenant_id IS NULL`, `app_roles_tenant_name_key (tenant_id,name) WHERE tenant_id IS NOT NULL`.
+- **RLS (bespoke, not `apply_tenant_rls`):** `permissions` = RLS-OFF global catalog (like `tenants`). `app_roles` ENABLE+FORCE RLS, custom `app_roles_isolation`: USING = own-tenant rows **OR** global (`tenant_id IS NULL`) rows; WITH CHECK = own-tenant when a context is set, **or** global rows ONLY when no context (the boot reconcile, on the bare client). `role_permissions` ENABLE+FORCE RLS, `role_permissions_isolation`: inherits parent-role visibility via an `EXISTS(app_roles …)` subquery. **Critical detail:** custom (placeholder) GUCs read back as **empty string `''`** (not NULL) once SET LOCAL in a session, so every "no context" guard uses `NULLIF(current_setting('app.tenant_id',true),'') IS NULL`. (First pglite run caught the global-write RLS violation this fixed.)
+- **Feature-flags:** ➖ (this IS the auth layer the flags sit atop; §3.4 documents flag-FIRST-then-permission precedence — the flag hook lands in 05).
+- **Do-NOT-break honored:** auth principal (03) unchanged; `apply_tenant_rls` (02) untouched; catalog is ADDITIVE-ONLY (sync never deletes strays); boot hook is crash-proof.
+
+### Problem
+Coarse `Role` (03) is insufficient — every module needs fine-grained, string-keyed, server-enforced + UI-reflected permissions; the catalog grows as modules land (must sync every boot); SaaS needs custom tenant roles.
+
+### What changed
+- **`@mp/shared` (`permissions.ts`):** `PERMISSIONS` catalog (33 keys across patients/appointments/clinical/lab/pharmacy/billing/accounts/inventory/reporting/AI/brand + NON_TENANT `flags.manage`/`tenants.manage`/`platform.admin`), each tagged `PermScope`. Helpers `PERMISSION_KEYS`, `getPermission`, `permissionKeysByScope`, `assignablePermissionKeys(isTenantRole)`, and `ROLE_PERMISSION_DEFAULTS` (documented TENANT defaults per built-in role; SUPER_ADMIN intentionally absent → reconciled to the FULL set). Dependency-light (no Prisma) so both API + web import it.
+- **API `permissions/` module:** repos (`PermissionRepo`, `AppRoleRepo` + Prisma impls — global roles on the bare client with no context, custom roles inside `runWithTenant`); `PermissionService` (`onBoot`→`syncPermissionCatalog` upsert-add/update + `reconcileSystemRoles`: one GLOBAL system role per `Role`, SUPER_ADMIN = full assignable set incl. NON_TENANT + later-added keys, every other role = TENANT-only defaults with NON_TENANT defensively filtered; additive, idempotent, per-role try/catch so a malformed row never aborts the rest; per-role effective-key cache cleared on mutation); role-manager ops (`listRoles`/`createCustomRole`/`setRoleKeys` — rejects unknown/NON_TENANT keys + protected/system edits); `RolesGuard` (global APP_GUARD, opt-in: `@Roles(...)` + `@RequirePermission('key')`, 403 on miss, skips `@Public`); `@RequirePermission`/`@Roles` decorators; `RbacController` (`GET rbac/me` effective keys, `GET rbac/permissions` catalog, admin-only `GET/POST rbac/roles`, `PUT rbac/roles/:id/permissions`). Wired into `AppModule` AFTER `AuthModule` so `RolesGuard` runs after `JwtAuthGuard`; `onApplicationBootstrap` runs the reconcile (crash-proof).
+- **Web (`/admin/roles`):** Permission UI base — lean client island lists roles + catalog, toggles TENANT keys on CUSTOM roles (system/protected read-only), creates custom roles; hides controls on 403 / no session. `getJson`/`putJson` added to `lib/api.ts`; EN+UR i18n keys added; role-manager CSS. Route builds (`ƒ /admin/roles`).
+- **i18n keys added:** `rbacTitle`, `rbacIntro`, `systemBadge`, `customBadge`, `newRolePlaceholder`, `createRole`, `save`, `saved`, `noAccess`, `signInRequired` (EN+UR parity).
+
+### Acceptance mapping
+1. Catalog sync idempotent on a non-fresh DB; stray rows never deleted → `permission.service.spec` (sync).
+2. SUPER_ADMIN → full assignable set incl. later-added key; no NON_TENANT key to any tenant role; system roles get documented defaults → service spec (reconcile).
+3. `@RequirePermission` blocks a lacking user (403) / allows a holder; `@Roles` blocks/allows → `roles.guard.spec` (unit) + `rbac.e2e.spec` (HTTP: 401 no-token, 403 DOCTOR, 200 ADMIN).
+4. Custom tenant role created + keys set; protected roles not destructively editable; T2 roles isolated from T1 → service spec + `rbac-isolation.spec` (pglite).
+5. Boot reconcile never crashes on a malformed row (logged) → service spec (crash-proof boot).
+6. Gates green; isolation proven; flags ➖.
+
+### Verification gates
+- **typecheck:** 16/16 ✅ · **lint:** 10/10 ✅ · **turbo build:** 10/10 ✅ (route `ƒ /admin/roles` present).
+- **jest:** `@mp/db` **27/27** (4 suites; +1 suite `rbac-isolation.spec`, 8 new tests) · `@mp/api` **60/60** (10 suites; +3 suites `permission.service`/`roles.guard`/`rbac.e2e`, ~28 new tests). Combined **87/87**.
+- **Isolation:** RBAC T1/T2 proven in-CI via pglite on the REAL 01→04 migrations — `permissions` readable context-less (global), `app_roles` shows own+global/hides other-tenant custom roles, WITH CHECK blocks cross-tenant + tenant→global writes yet ALLOWS context-less global writes (boot), `role_permissions` inherits parent visibility.
+- **i18n parity:** EN+UR for all new keys ✅. **Flag/vertical smoke:** ➖ (05). **Performance/Lighthouse:** ➖ (stub until 13). **White-label:** role-manager page uses shared shell classes/tokens.
+
+---
+
 ## Build-step 03 — Foundation: Authentication
 
 - **Work-type:** FEATURE (auth subsystem; always-on, never a flag). **Phase:** Foundation (item 3 of 39). **Branch:** `feat/03-auth` (stacked on `feat/02-tenancy-rls` → `feat/01-foundation-monorepo`; controller merges to `staging` at checkpoint).
