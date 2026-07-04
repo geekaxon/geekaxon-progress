@@ -469,3 +469,55 @@ There was no codebase. Every later step assumes a pnpm/Turborepo monorepo, Prism
 - `next build` rewrites `next-env.d.ts` to add a `.next/types/routes.d.ts` reference (that path is gitignored); the committed 2-line version is intentional so clean-clone typecheck (which runs before build in CI) stays reproducible.
 
 ---
+
+## Build-step 17 — Doctor Consultation (Comfort Levels) — ✅ DONE/APPROVED 2026-07-04
+
+**Work-type:** FEATURE. **Branch:** `feat/17-doctor-consultation` (stacked on `feat/16-vitals-station`). **Spec:** `specs/17-doctor-consultation.md`. No CODEREF companion (proceeded on spec alone).
+
+### Problem / goal
+Doctors differ — pen-only, hybrid, tablet+stylus, or full digital. Forcing one mode loses doctors. Each doctor chooses a **comfort level (L0–L3)** that drives the UI face, but the system ALWAYS captures the encounter (notes/diagnosis/vitals) and routes referrals (lab 19 / pharmacy 18) + follow-up. Templates + favorite medicines speed entry. An AI diagnostic-assist hook is assist-only (doctor decides), logged, and flag-gated — degrading cleanly until the AI gateway (33/36) lands.
+
+### Data model / migration
+NEW migration `packages/db/prisma/migrations/20260704130000_doctor_consultation/migration.sql` — 4 tables + 1 enum, all tenant-scoped via the canonical `apply_tenant_rls()` (02):
+- `encounters` — one per consultation. `comfort_level_used` (int) records the mode actually used; `notes` (L1/L3 digital note) + `notes_image_key` (L0/L2 stylus/photo capture); `appointment_id?` ties to the visit (15); `follow_up_at?` records the follow-up reminder; `status EncounterStatus @default(OPEN)`; `branch_id?`, `created_by?`. Indexes `(tenant,patient)`, `(tenant,doctor,status)`, `(tenant,appointment)`.
+- `diagnoses` — `code?` (ICD-style) + free-text `text`, many per encounter. Index `(tenant,encounter)`.
+- `consult_templates` — reusable note boilerplate; `doctor_id?` null = tenant-wide, set = private. Index `(tenant,doctor)`.
+- `doctor_favorites` — a doctor's favorite medicine (`medicine_id` stored plain — no FK; 18 owns the Medicine table), `dosage?`. Unique `(tenant,doctor,medicine)`, index `(tenant,doctor)`.
+- enum `EncounterStatus { OPEN CLOSED }`. Schema added to `schema.prisma`; `EncounterStatus` re-exported from `@mp/db` index. `Doctor.comfortLevel` already existed (from 15) — reused, no change.
+
+RLS proven in `packages/db/src/consultation-isolation.spec.ts` (real 01→17 migrations under pglite as non-superuser `app_user`): a tenant sees only its own encounters/diagnoses; WITH CHECK blocks writing an encounter for another tenant; no-context → zero rows (fail-closed). **+4 db tests → 86/86.**
+
+### Shared (`@mp/shared/consultation.ts`, pure/browser-safe)
+- `ComfortLevel` (0|1|2|3) + `COMFORT_LEVELS`, `COMFORT_LEVEL_NAME`, `isComfortLevel`, **`clampComfortLevel`** (Doctor.comfortLevel allows 0–100 → collapse to 0–3 so the UI never sees an invalid mode), `usesPaper` (L0/L2 print-header modes).
+- `EncounterStatusLit` + `isEncounterStatus`; `summarizeEncounter(diagnoses, notes)` (diagnoses lead → note → generic) for the timeline line.
+- **`ReferralSeed`/`ReferralItem`/`ReferralTarget` + `buildReferralSeed`** — the STABLE lab/pharmacy referral contract 18/19 consume; `available` reflects the downstream flag. Wired into `@mp/shared` index. Added `'ENCOUNTER'` to the additive `TimelineKind` in `patients.ts`.
+
+### API (`apps/api/src/consultation/`)
+`ConsultationModule` — 4 controllers, ALL gated `@RequireFeature('clinic.consultation')` (FeatureGuard 404s when off = vertical smoke) + `@RequirePermission('consult.write')` (DOCTOR). Repo behind an abstract `ConsultRepo` seam (Prisma impl + in-memory `FakeConsultRepo`); injectable `CONSULT_CLOCK`. Deps: `FlagService` (runtime flag reads), `PatientService` (history/allergy-warnings/print header), `AppointmentsService` (doctor identity), `VitalsService` (readings in history + print header).
+- **Encounters:** `POST /encounters` (validates patient exists; comfort captured; inline diagnoses), `GET /encounters?patientId=&doctorId=&appointmentId=` (≥1 filter, else 400), `GET /encounters/:id`, `PATCH /encounters/:id` (notes/notesImageKey/comfort/followUpAt/status).
+- **Diagnoses:** `POST /encounters/:id/diagnoses`, `DELETE /encounters/:id/diagnoses/:diagnosisId`.
+- **One-click history:** `GET /patients/:id/history` (separate `@Controller('patients')` so the path matches the spec) → patient + severity-ranked allergy warnings (14; [] when medical-record off) + recent vitals (16) + prior encounters.
+- **Templates:** `consult-templates` CRUD (tenant-wide or per-doctor; list returns tenant-wide + the doctor's own). **Favorites:** `doctor-favorites` CRUD (scoped by doctor).
+- **Referrals:** `POST /encounters/:id/refer/lab` (→19) + `/refer/pharmacy` (→18) → a `ReferralSeed` carrying the encounter linkage + `available` (reads `lab.catalog` / `pharmacy.pos` at runtime). NEVER commits to the not-yet-built 18/19 tables — it is a seed the caller forwards (mirrors the vitals from-photo / register-import draft pattern).
+- **AI-assist:** `POST /encounters/:id/ai-assist` — assist-only, `@Audited` (logged), needs BOTH `ai.clinical` AND the AI gateway (33/36). Gateway absent → `available:false`, `providerAvailable:false`, `suggestions:[]`, `decisionRequired:true` ALWAYS, with a `note` saying why (flag off vs gateway absent). Route stays PRESENT under `clinic.consultation` (degrades, never 404s on the AI sub-flag) so the panel shows a clean disabled state — no silent machine decision.
+- **L0 print header:** `GET /encounters/:id/print-header` → patient/doctor identity + latest vitals + allergy warnings for the pen-only doctor.
+- Registered as a MEDICAL `TimelineRegistry` contributor (`onModuleInit`) → an `ENCOUNTER` event (+ a `FOLLOWUP` event when `follow_up_at` set) on the patient timeline, medical view only. Mutations `@Audited`. Wired into `app.module.ts` after Vitals.
+
+e2e `consultation.e2e.spec.ts` over the REAL module graph (fakes for Prisma repos), tenants T_CLINIC (clinic preset), T_PHARM (consultation off), T_FULL (full preset). Proves: 401/404-vertical-smoke/403; encounter+diagnosis lifecycle w/ comfort captured + clamped; unknown-patient 404; history composition; referral seeds unavailable on clinic-only + available on full; AI-assist disabled+logged+decisionRequired (flag off AND flag-on-gateway-absent); templates+favorites CRUD (favorites doctor-scoped); L0 print header; timeline ENCOUNTER event; audit. Unit `consultation-helpers.spec.ts` covers the pure shared math. **+27 api tests → 274/274.**
+
+### Web (`apps/web/app/consultation/`)
+`page.tsx` (server, `robots:noindex`) + `ConsultationClient.tsx` — comfort-level-aware island. Access probe on `/encounters?patientId=__probe__` (signin/noaccess/ready). Comfort selector persists via `PATCH /appointments/doctors/:id {comfortLevel}` and drives the face: L0 leads with the **Print header sheet** (self-contained print window: identity + vitals summary + allergy warnings + ruled write-space), L1/L2/L3 show a note textarea, L2 adds a stylus/photo image-key field. One-click **history panel** (allergy warnings highlighted, recent vitals via `summarizeVitals`, prior encounters), diagnosis picker (code+text, add/remove), note **templates** (insert into note) + **favorites** (append to pharmacy referral), follow-up date, Save→encounter, then lab/pharmacy **referral** textareas (seed, shows unavailable note) + **AI panel** ("Suggestions only — you decide", disabled state with reason). New CSS: `.mp-btn-ghost`, `.mp-pt-two`, `.mp-pt-history`.
+
+### i18n
+~52 new top-level keys `consult*` added to EN + UR catalogs (parity gate green **19/19**). RTL inherited from the shell; print window sets `dir`.
+
+### Gates (all green)
+typecheck **26/26** · lint **15/15** · turbo build **15/15** · jest **api 274/274 (+27)** + **db 86/86 (+4 consultation-isolation)** + **i18n 19/19 parity** + ui/import/offline/shared unaffected. Feature-flag/vertical smoke: whole surface 404s when `clinic.consultation` off (T_PHARM), present under clinic/full; flag→permission precedence correct; AI sub-flag degrades (no orphan). Performance: ➖ (internal tool, no public/patient-facing surface).
+
+### Do-NOT-break honored
+Vitals/patient/appointment untouched (consumed read-only). Referral seed shape matches the 18/19 contract (defined in shared for those steps to import). AI-assist stays assist-only + logged + flag-gated. `Doctor.comfortLevel` reused (no schema churn). `TimelineKind`/`@mp/shared` additive only.
+
+### Checkpoint
+Ended with `[CHECKPOINT]`. Controller handles the staging merge.
+
+---
