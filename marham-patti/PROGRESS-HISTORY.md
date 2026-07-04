@@ -10,6 +10,42 @@
 
 ---
 
+## Build-step 14 — Phase 1: Patient / Customer Management
+
+- **Work-type:** FEATURE. **Phase 1 / item 1.** Branch `feat/14-patient-management` (stacks on `feat/13-ui-foundation`). Depends on 02 (RLS/runWithTenant), 04 (permissions), 05 (flags), 06 (audit), 08 (i18n), 09 (notification prefs), 12 (import engine).
+- **Problem:** every vertical needs a person record, but a pharmacy-only tenant wants a light "customer" (name+phone+udhaar+purchase history) while a clinic/full tenant needs the full medical record. Pakistani clinics identify by phone (families share one number; aged patients may have none); udhaar must never silently vanish; CNIC is sensitive PII.
+- **Design decision — ONE model, flag-driven VIEW:** identical data model; the `customers.medicalRecord` flag decides which fields/tabs render AND which endpoints are exposed. A pharmacy that later adds a clinic needs NO migration — just flip the flag.
+
+### Schema / migration / RLS
+- **NEW migration `20260704100000_patient_management`** — 7 tables, all tenant-scoped via canonical `apply_tenant_rls()`:
+  - `patients` — phone-primary (NULLABLE: aged patients / shared family phone → `guardian_id` link), CNIC stored **AES-256-GCM-encrypted** in `cnic` with only `cnic_last4` kept plaintext for search, `gender`/`dob`/`address`/`service_area`/`status` (ACTIVE/INACTIVE/DECEASED), `@@unique(tenant,phone)`.
+  - `patient_relations` (directed family/guardian links), `patient_tags`, `patient_allergies` (MEDICAL-record field, severity LOW/MED/HIGH), `patient_credits` (udhaar ledger, `Decimal(12,2)`, `settled_at`/`settled_by`), `patient_notes`, `notification_prefs` (per-channel consent, `@@unique(patient)`).
+  - NEW enums `Gender`/`PatientStatus`/`Severity`/`RelationType` (re-exported from `@mp/db`).
+  - **pg_trgm** extension + GIN trigram indexes (name/phone/cnic_last4) created **DEFENSIVELY** inside a `DO … EXCEPTION WHEN OTHERS` block → no-ops under the pglite RLS test (which lacks pg_trgm); search falls back to a plain, correct ILIKE. Proven pglite-safe before commit.
+  - Two model additions BEYOND the spec's 6-model list, each acceptance-driven & additive: `cnic_last4` (required to reconcile §3 CNIC-last4 search with §4 encryption) and `patient_notes` (backs §3.2/§3.3 Notes tab/endpoint).
+- **Isolation:** NEW `packages/db/src/patient-isolation.spec.ts` — real 01→14 migrations in pglite, proves T1/T2 scoping on `patients` + `patient_credits`, WITH CHECK blocks cross-tenant writes, encrypted CNIC never bleeds, zero rows with no context (6/6).
+
+### Feature-flag / permission impact
+- **Owns/respects flag `customers.medicalRecord`** (existing in catalog): OFF → light customer (allergy CRUD + medical timeline hidden); ON → full record. Allergy routes carry `@RequireFeature('customers.medicalRecord')` → **404 when off** (flag FIRST, then permission).
+- Permissions (all pre-existing in `@mp/shared`): `patients.view`/`edit`/`merge`/`notes`/`cnic.reveal`. No new keys.
+- **NEW config `CNIC_ENCRYPTION_KEY`** (zod `.min(32)`, dev fallback rejected in production via superRefine). `fakeConfig()` extended with it.
+
+### What changed
+- **Pure `@mp/shared/patients.ts`** (browser-safe, no node deps): `maskCnic`/`cnicLast4`/`normalizeCnic`/`normalizePhone`, `creditBalance` (Σ unsettled → feeds accounts 23), `TimelineEvent`+`TimelineKind`+`sortTimeline`+`isPurchaseEvent`+`PURCHASE_TIMELINE_KINDS`.
+- **API-only `apps/api/src/patients/cnic-cipher.ts`** — `CnicCipher` (AES-256-GCM, SHA-256-derived 32-byte key from `CNIC_KEY` DI token, `v1:iv:tag:data` blob, tamper-detecting; `prepare()` → {cipher,last4}). Kept out of `@mp/shared` so `node:crypto` never bundles into the browser.
+- **`PatientsModule`** (repo seam + `CnicCipher` + `FlagService`): `GET /patients` fuzzy (ILIKE name/phone/cnic-last4, paginated), `POST/PATCH /patients` (phone uniqueness enforced → "link as family" 400; guardian existence checked), `POST /patients/:id/cnic/reveal` (`patients.cnic.reveal` + `@Audited`, full value returned but MASKED in the audit summary), family/relations + dependents + guardian, tags CRUD, allergies CRUD (flag-gated + severity-ranked `allergyWarnings` hook for 18/20), credit add/settle (returns balance), notes (`patients.notes`), notification prefs (honoured by 09), `merge` (moves credit/allergies/notes/tags/relations/dependents to target → source INACTIVE, `@Audited`), `timeline` (flag-shaped: REGISTERED+CREDIT purchase-only when off; +ALLERGY/NOTE when on).
+- **Registers a patient importer** with the 12 `ImportRegistry` on boot (`onModuleInit`): natural key = phone (idempotent — re-import updates, never duplicates), CNIC encrypted at `upsertChunk`, export never emits full CNIC (masked last-4 only). Wired into `app.module` after Flags+Import.
+- **Web EN+UR `/patients`** (`.mp-*` design-token convention, RTL): quick-add (phone-first), fuzzy search list, flag-aware `ModuleTabs` (Basic · Timeline · [Allergies] · Credit · [Notes] · Family — medical tabs only when `medicalRecordEnabled`), masked CNIC + audited reveal button, udhaar ledger add/settle, allergy severity picker. 61 NEW i18n keys EN+UR (`patients*`), parity green.
+
+### Verification gates
+- **typecheck 26/26 · lint 15/15 · build 15/15** (turbo). `/patients` route 3.13 kB / 118 kB first-load — within perf budget (cf. /ui 282 kB).
+- **jest:** api **206/206** (25 suites; +31 = 14 patient e2e covering auth/permission/flag-ON+OFF/family/fuzzy/CNIC-encrypt+mask+reveal-audit/udhaar/tags/status/prefs/merge/idempotent-import + 6 CnicCipher unit + 11 patient-helper unit), db **73/73** (12 suites; +6 patient-isolation), i18n **19/19** incl. EN↔UR parity, ui 38/38, import 18/18, notifications 18/18, offline 29/29, consent 18/18.
+- **Flag/vertical smoke:** proven in e2e — flag OFF (pharmacy) → allergy endpoints 404, timeline purchase-only, `medicalRecordEnabled:false`; flag ON (clinic/full) → allergies + medical timeline. Same data, no migration.
+- **Isolation:** T1/T2 proven (pglite); CNIC stored ciphertext (`v1:` prefix, never plaintext) and never logged (audit summary masks it). **White-label:** untouched (brand tokens drive the UI).
+- **Launch note:** JSON-body CNIC + in-process import today; CNIC-key rotation / KMS + multipart upload = `[DECIDE AT BUILD]`.
+
+---
+
 ## Build-step 13 — Foundation: UI Design System + Performance Foundation
 
 **Work-type:** FEATURE. **Phase:** Foundation / item 13. **Branch:** `feat/13-ui-foundation` (stacked on `feat/12-import-export`). **Depends on:** 07 (brand), 08 (i18n), 01. **Schema/RLS/auth/permission/flag impact:** NONE — no DB, no migration, no RLS, no new permission or flag. Isolation ➖. The screenshot bypass is env-gated (staging-only), fail-closed.
