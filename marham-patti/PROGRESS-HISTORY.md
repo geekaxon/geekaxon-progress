@@ -10,6 +10,41 @@
 
 ---
 
+## Build-step 13 — Foundation: UI Design System + Performance Foundation
+
+**Work-type:** FEATURE. **Phase:** Foundation / item 13. **Branch:** `feat/13-ui-foundation` (stacked on `feat/12-import-export`). **Depends on:** 07 (brand), 08 (i18n), 01. **Schema/RLS/auth/permission/flag impact:** NONE — no DB, no migration, no RLS, no new permission or flag. Isolation ➖. The screenshot bypass is env-gated (staging-only), fail-closed.
+
+**Problem.** Every later screen must be modern, polished, and usable by non-technical/illiterate users AND meet a hard 90+ mobile performance budget — with no shared design system, modules would drift into inconsistent, slow, raw HTML. This step lands the shared `@mp/ui` system + the performance/Lighthouse gate + the staging screenshot bypass.
+
+**What changed.**
+
+*Package `@mp/ui` (scaffold → full React design system).* Was a pure-helper scaffold (`cn`, `themeCssVars`); now a Tailwind + shadcn/ui-style component library.
+- **Toolchain:** React 19 peer dep; deps `@radix-ui/react-{dialog,label,popover,slot,tabs}`, `class-variance-authority`, `clsx`, `tailwind-merge`, `lucide-react`, `recharts`; dev `tailwindcss`, `jest`+`jest-environment-jsdom`+`@testing-library/{react,jest-dom,user-event}`. tsconfig → `module esnext` / `moduleResolution bundler` / `lib DOM` / `jsx react-jsx`. jsdom jest config with `jest.setup.ts` (matchMedia + ResizeObserver stubs).
+- **Theming:** `cn` upgraded (clsx+twMerge). `tailwind-preset.ts` (`@mp/ui/tailwind-preset`) maps `--brand-*` → semantic Tailwind tokens (`primary/accent/destructive` follow the tenant palette; `background/card/muted/border` are light/dark `--mp-*`), plus `min-h-touch` (44px), brand fonts, motion keyframes. `styles.css` layers `@tailwind` + the `--mp-*` light/dark token layer (derived from brand) + reduced-motion guard. `theme.tsx` `ThemeProvider`/`useTheme` — light/dark/system, class-based (`.dark` on `<html>`), persisted, follows OS in `system`.
+- **Components:** Button (cva variants, large-touch, `asChild`), Input/Textarea, Label, Card(+parts), Badge, Skeleton/SkeletonText (shimmer), Spinner, Field (a11y label+hint+error wiring), EmptyState, Dialog(+`Modal` alias, focus-trap), Toast (`ToastProvider`/`useToast`/`Toaster`, aria-live), SearchSelect + MultiSearchSelect (Radix Popover combobox, filter, large-touch), DateField, Tabs, **ModuleTabs** (ACTIVE-ONLY mount — inactive tabs' `render()` NOT called until first opened → lazy per-tab fetch; `unmountInactive` opt), **DataList** (client search + pagination + toolbar slot + `onExport(filteredRows)`→12, skeleton rows, empty state, a11y caption), animated recharts **Chart** wrappers (Line/Area/Bar/Donut, brand-ramp colours, dynamic-import friendly), **AppShell** (brand header + sidebar; `visibleNav` filters by injected `hasFlag`/`can` predicates so a disabled module/absent permission → NO nav entry; slots for language/theme/account), Feature (prop-driven flag wrapper), ShortcutScope (`mod+k`/sequence combos, suppressed in inputs unless opted in, `eventToToken`), VoiceInput/`useVoiceInput` (Web Speech, locale-aware, self-hides when unsupported).
+- **Pure testable seams:** `screenshotBypassEnabled`/`screenshotTokenValid`/`grantsScreenshotAccess` (+ `SCREENSHOT_TOKEN_PARAM`), exposed on the lean **`@mp/ui/screenshot`** subpath so the edge middleware imports the logic WITHOUT dragging React/Radix in. `evaluateBudgets`/`withinBudget`/`DEFAULT_BUDGETS` perf-budget model (longest-prefix route match, JS+total ceilings).
+
+*Web app wiring.* `tailwind.config.ts` spreads the `@mp/ui` preset + scans app & `packages/ui/src`; `postcss.config.mjs` (tailwind+autoprefixer); `globals.css` gains the `@tailwind` layers + `--mp-*` tokens at the TOP (legacy `.mp-*` styles kept below, authoritative on conflict); `ThemeProvider` added to `layout.tsx` (`defaultMode="system"`); added dep `lucide-react`. **`/ui` showcase** (server shell + `UiShowcase` client) built ENTIRELY from @mp/ui, framed in AppShell (nav proves Pharmacy-POS flag OFF → hidden, Lab ON → shown), dynamic-imported chart (`DemoChart` via `next/dynamic ssr:false`), all copy from new `ui.*` i18n keys → polished light/dark, RTL in Urdu, brand-token driven. **`middleware.ts`** screenshot token (matcher excludes static assets). **`/lh-bloated`** intentional canary (`import * as` lucide + eager chart → 431 kB first-load vs `/ui` 279 kB).
+
+*Perf / Lighthouse gate.* `lighthouserc.json` (LHCI: `next start`, public routes `/ /login /ui`, mobile emulation, assert perf/a11y/best-practices `minScore 0.9`, `budgetsPath`) + `budgets.json` (script 250 KB / total 700 KB / timing budgets). `.github/workflows/ci.yml`: the Lighthouse **stub replaced** with a real job (build web + deps → `lhci autorun`) + a NEGATIVE step that fails if `/lh-bloated` scores ≥90 (proves the gate bites). Root `lighthouse` script. The internal "fast-&-smooth" budget check is the unit-tested `evaluateBudgets` seam (a 900-KiB route fails).
+
+**i18n keys.** New nested `ui.*` block (58 keys) added to EN + UR catalogs (parity preserved) covering the showcase, nav labels, theme-toggle labels, and the demo tag.
+
+**Runtime verification (driven via `next start`).**
+- Screenshot token — Case A (NODE_ENV=production, APP_ENV unset): `/ui` 200; `/ui?screenshot_token=<secret>` **200 with NO `x-mp-screenshot` header** (bypass OFF regardless, param ignored, fail-closed). Case B (APP_ENV=staging): correct token → **200 + `x-mp-screenshot: read-only`**; wrong token → **403**.
+- `/ui` SSR HTML contains design-system utilities (`min-h-touch`, `bg-primary`/`text-brand`), a compiled `/_next/static/css/*` stylesheet, the showcase heading, and the AppShell nav with Lab shown + Pharmacy-POS hidden (flag-gated).
+
+**Do-NOT-break honoured.** 07 brand `--brand-*` contract + 08 i18n unchanged; @mp/ui component APIs are additive/stable; Lighthouse gate + budgets now permanent in CI; screenshot bypass fail-closed & staging-only.
+
+**Verification gates (all green).** typecheck **26/26**; lint **15/15**; turbo build **15/15** (web build: `/ui` 279 kB / `/lh-bloated` 431 kB first-load, middleware 34.5 kB); jest **19 tasks** — NEW `@mp/ui` **38/38** (8 suites: cn, screenshot, perf-budget, button, data-list, module-tabs, app-shell, misc[theme/feature/shortcut/toast/search-select]) + api 175/175 + import 18/18 + db 67/67 + notifications 18/18 + offline 29/29 + consent 18/18 + **i18n 19/19 incl. EN↔UR parity**. White-label: brand-token driven (verified); RTL verified. Performance: Lighthouse job wired in CI (not run in-sandbox — no Chrome); budget logic unit-proven.
+
+**Notes / caveats.**
+- Lighthouse itself is CI-only (needs headless Chrome, not available in this sandbox); the config + budgets + negative canary are committed and the budget-evaluation logic is unit-tested here.
+- `MODULE_TYPELESS_PACKAGE_JSON` warning on `dist/tailwind-preset.js` when Next loads the config is cosmetic; `@mp/ui` is NOT marked `type:module` on purpose (its CJS `jest.config.js`/`jest.setup.ts` would break).
+- Urdu font strategy stays the 08 local-font stack; a self-hosted subset woff2 (same `unicode-range`+`font-display:swap` contract) is `[DECIDE AT BUILD]` if local fonts prove insufficient.
+
+---
+
 ## Build-step 12 — Foundation: Import / Export Engine
 
 - **Work-type:** FEATURE. **Phase:** Foundation / item 12. **Branch:** `feat/12-import-export` (stacked on `feat/11-consent-terms`). **Depends on:** 02 (tenancy/RLS), 04 (RBAC permission), 06 (audit). **Reused by:** 14 patients, 19 lab catalog, 20/28 pharmacy, 29 suppliers — generic engine.
