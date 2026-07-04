@@ -10,6 +10,34 @@
 
 ---
 
+## Build-step 15 — Phase 1: Appointment & Token (paper-first)
+
+- **Work-type:** FEATURE. **Phase 1 / item 2.** Branch `feat/15-appointment-token` (stacks on `feat/14-patient-management`). Depends on 14 (patient), 10 (offline core / idempotency seam), 09 (notifications), 13 (UI/i18n).
+- **Problem:** the clinic runs on paper; aged patients don't self-book; the compounder is often too busy to register fully; staff reconcile a paper register at day's end. A system fighting this is abandoned. Design **for** paper: one-tap offline tokens, full registration optional, end-of-day photo→(AI later) register import with a human verify.
+- **Design decision — a Token creates a WALK_IN Appointment + a numbered Token atomically:** the queue is built from active appointments with their token numbers attached; booked appointments (source BOOKED) join the same queue; register-import commits create appointments+tokens with source REGISTER_IMPORT. Token numbering is **sequential per doctor/branch/day** via a plaintext `day_key` + a tenant-scoped unique index `(tenant, doctor, branch, day_key, number)` so numbering never collides (and co-exists across tenants — proven in the isolation test).
+
+### Schema / migration / RLS
+- **NEW migration `20260704110000_appointment_token`** — 6 tables, all tenant-scoped via canonical `apply_tenant_rls()` + `branch_id` where location-scoped: `doctors` (slotMinutes/comfortLevel/optional user link), `doctor_availability` (weekly dayOfWeek + minutes-of-day windows), `doctor_leave` (dated ranges), `appointments` (`ApptStatus` lifecycle + `ApptSource`), `tokens` (`number` + `day_key` + UNIQUE `client_action_id` for offline idempotency; unique `(tenant, doctor, branch, day_key, number)`), `register_imports` (`imageKeys` JSON + `RegImportStatus` UPLOADED→PARSED→VERIFIED→IMPORTED + `draft` JSON). NEW enums `ApptStatus`/`ApptSource`/`RegImportStatus` re-exported from `@mp/db`. T1/T2 isolation + WITH CHECK + fail-closed + no-cross-tenant-numbering proven in `packages/db/src/appointment-isolation.spec.ts` (pglite, real 01→15 migrations).
+- **No new feature flag** — `clinic.appointments` already in the catalog (`@mp/shared/flags`) and in the `clinic`/`clinic_pharmacy`/`full` presets. **No new permission** — `appointments.manage` already in the catalog (granted to ADMIN/MANAGER/DOCTOR/RECEPTION/CALL_CENTER). The WHOLE controller is `@RequireFeature('clinic.appointments')` + `@RequirePermission('appointments.manage')` at the class level (flag FIRST → 404 when off, then permission → 403).
+
+### What changed
+- **Pure `@mp/shared/appointments`** (browser-safe, no node imports): `dayKeyOf` (UTC day bucket the server + offline client agree on), `nextTokenNumber` (max+1, gap-free), `buildDaySlots` (availability − leave − booked, de-duped, minute⇄`HH:MM` `minutesToLabel`/`labelToMinutes`), the appointment lifecycle state machine (`APPT_TRANSITIONS`/`canTransitionAppt`/`isTerminalAppt`), and the register-import draft contract (`RegisterDraftRow`/`isCommittableDraftRow`/`committableRows`).
+- **API `AppointmentsModule`** (imports `SyncModule`): `POST /appointments/tokens` — one-tap walk-in, **CRITICAL OFFLINE PATH** riding `SyncService.runIdempotent(clientActionId)` (required `Idempotency-Key` header) so a replayed token returns the SAME number without double-issuing (a P2002 backstop on the unique index catches the save-race). Doctor CRUD; availability/leave CRUD; `GET /appointments/doctors/:id/slots?date=` (availability − leave − booked); `POST /appointments` (book, source BOOKED) + `PATCH /appointments/:id` (reschedule/cancel/status/no-show, state-machine-validated → 400 on illegal transition); `GET /appointments/queue` + `GET /appointments/display` (per-doctor now-serving + up-next). Register import: `POST /register-imports` (photos→UPLOADED) → `POST /:id/parse` (empty draft until AI 35; PARSED) → `PATCH /:id/draft` (human-verified rows; VERIFIED) → `POST /:id/import` (commit; **must be VERIFIED first**, incomplete rows skipped not guessed → 400 before verify; never auto-commits). All mutations `@Audited`. Injectable `APPT_CLOCK` for deterministic `day_key`/slots in tests.
+- **Web EN+UR `/appointments`** — flag/permission-aware island (404/403 → clean no-access): offline badge (from `useSyncStatus`), compounder giant one-tap **New Token** (online → token #; network-down → outbox `enqueue` so it syncs, never double-issues), live **Queue** with Start/Done/No-show taps, **Doctors** tab (add doctor + per-doctor availability/leave via time inputs), full-screen-ish **Display** board, and the human-gated **Register import** wizard (upload keys → parse → verify rows → import). New `mp-appt-*` CSS.
+- **i18n:** ~60 new `appt*` keys in EN+UR (`@mp/i18n` catalogs), parity gate green.
+
+### Verification gates (all green)
+- typecheck **26/26**, lint **15/15**, turbo build **15/15** (`/appointments` route compiled).
+- jest: **api 227/227** (27 suites; **+21** — 13 appointment e2e over the real guard graph [flag-off 404 vertical smoke, permission 403, idempotent replay, sequential/per-doctor numbering, slots=avail−leave−booked, lifecycle + illegal-transition 400, queue+display, register-import human-gate + skip-incomplete + audited] + 8 pure-helper unit) · **db 79/79** (13 suites; **+6** `appointment-isolation`: per-tenant doctors/appointments/tokens, no-cross-tenant numbering collision, WITH CHECK ×2, fail-closed) · i18n **19/19** incl. EN↔UR parity · ui/import/offline/consent/notifications/patients unaffected.
+- **Flag / vertical smoke:** `clinic.appointments` OFF (pharmacy/lab-only) → every route 404s, module absent from nav (proven in e2e). **Offline self-check:** token idempotency proven (replayed clientActionId → same number, exactly one token for three POSTs).
+
+### Notes / manual-run caveats
+- Register-import AI parse returns an EMPTY draft until the AI gateway (35) lands (staff fill rows manually); today `imageKeys` are client-provided photo keys — multipart upload + R2 object store = `[DECIDE AT BUILD]`.
+- Token creation rides `SyncService.runIdempotent` (durable dedup via `sync_idempotency`) AND stores `client_action_id` on the token (unique) as a domain backstop; the web outbox path mints its own key on true network failure only (fetch never reached the server), so it cannot double with a partially-succeeded online POST.
+- `prisma migrate deploy` / full `deploy.sh` need a live Postgres 16 + server; not runnable in this sandbox. Migration validated under pglite (isolation test runs the real 01→15 SQL) and `prisma generate` ✓.
+
+---
+
 ## Build-step 14 — Phase 1: Patient / Customer Management
 
 - **Work-type:** FEATURE. **Phase 1 / item 1.** Branch `feat/14-patient-management` (stacks on `feat/13-ui-foundation`). Depends on 02 (RLS/runWithTenant), 04 (permissions), 05 (flags), 06 (audit), 08 (i18n), 09 (notification prefs), 12 (import engine).
