@@ -521,3 +521,47 @@ Vitals/patient/appointment untouched (consumed read-only). Referral seed shape m
 Ended with `[CHECKPOINT]`. Controller handles the staging merge.
 
 ---
+
+## Build-step 18 — Phase 1: E-Prescription (Paper-Friendly + Privacy) ✅ DONE/APPROVED (2026-07-04)
+
+**Branch:** `feat/18-eprescription` (FEATURE) · stacks on `feat/17-doctor-consultation`. **Spec:** `specs/18-eprescription.md`. No CODEREF matched (spec alone is authoritative). Depends on 14 (patient/allergy), 17 (encounter/referral), 06 (audit), 13 (UI), 07 (letterhead).
+
+### What was built
+The prescription pad that works for paper-first AND digital doctors, respects per-doctor **privacy**, handles the **dual prescription**, routes items to pharmacy/lab, and runs an **allergy check**. NOTE: this step was resumed — the DB/shared/API/i18n layers were already committed in an earlier session (permissions catalog `rx.write`/`rx.viewInternal`, migration, shared module, service/controller/repos/DTO/e2e, isolation spec, EN+UR keys); THIS session added the missing **web UI** (`apps/web/app/prescriptions/`), the `mp-pt-item` CSS, and re-ran every gate green.
+
+### Data model — NEW migration `20260704140000_eprescription`
+- `medicines` — the MINIMAL model this step creates (brand/generic/strength/form/packSize/manufacturer). EXTENDED additively by 20 (barcode/pricing) + 28 (batches) — never breaking. `pg_trgm` GIN indexes on brand_name/generic_name created inside a DEFENSIVE `DO` block so the migration also runs under pglite (no pg_trgm → the block no-ops, search falls back to a correct ILIKE).
+- `prescriptions` — one pad (`patientId`/`doctorId`, optional `encounterId`/`branchId`, `sendToPatient` drives privacy, `imageKey` a photo Rx, `createdBy`).
+- `prescription_items` — a line (catalog `medicineId` OR `freeText`; `dosage`/`timing`; optional `durationDays`/`quantity`; `dispenseMode` INTERNAL/BUY_OUTSIDE splits the dual prescription; `itemType` MEDICINE/TEST routes tests to the lab).
+- Enums: `DispenseMode` (INTERNAL, BUY_OUTSIDE), `PrescriptionItemKind` (MEDICINE, TEST).
+- RLS: all three tables `apply_tenant_rls` (canonical 02 policy). Isolation spec `packages/db/src/prescription-isolation.spec.ts` runs the real 01→18 migrations under pglite as `app_user` and proves: a tenant sees only its own prescriptions/medicines/items; WITH CHECK blocks writing a row for another tenant; NO context → zero rows (fail-closed). T1/T2 proven.
+
+### Pure `@mp/shared/prescription`
+`DISPENSE_MODES`/`isDispenseMode`, `PRESCRIPTION_ITEM_KINDS`/`isPrescriptionItemKind` (mirror the DB enums, browser-safe), `medicineLabel` (the ONE display form), `partitionPrescription` (the ONE dual-dispense + test routing split the client previews and the server seeds carts/orders from — TEST→lab regardless of dispense mode, else by dispense mode), `findAllergyConflicts` (the pure, conservative substring matcher vs 14 allergies, `MIN_MATCH_LEN=3`), `summarizePrescription` (compact timeline line). Added `PRESCRIPTION` to the additive `TimelineKind` in `packages/shared/src/patients.ts`.
+
+### API — `PrescriptionsModule`
+Surface PRESENT when EITHER `clinic.consultation` OR `pharmacy.pos` is on — a single `@RequireFeature` can't express OR, so each handler calls `assertModulePresent` programmatically (**404 when neither** = vertical smoke, like the 12 import controller) FIRST, then the `rx.write` permission. Privacy read (`rx.viewInternal`) resolved per-caller.
+- `GET /medicines?q=` (fuzzy, `rx.write`), `POST /medicines` (audited `medicine.create`), importable via 12.
+- `POST /prescriptions` (audited `rx.create`) — validates the patient (14), resolves catalog labels, runs the allergy check; a conflict with NO `allergyOverrideReason` → **409** with the conflicts (nothing saved silently); an override reason lets it through and is captured for audit.
+- `GET /prescriptions/:id` — privacy-gated (a private Rx is HIDDEN 404 from anyone without `rx.viewInternal`, incl. the patient) + returns routing with `pharmacyAvailable`/`labAvailable` read at RUNTIME (never commits to the not-yet-built 19/20 tables).
+- `GET /patients/:id/prescriptions` — staff see all; non-staff see only non-private rows.
+- `POST /prescriptions/:id/repeat` (audited) — re-creates the items, re-runs the allergy check.
+- `POST /prescriptions/:id/print` — 07 letterhead payload; `dualCopies` true when internal + buy-outside mix.
+- `POST /prescriptions/:id/send` (audited) — WhatsApp (09) ONLY when `sendToPatient=true` (**blocked** when private); degrades cleanly (no phone / no approved `rx.ready` template) — not an error.
+- Registered as a MEDICAL `TimelineRegistry` contributor → prescription on the patient timeline only in the medical/staff view (privacy governs the DETAIL routes, not the staff-side line).
+
+### Web UI — `/prescriptions` (EN + UR, RTL)
+`page.tsx` (server frame, `robots:noindex`) + `PrescriptionsClient.tsx` island (mirrors the consultation island pattern): access probe on `GET /medicines?q=__probe__` (401→signin, 403/404→`noRxAccess`); medicine search + favorites (17) quick-add; editable pad rows with dosage/timing (EN+UR/Roman free text), days/qty, MEDICINE/TEST kind + INTERNAL/BUY_OUTSIDE dispense selects; prominent privacy toggle; **inline allergy warnings** computed client-side via the same `findAllergyConflicts` against `/patients/:id/history` allergies + a revealed override-reason field (server 409 also reveals it); **live routing preview** via `partitionPrescription`; paper-Rx photo image-key field; on save → print (letterhead print window with dual copies when modes mix), send-to-patient (only when not private), repeat, new. Added `.mp-pt-item` to `apps/web/app/globals.css`.
+
+### Gate results (all green)
+- typecheck **26/26**, lint **15/15**, build **15/15** (`/prescriptions` route emitted, 3.89 kB / 129 kB first load).
+- jest **api 296/296 [+22]** — e2e covers: 401 deny-by-default; vertical smoke lab-only→404, pharmacy-only captures w/ no encounter, full-tenant routing available; NURSE (no rx.write)→403; medicines 400 on empty q; create+fuzzy-search; internal routing; privacy hidden-404 + staff-visible; patient list hides private; dual split + both copies; allergy 409 + override audited; repeat; WhatsApp blocked-for-private / attempted-for-shared; timeline (medical view).
+- jest **db 90/90 [+4 prescription-isolation]**; **i18n 19/19** parity (51 new `rx*` keys EN+UR).
+- Perf ➖ (internal tool, `robots:noindex`, no public surface — same rationale as 16/17).
+
+### Do-NOT-break honored
+Patient/allergy (14), encounter/referral (17), 07 letterhead untouched. `medicines` is the minimal model 20/28 extend additively. Privacy + dual-dispense semantics (`partitionPrescription`, `sendToPatient`) kept stable for 20 to consume. Routing respects the enabled flags at runtime.
+
+Ended with `[CHECKPOINT]`. Controller handles the staging merge.
+
+---
