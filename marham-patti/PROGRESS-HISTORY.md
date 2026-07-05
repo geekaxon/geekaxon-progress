@@ -1194,3 +1194,56 @@ No token → 401; a lab tenant (no `patient.app`) → 404 (module absent, §7); 
 - `/patient` is not one of the LHCI-collected routes (`/`, `/login`, `/ui`), but it shares the same 250 kB script / 700 kB total budget and stays far under it (3.62 kB own JS); it is UR-first and a11y-minded (labelled fields, `role="tablist"`, big targets) per the 90+ intent incl. the Urdu view.
 
 WORK TYPE: FEATURE (branch feat/31-patient-app). Ended with `[CHECKPOINT]`. Controller handles the staging merge.
+
+---
+
+## Build-step 32 — Phase 3: Patient AI Assistant (triage-only) ✅ DONE/APPROVED (2026-07-05)
+
+**Branch:** `feat/32-patient-ai-assistant` (stacked on `feat/31-patient-app`). **Spec:** `specs/32-patient-ai-assistant.md`. No CODEREF matched 32 (proceeded on the spec alone). Depends on 31 (patient app), 35 (AI gateway — scaffold only today), 11 (AI disclaimer consent), 09, 13. **Phase 3, item 2.**
+
+### What it is
+The patient's conversational health-information + **TRIAGE** surface behind the `patient.aiAssistant` flag (dependsOn `patient.app` + `ai.suite`) — absent (404) otherwise. **ASSIST-ONLY: information + triage, NEVER diagnosis / prescription / dosage.** It answers in the patient's language (EN / UR / Roman-Urdu), detects **red flags → routes to emergency / a doctor**, can **book via chat** (15/25), and can **explain the patient's OWN report / prescription** in plain language — all scoped to self/family only. It requires the **AI disclaimer consent (11)** before any interaction and **logs every message**. Urdu-first PWA chat with a persistent "not a doctor" banner + an emergency CTA.
+
+### The 35-gateway dependency (handled honestly)
+The spec depends on the 35 AI gateway, which is only a **scaffold** today (`@mp/ai` `createAiGateway().isConfigured() === false`). The safety-critical behaviour (red-flag triage, refuse-to-diagnose, self/family scope, consent, booking) is therefore implemented as **deterministic, fully-tested `@mp/shared` code — never left to a model**. Free-text generation goes through an injected `AiAssistantGateway` seam that DOES route through `@mp/ai`; until 35 wires a provider, the seam returns the deterministic, localized `composeAssistantReply` — which is also the guaranteed **safety FLOOR** a provider answer would be validated against. When 35 lands, the provider call slots into the existing `isConfigured()` branch under the exported `TRIAGE_SYSTEM_POLICY`. So the module ships working + safe today and needs no rework later.
+
+### Data model (NEW migration `20260705280000_patient_ai_assistant`)
+Two NEW tenant tables (owned here) + two enums; nothing else touched.
+- **`ai_conversations`** — `id, tenantId, patientId, lang @default('en'), riskFlag RiskFlag @default(NONE), startedAt, updatedAt` + index `(tenant, patient)`. One patient ⇄ assistant thread; `riskFlag` is the running triage escalation of the whole thread (only ever RISES).
+- **`ai_messages`** — `id, tenantId, conversationId, role MsgRole, content, redactions Json?, createdAt` + index `(tenant, conversation)`, FK → `ai_conversations` `ON DELETE CASCADE`. Every message logged (USER / ASSISTANT / SYSTEM); `redactions` holds detected red-flag cues as audit metadata.
+- **Enums:** `RiskFlag {NONE, ADVISE_DOCTOR, EMERGENCY}`, `MsgRole {USER, ASSISTANT, SYSTEM}`, re-exported from `@mp/db`.
+- RLS: `apply_tenant_rls` on both. Proven in NEW `packages/db/src/patient-ai-isolation.spec.ts` (T1/T2 own-rows on both tables, WITH-CHECK cross-tenant insert rejected on both, NULL-context fail-closed) over the real 01→32 migrations in pglite. A conversation/message NEVER bleeds across tenants (Acceptance §7).
+
+### Design decisions
+- **Reuse 31 for all patient-record access (no re-implementing scope).** `AiAssistantModule` imports `PatientAppModule` and REUSES `PatientAppService` for every scoped read/write: `self()` (a NEW tiny public accessor added to 31 that resolves — and, on first use, provisions — the patient's own `Patient`), `report()` / `prescriptions()` (self/family-scoped + sign-gated), `bookAppointment()` / `bookHome()`. So the assistant never re-derives the absolute ownership rule — an out-of-scope report/prescription id is an indistinguishable 404 straight from 31. It OWNS only `ai_conversations` / `ai_messages` via its own repo.
+- **Flag REUSED — no catalog change.** `patient.aiAssistant` already existed in the catalog (group `patient`, dependsOn `patient.app` + `ai.suite`). The controller is `@RequireFeature('patient.aiAssistant')` (404 first) THEN `@Roles(Role.PATIENT)` THEN `@RequiresConsent('AI_ASSISTANT_DISCLAIMER')`.
+- **Role-gated + consent-gated, NOT permission-gated — no new permission.** Like 31, a patient holds zero RBAC perms; staff (non-PATIENT) → 403. The AI disclaimer consent is enforced by the always-on global `ConsentGuard` (registered by ConsentModule in the root) — the guard's USER subject is the patient's own userId, so no ConsentModule re-import (which would double-register the APP_GUARD).
+- **Safety precedence in every turn.** normalizeForAi → `classifyRisk` (EMERGENCY wins, escalation-biased) → `classifyRequest` (disallowed diagnose/prescribe/dose) → `classifyIntent`. A red flag sets/raises the conversation `riskFlag` via `escalateRisk` (monotonic max — a later calm message never hides an earlier flag), surfaces the emergency banner, and **suppresses any booking action** (safety before convenience). A disallowed ask is refused + redirected to the doctor. The persistent disclaimer is always appended.
+- **Booking / explain via chat (Acceptance §5/§4).** A message may carry a structured `action` (`appointment` / `home` reusing the 31 DTO parsers verbatim; `report` / `prescription` by id). Booking actually creates the Appointment/HomeCollection through 31 (lands in the staff queue). Explain fetches the OWN report/prescription through 31 and folds a NEUTRAL, localized summary (test/medicine names only — never an interpretation, so never a diagnosis) into the reply.
+- **Every message logged (Acceptance §6).** USER + ASSISTANT rows appended per turn; the turn is `@Audited` (`patient.assistant.message`). `GET /me/assistant/conversations` + `/:id` read back own-scoped (a stranger's thread → 404).
+
+### Pure shared (`@mp/shared/patient-ai`, re-exported from the barrel)
+`RiskFlag` / `MsgRole` / `RISK_FLAGS` / `MSG_ROLES`; `escalateRisk` (monotonic max); `classifyRisk` (EN + Roman-Urdu + Urdu-script red-flag cues → EMERGENCY / ADVISE_DOCTOR, escalation-biased); `classifyRequest` (DIAGNOSIS / PRESCRIPTION / DOSAGE detection); `classifyIntent` (book / explain / general); `TRIAGE_SYSTEM_POLICY` (the stable triage-only system prompt for 35); `composeAssistantReply` + `assistantDisclaimer` + `emergencyBanner` (SAFE localized fallback, trilingual); `PATIENT_AI_FLAG` / `AI_ASSISTANT_CONSENT`. Builds only on the 08 `AiLang`/`normalizeForAi` contract. Unit-tested in `apps/api/src/ai-assistant/ai-assistant-helpers.spec.ts` (31 cases, incl. EN/UR/Roman emergencies).
+
+### API surface (`apps/api/src/ai-assistant/`, base `me/assistant`)
+`POST /me/assistant/message` (the turn; optional `conversationId` + `action`); `GET /me/assistant/conversations`; `GET /me/assistant/conversations/:id`. Files: constants / dto (reuses 31 booking parsers) / gateway (`AiAssistantGateway` seam + `GatewayAiAssistant` through `@mp/ai`) / repositories (abstract `AiAssistantRepo` + `PrismaAiAssistantRepo`) / service / controller / module / index / `__fakes__` / helper spec / e2e spec. Registered last in `app.module.ts`. Added `@mp/ai` as an `@mp/api` workspace dep. Added `self()` to `PatientAppService` (31).
+
+### Web (`apps/web/app/patient/assistant/`, UR-first)
+`page.tsx` server shell (defaults to Urdu; `robots:{index:false}`) + one lean `AssistantClient.tsx` island: a persistent "AI assistant — not a doctor" banner, a text input + big Send + optional Web-Speech voice (degrades silently), an emergency CTA card on a red flag, a first-use consent gate (renders the 403 `consent_required` document → Accept → retry), and a link back to the patient app to book. A quick-action link to the assistant added to the 31 Home tab (degrades to no-access when the flag is off). EN + UR i18n keys (`paAi*`) added to both catalogs (parity green).
+
+### Gate results
+- typecheck **27/27**; lint **15/15** (0 warnings); build **15/15** (`/patient/assistant` 1.82 kB / 141 kB First Load JS — well under budget).
+- jest **api 677/677** (+45: `ai-assistant-helpers` 31 + `ai-assistant.e2e` 14); **db 151/151** (+5: `patient-ai-isolation`); **i18n 19/19** parity (EN+UR `paAi*` keys); turbo test **20/20** suites.
+
+### Vertical smoke (via the e2e over the real module graph + the REAL gateway seam)
+No token → 401; a tenant without `patient.aiAssistant` → 404 (module absent, §7); a staff (non-PATIENT) role → 403; **first use forces the AI disclaimer consent** (403 `consent_required` naming the document) then allows after accept; a general question answered in the same language (Roman-Urdu detected), NONE risk, disclaimer present; **a red-flag input → riskFlag EMERGENCY + banner shown + no diagnosis**; a Roman-Urdu red flag also → EMERGENCY; **refuses to diagnose / prescribe** and redirects; conversation risk escalates monotonically (calm follow-up stays EMERGENCY); **explains the OWN signed report but 404s a stranger's** (scope); **books a real appointment via chat**; a red flag **suppresses** a booking action (no appointment created); every message logged (USER+ASSISTANT) + audited + read back own-scoped; a body with no message → 400.
+
+### Do-NOT-break honored
+ASSIST-ONLY is absolute — no diagnosis/prescription/dosage (deterministic refusal + redirect, proven). Consent (11) + patient-data scope are hard gates (proven: 403 until accepted; stranger report/prescription → 404). Generation goes through the 35 gateway seam (`@mp/ai`) under `TRIAGE_SYSTEM_POLICY`; flag-gated (404 off). No existing test changed; all prior api + db suites still green.
+
+### Notes / decisions
+- Red-flag/intent/disallowed classifiers are coarse keyword matchers (EN + Roman-Urdu dense, Urdu-script for the unambiguous single words) — **escalation-biased** (a false EMERGENCY is safe; a missed one is not). The 35 provider can later refine wording, but the escalation decision stays owned by this deterministic code.
+- Voice input uses the browser Web Speech API when present and degrades silently — no heavy dependency, keeping the island at 1.82 kB.
+- The conversation's `patientId` is provisioned on first use (via 31 `self(ensure=true)`), consistent with how a 31 booking/upload already provisions a fresh OTP login's self `Patient`.
+
+WORK TYPE: FEATURE (branch feat/32-patient-ai-assistant). Ended with `[CHECKPOINT]`. Controller handles the staging merge.
