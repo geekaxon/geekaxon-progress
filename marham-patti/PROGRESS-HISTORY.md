@@ -10,6 +10,70 @@
 
 ---
 
+## Build-step 39 — AI Suite: Cost Control & Quality Routing (`ai.suite`) ✅ DONE/APPROVED (2026-07-05)
+
+**WORK TYPE:** FEATURE · **Phase:** AI Suite (item 5) · **Branch:** `feat/39-ai-cost-control` (stacked on `feat/38-ai-feedback-learning`). **This completes launch scope (build-steps 1–39).** Depends on 35 (cost capture / budget primitive), 24 (dashboard), 06 (audit). Ended with `[CHECKPOINT]`.
+
+**Schema/RLS/auth impact:** ONE new tenant-scoped table (`AiSpendLog`, canonical `apply_tenant_rls` 02) + an ALTER of the existing `AiBudget`. NEW enum `BreachAction`. Migration `20260705330000_ai_cost_control`. **Flag REUSED (`ai.suite`) — NO catalog change. NO new permission** (reuses `ai.budget.manage`, added in 35). No role-grant change.
+
+### Problem
+AI cost can silently balloon and varies wildly by model. The owner needs a live spend meter, per-task model selection (quality-first but cost-aware) and hard budget caps with a defined behavior on breach — otherwise the assist-only suite becomes a runaway bill. This operationalizes the §35 budget primitive (35 still captures cost + accumulates spend + enforces; 39 adds the CONTROLS + the VISIBILITY layer).
+
+### What changed
+**Data model (`@mp/db`):**
+- `AiBudget` gains `warnPct Int @default(80)` (% of cap at which the meter warns) + `onBreach BreachAction @default(BLOCK)`. Existing rows adopt the safe defaults via the migration's column defaults.
+- NEW `AiSpendLog` — append-only ledger, one row per completed `runAiTask` call: `tenantId` / `taskType` / `model` / `cost Decimal(14,4)` / `at`. `@@index([tenantId, at])`, `@@map("ai_spend_log")`. Tenant-scoped (FORCE RLS via `SELECT apply_tenant_rls('ai_spend_log')`).
+- NEW `enum BreachAction { WARN THROTTLE BLOCK }`, exported from `@mp/db`.
+
+**Pure core (`@mp/shared/ai-gateway.ts`) — deterministic, provable, same on server/client/tests:**
+- `budgetGate(spent, cap, onBreach=BLOCK, warnPct=80) → { gate: 'ALLOW'|'WARN'|'THROTTLE'|'BLOCK', throttled, warning, over }`. No cap (≤0) ⇒ ALLOW; under cap but ≥ warn threshold ⇒ WARN; at/over cap ⇒ the configured `onBreach`. **Escalation-safe: an unknown action falls back to a hard BLOCK.**
+- `budgetMeter(cap, spent, warnPct, onBreach) → BudgetMeter` (`remaining` / `usedPct` / `warnThreshold` are null with no cap).
+- `BreachAction` type + `BREACH_ACTIONS` + `isBreachAction`, `DEFAULT_BREACH_ACTION=BLOCK`, `DEFAULT_WARN_PCT=80`, `normalizeWarnPct` (clamp [0,100]; bad→default), `THROTTLE_TIER = AI_TIERS[0] = FAST`.
+- Reuses commission's existing `isPeriodKey` + `periodRange` (`YYYY-MM` → `[from,to)` UTC) for the ledger aggregation window — no duplicate helper (avoided an `isPeriodKey` export collision).
+
+**API (`apps/api/src/ai`):**
+- `AiGatewayService.runAiTask` — enforcement stays THE point: consult `budgetGate` BEFORE the provider call. **BLOCK** → record a FAILED task + throw 403 (spend never mutated). **WARN** → run (soft cap). **THROTTLE** → force the task's tier down to FAST for that run. After a successful call, in addition to `incrementSpend` (authoritative accumulation) it appends an `AiSpendLog` line (`taskType`/`model`/`cost`).
+- `spend(tenantId, period?)` — live meter: validates the optional `YYYY-MM` (400 else), aggregates the ledger over the period window into `{ periodKey, total, calls, byTaskType[], byModel[], budget }` (buckets via Prisma `groupBy`, `_sum.cost` + `_count`).
+- `routing(tenantId)` — every `AI_TASK_TYPE` with its quality-first `defaultTier` + the tenant's effective override (tier/model/provider/enabled/configured) + the tier's per-1k `rate` (`DEFAULT_TIER_RATE`), so the UI shows the cost/quality trade-off. Quality-first is the default wherever a task has no override.
+- `setBudget(tenantId, {capAmount?, warnPct?, onBreach?})` — merge-on-write over the current period; `budgetView` returns the extended meter fields.
+- Repo (`PrismaAiGatewayRepo`): `setBudget` (merge), `logSpend`, `spendByTaskType` / `spendByModel` (literal-`by` `groupBy` → `toBuckets`). `BudgetRow` gains `warnPct`/`onBreach`. Fake repo updated (spendLog array + in-memory aggregate + `seedBudget(...,{warnPct,onBreach})`).
+- Controller: `GET /ai/spend?period=` (`ai.budget.manage`), `GET /ai/routing` + `PUT /ai/routing` (`ai.budget.manage`, audited as `ai.config.upsert`), extended `PUT /ai/budget` (parse merge-on-write; ≥1 field or 400; audited), `GET /ai/budget` (`ai.use`, extended view). `/ai/config` GET/PUT kept as a back-compat alias.
+- DTO: `parseBudget` (optional cap/warnPct/onBreach, ≥1 required, each validated), `parseSpendPeriod` (optional `YYYY-MM`).
+
+**Web (`apps/web`):**
+- NEW `/admin/ai-cost` (`page.tsx` + `AiCostClient.tsx`). Simple = live spend meter (spent / remaining / calls + an animated usage gauge: teal→amber→coral) + the budget-cap form (cap / warn% / breach-action select). Pro adds the by-task-type + by-model spend tables and the per-task routing table (tier select + model input + per-1k rate, "(default)" marker). Probes `/ai/spend` → clean no-access state (404/403). EN+UR.
+- 24 dashboard: a self-probing `AiCostCard` (fetches `/ai/spend`; renders NOTHING without `ai.suite`/`ai.budget.manage`) showing this period's AI spend + cap usage% + a link to `/admin/ai-cost` — cost reporting surfaced on the dashboard (Acceptance §4).
+- i18n: +38 `aiCost*` / `dashAiCost*` keys in EN + UR (parity held).
+
+### Gates (all green)
+- turbo **typecheck 27/27** + **lint 15/15** (0 errors; 1 pre-existing doctor-portal `no-explicit-any` warn, unrelated).
+- turbo **build + test 23/23**.
+- jest **api 864/864** (74 suites; **+11**: 7 shared cost-control unit tests in `ai-helpers.spec` + 4 e2e in `ai.e2e.spec`).
+- jest **db 178/178** (35 suites; **+5** new `ai-cost-control-isolation.spec.ts` — real 01→39 migrations under pglite).
+- i18n **19/19** parity.
+
+### Vertical smoke (e2e over the real module graph, faked 35 repo + real mock provider)
+- Budget controls merge-on-write: a warn%/breach-only PUT preserves the cap; `warnThreshold` computed (25 = 50% of 50). Empty body / `onBreach:'QUEUE'` / `warnPct:150` → 400.
+- `onBreach` behavior over cap (seed cap 5 / spent 5): **BLOCK → 403 + recorded FAILED, spend untouched**; **WARN → runs, DONE task + PENDING suggestion**; **THROTTLE → runs on `gateway-fast`** (clinical.cds would default to QUALITY).
+- Live meter aggregates by task type + model (2 calls → `calls:2`, both task types present); other period (`2020-01`) → total 0; malformed `?period=nope` → 400; `ai.use`-only RECEPTION → 403.
+- Routing lists every task type quality-first (`clinical.cds` default QUALITY, `configured:false`); `PUT /ai/routing` cds→FAST → next run uses `gateway-fast`; `GET /ai/routing` needs `ai.budget.manage` (MANAGER → 403).
+- Existing 35 contract preserved: 864 including the prior gateway/decision/idempotency/budget-block tests.
+
+### RLS isolation (db, pglite, real 01→39)
+`ai_spend_log` + `ai_budgets`: a tenant sees ONLY its own rows; one tenant's spend + cap NEVER visible to another; WITH CHECK blocks logging spend for / moving a row to another tenant (INSERT + UPDATE); NO tenant context → zero rows (fail-closed). T1/T2 proven.
+
+### Do-NOT-break honored
+35's cost-capture + budget-enforcement contract intact — 39 CONTROLS + VISUALIZES, 35 still ENFORCES (the gate is consulted inside `runAiTask`). Routing keeps quality-first as the default. Spend/budget/routing tenant-scoped. Flag-gated (`ai.suite`). `/ai/config` alias keeps 35 callers working.
+
+### Notes / decisions
+- `AiSpendLog` is a pure visibility ledger; `AiBudget.spent` remains the authoritative accumulation the gate reads — the ledger is never the source of truth for enforcement (so a ledger write failure can never silently disable the cap).
+- THROTTLE downgrades only the tier for that single run (mutates the resolved routing in-memory), never persists a config change — the tenant's chosen routing is untouched.
+- Reused commission's `isPeriodKey`/`periodRange` rather than adding parallel helpers (single source for the `YYYY-MM` window; resolved the duplicate-export ambiguity at the `@mp/shared` barrel).
+
+WORK TYPE: FEATURE (branch feat/39-ai-cost-control). Ended with `[CHECKPOINT]`. Controller handles the staging merge.
+
+---
+
 ## Build-step 38 — AI Suite: Feedback & Learning (`ai.suite`)
 
 **Work-type:** FEATURE. **Phase:** AI Suite (item 4). **Branch:** `feat/38-ai-feedback-learning` (stacked on `feat/37-ai-suite-ops`). **Depends on:** 35 (tasks/suggestions + the HITL guard), 36 (rx.read + `ai.clinical`), 37, 06 (audit), 11 (consent/policy framing). **Ended with `[CHECKPOINT]`.**
