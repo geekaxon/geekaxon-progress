@@ -642,3 +642,42 @@ Patient/allergy (14), encounter/referral (17), 07 letterhead untouched. `medicin
 Ended with `[CHECKPOINT]`. Controller handles the staging merge.
 
 ---
+
+# Build-step 22 — Doctor Commission & Payouts (`feat/22-doctor-commission`) ✅ DONE/APPROVED (2026-07-05)
+
+**WORK TYPE: FEATURE** · Phase 1 / item 9. Spec `specs/22-doctor-commission.md` (authoritative; no CODEREF matched — proceeded on spec alone). Depends on 15 (Doctor), 17 (Encounter), 19 (lab referral), 20 (pharmacy), 21 (billing revenue), 06 (audit), 23 (consumes the posted payout expense).
+
+## What shipped
+Per-doctor, per-tenant-configurable earnings across the whole suite, auto-calculated from real activity into idempotent entries, rolled into an auditable payout that posts a balanced expense to accounts (23). Present ONLY when `clinic.commission` is on (absent for Pharmacy/Lab-only verticals). This build-step was **found already substantially implemented** on-branch (shared math + full API layer + migration + 28 API tests) with the WEB UI, the DB isolation test, and the i18n catalogs missing; this run reviewed the existing backend, then completed those three pieces and ran all gates.
+
+### Data model — NEW migration `packages/db/prisma/migrations/20260704180000_doctor_commission/migration.sql`
+- **`commission_configs`** — how a doctor is paid: `type` (`CommissionType`), `salary_amount`/`per_patient_amount` `DECIMAL(12,2)`, `consult_pct`/`lab_pct`/`pharmacy_pct`/`referral_pct` `DECIMAL(6,4)` (fractions), `effective_from`, `active`, `created_by`. Index `(tenant,doctor,active)`. Rate HISTORY: a new config deactivates the doctor's prior active one; the latest active config with `effective_from ≤` an activity's date applies, so a rate change never rewrites history.
+- **`commission_entries`** — one auto-computed credit: `source_type` (`CommSource`), `source_ref_id`, `base`/`amount` `DECIMAL(12,2)`, `period_key`. **`@@unique(tenant,doctor,source_type,source_ref_id)`** is the idempotency key (each `source_ref_id` embeds its basis: `salary:<period>`/`pp:<enc>`/`consult:<enc>`/`lab:<order>`/`pharmacy:<sale>`/`referral:<order>`), plus `(tenant,doctor,period_key)` index.
+- **`commission_payouts`** — a period rollup: `total` `DECIMAL(12,2)`, `status` (`PayoutStatus` DRAFT→APPROVED→PAID), `paid_at`, `journal_ref`, `created_by`/`approved_by`. **`@@unique(tenant,doctor,period_key)`** (one payout per doctor+period) + `(tenant,status)` index.
+- Enums `CommissionType`{SALARY,PER_PATIENT,PERCENT,HYBRID,REFERRAL} / `CommSource`{CONSULT,LAB,PHARMACY,REFERRAL,SALARY} / `PayoutStatus`{DRAFT,APPROVED,PAID}. All three tables `SELECT apply_tenant_rls(...)` (canonical policy 02). `schema.prisma` models added; `packages/db/src/index.ts` re-exports the three enums.
+
+### Pure math — `packages/shared/src/commission.ts` (+ `index.ts` export; `billing.ts` `AccountingSourceLit` extended with `COMMISSION`)
+Browser-safe, dependency-light. `CommissionTypeLit`/`CommSourceLit`/`PayoutStatusLit` + `is*` guards + stable arrays; `periodKeyOf`/`isPeriodKey`/`periodRange` (monthly `YYYY-MM` + its UTC `[from,to)` span); **`commissionEntriesFor(rates, activity, periodKey)`** = the ONE engine (SALARY/HYBRID→flat `salary:<period>`; PER_PATIENT/HYBRID→flat `pp:<enc>` per consult; PERCENT/HYBRID→`consult|lab|pharmacy` percent of each revenue; REFERRAL/HYBRID→`referral:` percent of each referred order; a component emitted only when its rate>0); `sumEntries`; `pctAmount`; **`allowedBasesFor(verticals)`** + `RATE_BASIS` (allowed bases DERIVED from enabled verticals — salary/perPatient always, consult/lab/pharmacy per flag, referral when lab OR pharmacy — no extra table); **`buildCommissionLines(amount)`** + `COMMISSION_ACCOUNT_CODES` (Dr `COMMISSION_EXPENSE` / Cr `COMMISSION_PAYABLE`, Σdebit=Σcredit).
+
+### API — `apps/api/src/commission/*` (`CommissionModule` wired into `app.module.ts`)
+- **Controller** (`/commission`): programmatic **flag 404 FIRST then `commission.manage`** (like 18/21); `/my` needs the flag + a linked doctor profile only. Routes: `POST /configs`, `GET /configs`, `GET /doctors` (overview + `allowedBases`), `POST /recompute`, `GET /report?doctor=&period=`, `GET /my?period=`, `POST /payouts`, `GET /payouts`, `POST /payouts/:id/approve`, `POST /payouts/:id/pay`. Mutations `@Audited`.
+- **Service**: `upsertConfig` (allowed-base enforcement → 403 on a disallowed rate; needs ≥1 rate; inserts + deactivates prior active); `recompute` (per-doctor effective-config resolution → `commissionEntriesFor` → idempotent `upsertEntries`); `report`/`myEarnings` (recompute-then-group-by-source, self-view matches admin to the paisa); `createPayout` (recompute→Σ; DRAFT refreshes to live total, APPROVED/PAID locked); `approvePayout`; `payPayout` (posts balanced expense to the same idempotent outbox 21 emits to via `commission:<payoutId>`; `journalRef` set; re-pay is a no-op).
+- **Repositories**: tenant-scoped Prisma via `runWithTenant`; `loadActivity` assembles the period's activity READ-ONLY from encounters/lab orders/pharmacy sales (sale→cart→prescription→doctor chain) + billing revenue (PAID/PARTIAL invoices keyed by source+refId) — never imports 17/19/20/21, so it can't break them. `createMany({skipDuplicates})` for both entries and the accounting event (idempotent).
+- **Constants/DTO/module/fakes/tests**: DI tokens (`COMMISSION_REPO`/`COMMISSION_CLOCK`), flag constants, class-validator-free DTO parsers (money≥0 paisa-rounded; pct fraction [0,1]; period `YYYY-MM`), in-memory `FakeCommissionRepo`.
+
+### Web UI — `apps/web/app/commission/` (EN + UR, RTL; `robots:noindex`)
+`page.tsx` server frame + `CommissionClient.tsx` island. **Role auto-detected** by probing the manage-gated `GET /commission/doctors` (401→signin, 404→noaccess, 403→doctor-only My-Earnings, ok→admin). Admin: Config tab (doctor select + type + only-allowed-basis rate inputs + effective-from + doctors overview), Payouts tab (period+doctor→Run payout→preview breakdown→approve→mark-paid + payouts list), Report tab (doctor/period→recompute/load→per-doctor breakdown). Shared `Breakdown` component = source-grouped table + **animated bar chart** (CSS width transition). Doctor: `MyEarnings` (period→breakdown). New `comm*`/`commission*` i18n keys (EN + UR parity).
+
+### Verification gates (all green)
+- **typecheck 26/26**, **lint 15/15 (0 warnings)**, **build 15/15** (`/commission` route emitted, 3.38 kB / 138 kB first load).
+- **jest api 415/415 [+28]** — commission e2e covers Acceptance §1–§6: 401 deny-by-default; Lab-only vertical→404; DOCTOR (no manage)→403 on admin; config create+deactivate-prior; disallowed-base→403; no-rate→400; overview exposes allowedBases; HYBRID computes salary+consult%+lab%+pharmacy% correctly; recompute idempotent (no double-credit); future-effective config ignored; doctor `/my` matches admin & 404 with no linked profile; payout DRAFT→APPROVED→PAID posts one balanced COMMISSION event; cannot pay a non-APPROVED, re-pay no-op; mutations audited.
+- **jest db 108/108 [+5 commission-isolation]** — new `packages/db/src/commission-isolation.spec.ts` runs the real 01→22 migrations in pglite: tenant-scoping on configs/entries/payouts, WITH-CHECK blocks cross-tenant config/entry inserts, NO context→zero rows (fail-closed). **T1/T2 proven.**
+- **i18n 19/19** parity (EN+UR commission keys added in lockstep).
+- Perf ➖ (internal admin/doctor tool, `robots:noindex`, no public surface — same rationale as 21).
+
+### Do-NOT-break honored
+Encounter/lab/pharmacy/billing source refs read-only (sweep never mutates 17/19/20/21). `CommissionEntry` idempotency per `sourceRefId` kept stable. Audit + the 23 posting contract (`AccountingEvent` @@unique tenant,source,sourceRefId outbox) reused unchanged. `commission.manage` perm + `clinic.commission` flag already in catalogs — no catalog change. Flag-gated throughout.
+
+WORK TYPE: FEATURE (branch feat/22-doctor-commission). Ended with `[CHECKPOINT]`. Controller handles the staging merge.
+
+---
