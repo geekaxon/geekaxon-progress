@@ -10,6 +10,60 @@
 
 ---
 
+## Build-step 35 — AI Suite: AI Gateway (`@mp/ai`)
+
+**Status:** ✅ DONE/APPROVED (2026-07-05) · **Branch:** `feat/35-ai-gateway` (WORK TYPE: FEATURE) · **Spec:** `specs/35-ai-gateway.md` · **Depends on:** 02 (tenancy/RLS), 04 (RBAC), 06 (audit), 10 (offline idempotency), 11, 13. · **CODEREF:** none (proceeded on the spec alone). · **Schema/RLS/flags:** NEW migration `…310000` (4 tenant-scoped tables + 3 enums; `apply_tenant_rls`×4). Feature flags + permissions all PRE-EXISTED (no catalog change).
+
+### Problem
+Many features want AI, but scattered direct provider calls would be unsafe, unauditable, uncontrollable on cost, and provider-locked. We need ONE gateway: provider-agnostic, per-tenant keys, per-task model routing, quality-first tiering, **human-in-the-loop by construction**, full logging, and budget caps — so "assist-only" and cost control are STRUCTURAL, not per-feature hopes. Earlier AI hooks (15/16/17/18/20/32/33/34) degrade until this exists, then light up.
+
+### What changed
+**Pure core `@mp/shared/ai-gateway.ts`** (browser-safe, dependency-light, no `Date.now()`/provider/keys) — the structural guarantees as testable code:
+- Vocabulary mirroring the DB enums: `AiTier` (FAST/BALANCED/QUALITY) · `AiTaskStatus` (QUEUED/RUNNING/DONE/FAILED) · `SuggestionDecision` (PENDING/APPROVED/REJECTED/EDITED) + lists + guards (`isAiTier`/`isAiTaskStatus`/`isSuggestionDecision`/`isHumanDecision`).
+- **`canApplySuggestion(decision)`** — THE human-in-the-loop guard: applicable ONLY if `APPROVED`/`EDITED`; a PENDING/REJECTED/unknown/null decision is NEVER applicable (fail-safe). Every AI surface routes an application through this. Plus `isPendingDecision`/`isTerminalDecision`.
+- Per-task **quality-first routing**: `AI_TASK_TYPES` + `DEFAULT_TASK_TIER` (`clinical.cds`→QUALITY, `clinical.triage`/`pharmacy.rxRead`→BALANCED, `ops.*`→FAST) + `tierForTask(taskType, overrides)` (tenant override wins; unknown→`DEFAULT_TIER`=BALANCED).
+- Cost + budget math: `DEFAULT_TIER_RATE` (placeholder per-1k-token rates), `estimateCost`/`estimateCostForTier`/`round4`, `periodKeyFor` (UTC `YYYY-MM`), `budgetRemaining`, `isOverBudget` (cap≤0 ⇒ no cap), `wouldExceedBudget`.
+- `AI_GATEWAY_SYSTEM_POLICY` — the master assist-only system prompt every provider call is prefixed with; `AI_SUITE_FLAG`/`AI_OPS_FLAG` constants.
+
+**Engine `@mp/ai`** (rewrote the pre-35 scaffold, `@mp/shared` dep added; **backward-compatible**):
+- `AiProvider` interface (`complete(req) → AiResult`; the single swappable seam) + `AiCompletionRequest`/`AiResult`.
+- `MockAiProvider` — deterministic, network-free, assist-only (echoes a human-review-required suggestion; tokens ≈ chars/4). The safe default until a real SDK+key is wired.
+- `createAiGateway(config)` EXTENDED: optional `provider`/`tierOverrides`/`models`. `isConfigured()` = provider present; `route(taskType)` = tier+model; `complete({taskType,input,taskPolicy})` prepends the master policy via `buildSystemPrompt` and runs the provider. **CRITICAL do-NOT-break preserved:** the 32/33/34 feature seams call `createAiGateway({tenantId})` (no provider) → `isConfigured()` false → they still fall back to their deterministic `@mp/shared` composers. `costOf`/`estimateTokens`/`defaultModelFor` helpers; `AI_ASSIST_ONLY` kept.
+
+**API `AiModule`** (`apps/api/src/ai/`): `@RequireFeature('ai.suite')` FIRST (404 if off) → per-route `@RequirePermission`.
+- `POST /ai/tasks` (`ai.use`, `@Audited`, `@IdempotencyKey`) — `runAiTask`: mask input (`maskAuditSummary`) → resolve routing from the tenant's config (else quality-first default) → **budget: block if the period cap is reached, recording a FAILED task and leaving spend untouched (403)** → `gateway.complete()` via the injected `AiProviderFactory` → persist `AiTask` (status DONE, model, tokensIn/out, `costEstimate`, `latencyMs`, createdBy) → `incrementSpend` → create a PENDING `AiSuggestion`. Rides `SyncService.runIdempotent` when an `Idempotency-Key` is present so a queued offline AI action replayed on reconnect returns the SAME suggestion without re-running the provider (offline queue, §5; the 10 outbox already models an `ai` action).
+- `POST /ai/suggestions/:id/decision` (`ai.use`, `@Audited`) — `decideSuggestion`: PENDING→APPROVED/REJECTED/EDITED (EDIT replaces output); already-decided → 409; unknown → 404.
+- `GET /ai/suggestions/:id`, `GET /ai/tasks`(+`/:id`) (`ai.use`) — the logs.
+- `GET /ai/budget` (`ai.use`) + `PUT /ai/budget` (`ai.budget.manage`, `@Audited`) — period cap + spend + remaining/over view.
+- `GET /ai/config` + `PUT /ai/config` (`ai.budget.manage`, `@Audited`) — per-task routing upsert; **a body with `apiKey`/`key`/`secret` is refused (400)** — keys are never persisted.
+- Service methods `canApply`/`assertApplicable` are what the coming suites (36/37) call before applying a suggestion; `AiGatewayService` is exported so they inject it and go through `runAiTask`+`decideSuggestion` — no direct provider calls anywhere (§5).
+
+**Secret store** `AiSecretStore` / `EnvAiSecretStore` — per-tenant keys read from env (`AI_KEY_<TENANTID>` → `AI_PROVIDER_KEY` fallback), NEVER the DB. The `ai_provider_configs` table has NO key column. `AiProviderFactory`/`DefaultAiProviderFactory` build the per-tenant gateway (provider chosen by config; mock until a real SDK branch is added) — swapping the provider is config-only.
+
+**Data model (OWNS 4 tables):** `ai_provider_configs` (tenant+taskType routing, **no key**), `ai_tasks` (uniform request + cost/latency), `ai_suggestions` (output + human decision, FK→task cascade), `ai_budgets` (per-period cap + spend, unique tenant+period). All tenant-scoped via the canonical `apply_tenant_rls` policy (02). Enums `AiTier`/`AiTaskStatus`/`SuggestionDecision` exported from `@mp/db`.
+
+**Flags/permissions:** REUSED — `ai.suite`/`ai.clinical`/`ai.ops` already in the 05 catalog (`full` preset has them); permissions `ai.use` + `ai.budget.manage` already granted (ADMIN both; MANAGER/DOCTOR `ai.use`). NO catalog change.
+
+**Web:** none — this is a backend primitive; the detailed budget/cost surface is deferred to 39. i18n untouched (parity intact).
+
+### Verification gates (all green)
+- **turbo typecheck + lint:** 42/42 (0 errors; 1 pre-existing `doctor-portal.repositories.ts` unused-eslint-disable warning, unrelated).
+- **turbo build + test:** 23/23. Web builds unchanged (no new page).
+- **jest api:** 768/768 (68 suites; **+37**) — new `ai-helpers.spec.ts` (HITL guard incl. fail-safe unknown/null; routing quality-first + override; cost det. + clamp; budget cap/period math; mock provider determinism + assist-only wording + overrides + master-policy prefix), `ai-secret-store.spec.ts` (null w/o env; per-tenant over shared; factory builds configured gateway w/ no key in code), `ai.e2e.spec.ts` (full HTTP smoke below).
+- **jest db:** 167/167 (33 suites; **+6** `ai-gateway-isolation`) — real 01→35 migrations in pglite: 4-table T1/T2 scoping, budget-spend never cross-tenant, WITH-CHECK blocks insert/UPDATE-move to another tenant, NO-context fail-closed.
+- **i18n parity:** 19/19 (EN↔UR identical; untouched).
+- **Isolation:** configs/tasks/suggestions/budgets tenant-scoped; one tenant's keys/spend never visible to another (§6 proven).
+- **Vertical/flag smoke (e2e over the real graph + REAL mock provider):** no token→401; no-`ai.suite` tenant (lab preset)→404 on tasks + budget; run needs `ai.use` (RECEPTION→403); `runAiTask` routes clinical.cds→QUALITY (`gateway-quality`), persists tokensIn/out+cost>0+latency, returns PENDING suggestion, audited (`ai.task.run`); unknown task type→safe BALANCED default; no input→400; **HITL** (PENDING → `canApply` false + `assertApplicable` throws → APPROVE → applicable + audited → re-decide→409); REJECTED never applicable; EDIT without output→400 then with output records it; decide unknown→404 / invalid decision→400; **spend accumulates** (GET /ai/budget spent>0); **over-cap→403 + a FAILED task recorded, no suggestion, spend not mutated**; budget set needs `ai.budget.manage` (MANAGER→403, ADMIN 200 remaining=cap); **same `Idempotency-Key` replays the SAME suggestion — exactly one task + one suggestion persisted (provider ran once)**; config upsert (no key) OK + a body with `apiKey`→400 + config read needs `ai.budget.manage` (MANAGER→403).
+- **White-label / performance:** N/A (no web surface).
+
+### Notes / decisions
+- **`@mp/ai` now depends on `@mp/shared`** (`workspace:*`) — single source of truth for the tier/cost/routing vocab; turbo `^build` orders it. The pre-35 `createAiGateway`/`isConfigured`/`AI_ASSIST_ONLY` surface is preserved verbatim so the 32/33/34 seams keep compiling and keep falling back to their safe composers (they construct provider-less gateways).
+- **Budget enforcement = block-if-already-over** (before the run), recorded as a FAILED `AiTask`; a positive cap is required to block (cap 0 ⇒ opt-in / no cap). Cap is stored at 2dp (currency); spend at 4dp (token-level cost).
+- **Offline queue** for AI is satisfied structurally: the 10 outbox already carries an `ai` action (`requiresNetwork`), and the server dedupes the replay via the idempotency seam — no double provider call.
+- Provider is the deterministic `MockAiProvider` for every provider name today; adding a real provider (Anthropic/OpenAI/…) is a single new branch in `DefaultAiProviderFactory.resolveProvider` using `AiSecretStore.getKey(tenantId, name)` — no schema/API change. 36/37 will wire `ai.clinical`/`ai.ops` surfaces to call `runAiTask`+`decideSuggestion`.
+
+---
+
 ## Build-step 34 — Phase 3: Online Pharmacy (Own Store)
 
 **Status:** ✅ DONE/APPROVED (2026-07-05) · **Branch:** `feat/34-online-pharmacy` (WORK TYPE: FEATURE) · **Spec:** `specs/34-online-pharmacy.md` · **Depends on:** 20 (catalog/stock), 28 (batch/FEFO), 14, 18 (Rx), 21 (payment/COD), 09, 13.
