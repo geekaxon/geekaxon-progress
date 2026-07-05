@@ -10,6 +10,46 @@
 
 ---
 
+## Build-step 36 — AI Suite: Clinical (Assist-Only) (`ai.clinical`)
+
+**Status:** ✅ DONE/APPROVED (2026-07-05) · **Branch:** `feat/36-ai-suite-clinical` (WORK TYPE: FEATURE) · **Spec:** `specs/36-ai-suite-clinical.md` · **Depends on:** 35 (gateway), 18/20 (Rx/medicine), 19 (lab), 14 (allergies), 17/33 (consult). · **CODEREF:** none (proceeded on the spec alone). · **Schema/RLS:** **NO migration — OWNS no tables**; reuses 35's `ai_tasks`/`ai_suggestions` and READS existing clinical/catalog tables through its OWN `runWithTenant` repo (RLS is the floor). · **Flags:** all PRE-EXISTED (`ai.clinical`, `pharmacy.aiReader`, `pharmacy.pos`, `lab.results`, `clinic.consultation`; `full` preset) — **no catalog change**. · **Permissions:** `ai.use` GRANTED additively to PHARMACIST/SALESMAN/PATHOLOGIST/LAB_TECH (the clinical staff who run the AI); ADMIN/MANAGER/DOCTOR already held it.
+
+### Problem
+The biggest staff-capability gains are clinical (reading a script into a cart, catching interactions, explaining a report, flagging abnormals) — AND the highest-risk. Each must be **assist-only**: AI drafts, a licensed human (pharmacist/doctor/pathologist) confirms and signs the medico-legal act. All six route through the 35 gateway so they are logged, budgeted and per-tenant-keyed, and are surfaced only when the tenant owns both `ai.clinical` and the specific module.
+
+### What changed
+**Pure core `@mp/shared/clinical-ai.ts`** (browser-safe, no `Date.now()`/provider/keys) — the six clinical task types + the deterministic SAFETY FLOOR each returns before a real provider is wired (and the shape a provider answer is validated against later):
+- `CLINICAL_TASKS`/`CLINICAL_TASK_TYPES`/`isClinicalTask` — the dotted task-type strings (`rx.read`, `medicine.search`, `interaction.check`, `lab.explain`, `result.flag`, `note.summarize`); `AI_CLINICAL_SUITE_FLAG`.
+- `CLINICAL_SURFACE_FLAG` + `surfaceFlagFor(task)` — the MODULE flag each surface additionally rides (`rx.read`→`pharmacy.aiReader`, `medicine.search`→`pharmacy.pos`, `interaction.check`/`note.summarize`→`clinic.consultation`, `lab.explain`/`result.flag`→`lab.results`).
+- `smartMedicineSearch(query, candidates)` — brand/generic/**alternative**(same-generic)/**intent**(symptom→generic via `INTENT_CUES`) ranking, order-stable, `mustVerify:true`, flags Rx items; `intentGenericsFor(query)` exposed so the catalog fetch can widen to symptom-mapped generics; `MEDICINE_SEARCH_SYSTEM_POLICY`/`_DISCLAIMER`.
+- `explainLabReport(values, lang)` — plain-language line per analyte (within/above/below range) localised **EN + UR + Roman-UR**, `hasAbnormal`/`hasCritical`, `informationalOnly:true`; `LAB_EXPLAIN_SYSTEM_POLICY` + `labExplainDisclaimer(lang)`; `LabValueLite` (compatible with 19 `EvaluatedValue`).
+- `flagAbnormalResults(values)` — keeps only HIGH/LOW/CRITICAL, CRITICAL-first, neutral notes, `pathologistSigns:true` (never finalises); `RESULT_FLAG_SYSTEM_POLICY`/`_DISCLAIMER`.
+- **rx.read / interaction.check / note.summarize REUSE the 33/34 composers** `composePrescriptionRead` (34), `crossCheckMedications` (33), `summarizeClinicalNote` (33) + their policies — no duplication.
+- Added the 6 clinical task types additively to `AI_TASK_TYPES` + `DEFAULT_TASK_TIER` in `ai-gateway.ts` (quality-first: `interaction.check`/`result.flag`→QUALITY; `rx.read`/`lab.explain`→BALANCED; `medicine.search`/`note.summarize`→FAST).
+
+**35 gateway extension (backward-compatible):** `AiGatewayService.runAiTask(..., opts?: { floor })` — when a suite passes its deterministic structured floor it is attached to the persisted suggestion as `output.result` (the free-text `output.text` stays the provider's raw output; the key is omitted entirely for plain 35 callers, so all 35 tests are unchanged). The mock provider still runs for honest token/cost/latency + budget.
+
+**NEW `ClinicalAiModule`** (`apps/api/src/clinical-ai/`, imports FlagsModule + PermissionsModule + **AiModule**, exports the service):
+- `ClinicalAiController` `@Controller('ai/clinical')` `@RequireFeature('ai.clinical')` FIRST → 6 `POST` routes (`rx-read`, `medicine-search`, `interaction-check`, `lab-explain`, `result-flag`, `note-summarize`), each `@RequirePermission('ai.use')` + `@Audited({action:'ai.clinical.*'})`.
+- `ClinicalAiService` — per task: (1) `requireSurface` checks the MODULE flag via `FlagService` (404 if off), (2) gather real data (`interaction.check` fetches the patient's current meds 18 + allergies 14 by `patientId`; `medicine.search` does a 2-pass catalog fetch — literal+intent terms, then widen by matched generics for alternatives), (3) compose the deterministic floor, (4) route through **35 `runAiTask`** with `{ floor }`, (5) return `{ id, taskType, decisionRequired:true, result }`. NO decision endpoint of its own — the human decides via the 35 `POST /ai/suggestions/:id/decision` (only APPROVED/EDITED applies).
+- `ClinicalAiRepo` (abstract + Prisma) — READS `patient_allergies` (14), `prescriptions`/`prescription_items`/`medicines` (18/20) via `runWithTenant`, mirroring the 33 doctor-portal queries; OWNS no tables.
+- `clinical-ai.dto.ts` — plain-function parsers (400 on bad input) for all 6 bodies; `__fakes__.ts` `FakeClinicalAiRepo` (seeded catalog + patients); registered in `app.module.ts` after AiModule.
+
+**No web surface** (backend suite; the existing POS 20 / lab 19 / consult 17 / doctor-portal 33 surfaces call these endpoints — their own AI panels from 32/33/34 already exist). No new i18n keys (the composers emit EN+UR+Roman directly).
+
+### Verification gates
+- **turbo typecheck + lint 42/42** (0 errors; 1 pre-existing doctor-portal `no-explicit-any` warning — my repo file carries no directive/warning).
+- **turbo build + test 23/23.**
+- **jest api 796/796** (70 suites; **+28**: `clinical-ai-helpers.spec` composers + `clinical-ai.e2e.spec` over the REAL module graph & the REAL 35 mock provider). **jest db 167/167** (unchanged — 36 owns no tables; isolation inherited via `runWithTenant` RLS on the reused 35 + existing clinical tables). **i18n 19/19** parity.
+- **Vertical smoke (e2e):** no token→401; tenant without `ai.clinical`→404 (suite absent); **per-surface module flag** — T_PARTIAL (`ai.clinical` on, `pharmacy.aiReader`+`lab.results` off, `clinic.consultation` on) → `rx-read`/`lab-explain`→404 but `note-summarize`→200; run needs `ai.use` (RECEPTION→403); **rx.read**→structured `mustVerify` read + DONE `AiTask` + PENDING `AiSuggestion` carrying `output.result` + audited; PENDING not applicable → APPROVE → applicable (`canApply`); rx.read empty items→400; **medicine.search**→brand + same-generic alternative (2-pass widen) + intent (`fever`→paracetamol); **interaction.check**→uses the patient's REAL Warfarin + Penicillin-allergy → DRUG_DRUG HIGH (warfarin+NSAID) + DRUG_ALLERGY (amoxicillin) + `highRisk`, `advisoryOnly:true` (never blocks), unknown patient→404, neither patient nor meds→400; **lab.explain**→plain-language EN/UR/Roman lines + `informationalOnly`, bad flag→400; **result.flag**→CRITICAL-first, NORMAL excluded, `pathologistSigns:true`; **note.summarize**→`draftOnly` summary, empty note→400.
+
+### Notes / decisions
+- **Assist-only is absolute (§5 do-NOT-break):** every task returns a PENDING suggestion; nothing mutates business data. The medico-legal act (dispense / sign the prescription / sign the lab result) stays the licensed human's, applied by the calling feature ONLY after `canApplySuggestion` passes on a human decision recorded via the 35 surface.
+- **Owns no tables by design** (spec §top: "Reuses 35 AiTask/AiSuggestion (task types only)") — the clinical task types are free-text `task_type` strings, so no enum/migration was needed. Isolation is inherited: the reused 35 tables have their pglite T1/T2 test; every clinical read goes through `runWithTenant`.
+- `interaction.check`/`medicine.search` reach real 14/18/20 data through the module's OWN tenant-scoped repo (never importing the owning modules), exactly as 31/33 do.
+
+---
+
 ## Build-step 35 — AI Suite: AI Gateway (`@mp/ai`)
 
 **Status:** ✅ DONE/APPROVED (2026-07-05) · **Branch:** `feat/35-ai-gateway` (WORK TYPE: FEATURE) · **Spec:** `specs/35-ai-gateway.md` · **Depends on:** 02 (tenancy/RLS), 04 (RBAC), 06 (audit), 10 (offline idempotency), 11, 13. · **CODEREF:** none (proceeded on the spec alone). · **Schema/RLS/flags:** NEW migration `…310000` (4 tenant-scoped tables + 3 enums; `apply_tenant_rls`×4). Feature flags + permissions all PRE-EXISTED (no catalog change).
