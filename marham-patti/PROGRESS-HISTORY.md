@@ -10,6 +10,48 @@
 
 ---
 
+## Build-step 34 — Phase 3: Online Pharmacy (Own Store)
+
+**Status:** ✅ DONE/APPROVED (2026-07-05) · **Branch:** `feat/34-online-pharmacy` (WORK TYPE: FEATURE) · **Spec:** `specs/34-online-pharmacy.md` · **Depends on:** 20 (catalog/stock), 28 (batch/FEFO), 14, 18 (Rx), 21 (payment/COD), 09, 13.
+
+### Problem
+The pharmacy wants to sell online under its OWN brand with home delivery, but (a) prescription medicines must be pharmacist-validated before dispensing, (b) online stock must stay consistent with the counter so the two never oversell the same batch, and (c) delivery + COD must be tracked. It's a public-facing store, so it must hit the 90+ mobile bar. (Multi-vendor marketplace = deferred 45.)
+
+### What changed
+**Two invariants, both provable in code (not left to the runtime or the model):**
+- **RX ASSIST-ONLY:** a basket with any prescription-required line parks in `RX_REVIEW`; a pharmacist approves before anything is dispensed. The AI read (`OnlineRxReadGateway`→`@mp/ai` 36 under `RX_READ_SYSTEM_POLICY`→deterministic `composePrescriptionRead` floor) ALWAYS returns `mustVerify: true` and NEVER approves.
+- **NO-OVERSELL:** online fulfilment decrements the SAME `stock`/`batches` tables as the counter (20/28) via a GUARDED atomic decrement — `stock.updateMany({ where: { …, qty: { gte: want } }, data: { qty: { decrement: want } } })` inside one transaction; zero matched rows ⇒ `OnlineStockError` ⇒ rollback (all-or-nothing). FEFO per-batch decrement + a SALE `StockMovement` mirror the 20 finalize hook. Reused `allocateFefo` + `round2` from `@mp/shared`.
+
+**API — NEW `OnlinePharmacyModule`** (`@RequireFeature('pharmacy.online')` FIRST on every controller; THREE role-scoped controllers over ONE service):
+- **Customer** `@Roles(Role.PATIENT)`: `GET /online/catalog?q=` (searchable catalog: label/price/stock/requiresRx), `POST /online/orders` (checkout — patient resolved from principal like 31, prices from catalog never body, `initialOrderStatus` = RX_REVIEW if any `requiresRx` else PLACED, reserve at PLACED else on approval, best-effort invoice + notify), `GET /online/orders` (own), `GET /online/orders/:id` (track; stranger→indistinguishable 404).
+- **Pharmacist** `@RequirePermission('pharmacy.cashier')`: `GET /online/ops/review` (RX_REVIEW queue), `GET /online/ops/orders/:id/rx-read` (assist-only read beside the image), `POST …/decision` (approve→reserve→APPROVED / reject→CANCELLED), `POST …/status` (PACKED/CANCELLED only — delivery is rider-driven), `POST …/assign` (rider→OUT_FOR_DELIVERY), `GET/POST /online/ops/riders`.
+- **Rider** `@Roles(Role.RIDER)`: `GET /online/rider/assignments` (own; caller's own `Rider` resolved by `userId`), `POST …/:id/status` (proof-gated DELIVERED, reason-gated FAILED, own→404; DELIVERED → order DELIVERED + COD settled).
+- Writes `@Audited`. Payment/COD REUSES `BillingService` (21, best-effort like home-collection: `createInvoice` source OTHER `refId=orderId` at placement; ONLINE prepaid via `pay('ONLINE')`, CASH=COD settled via `pay('CASH')` on delivery; invoice patient link via refId — decoupled from cross-module patient ids). Per-status WhatsApp via `NotificationService` (09, best-effort). No FlagService needed in-service (all gating at the guard layer).
+
+**Data model — OWNS 4 tables + 1 additive column.** `online_orders`, `online_order_items` (order→items cascade FK), `riders`, `delivery_assignments`; additive `medicines.requires_rx BOOLEAN DEFAULT false` (the authoritative Rx-review source, same precedent as 20 adding salePrice/costPrice). Migration `20260705300000_online_pharmacy` — `ALTER medicines`, 2 enums (`OnlineStatus`; **`RiderStatus`** — deliberately named to AVOID colliding with the existing 09 `DeliveryStatus` message enum), 4 CREATE TABLEs + indexes + the order→items FK, `apply_tenant_rls`×4. Enums exported from `@mp/db`. All catalog/stock/patient/branch data REUSED via the module's OWN tenant-scoped repo (31 precedent), never importing 20/28/14.
+
+**Pure `@mp/shared/online-pharmacy`** (added to the barrel; no package.json change): `PHARMACY_ONLINE_FLAG`; `OnlineStatusLit`/`RiderStatusLit` + `ONLINE_STATUS_FLOW`/`RIDER_STATUS_FLOW` + `canTransition*`/`nextStatuses`/`orderStatusForDelivery`; `requiresPharmacistReview`/`initialOrderStatus`; `orderItemsSubtotal`/`orderTotal` (reuse 20 `round2`); `RX_READ_SYSTEM_POLICY`/`RX_READ_DISCLAIMER`/`composePrescriptionRead` (deterministic assist-only floor). Backs BOTH the API service and the web storefront so they agree by construction.
+
+**Flags:** `pharmacy.online` (dependsOn `pharmacy.pos`) already existed in the catalog — added it to the `pharmacy` + `clinic_pharmacy` presets in `@mp/flags`. NO new permission (role/perm-gated). Updated the one flags.service spec that used `pharmacy.online` as its "off-in-preset-but-parent-on" example → switched to `lab.homeCollection` (still off in the lab preset with parent `lab.catalog` on).
+
+**Web** (Next 15 app-router islands, brand-themed via 07 CSS vars, `noindex`): `/store` — UR-first customer storefront (catalog/search, local cart, checkout with address + COD/online + Rx-image key, my orders/track; degrades to sign-in/no-access), **registered in `lighthouserc.json` `collect.url` for the 90+ mobile gate**; `/rider` — EN-first rider PWA (own assignments, proof/reason-gated status buttons); `/rx-desk` — EN-first pharmacist queue (assist-only read + `mustVerify` + Approve/Reject). Manifest shortcuts added for `/store` + `/rider`. i18n: `st*`/`rd*`/`rq*` keys added to BOTH en.json + ur.json (parity 19/19).
+
+### Verification gates (all green)
+- **turbo typecheck + lint 42/42** (0 errors; 1 pre-existing `no-explicit-any` unused-directive WARNING in `doctor-portal.repositories.ts`, present on HEAD — non-fatal, not this step's file). **turbo test + build 23/23.**
+- **jest api 731/731** (65 suites; +19: `online-pharmacy.e2e` + `online-pharmacy-helpers`). **jest db 161/161** (32 suites; +6: `online-pharmacy-isolation`). **i18n 19/19 parity.**
+- **Web build:** `/store` 2.45 kB / 144 kB, `/rider` 1.64 kB / 143 kB, `/rx-desk` 1.58 kB / 143 kB — all far under the 250 kB script budget.
+- **Isolation (pglite, real migrations 01→34):** 4-table T1/T2 tenant-scoping + WITH-CHECK blocks cross-tenant order/assignment + fail-closed (no context → 0 rows), PLUS a guarded-decrement test proving the shared `stock` never goes negative (second over-quantity reserve matches 0 rows).
+- **Vertical smoke (e2e over the REAL module graph + REAL Rx gateway floor, Prisma/billing faked):** no token→401; no-`pharmacy.online` tenant→404; non-PATIENT on storefront→403; PATIENT on ops→403; browse catalog + place OTC order (shared stock 10→8) + audited; unknown medicine→400; lists ONLY my orders + stranger track→404; **no-oversell** (two 6-of-10 orders → 2nd 409, stock stays 4); Rx basket→RX_REVIEW with NOTHING reserved → assist-only read (`mustVerify`, disclaimer) → approve→APPROVED + reserved (5→3); pharmacist reject→CANCELLED (never dispensed, stock untouched); pack→assign rider→OUT_FOR_DELIVERY → rider pick → deliver requires proof → DELIVERED + COD payment recorded (order.paid); rider w/o profile→404; another rider's assignment→404; pharmacy-preset tenant present.
+
+### Notes / decisions
+- **Public storefront = authenticated PATIENT surface.** The platform serves all tenants under ONE shared host and derives the tenant from the principal (the custom-domain path is dormant); `@RequireFeature` fail-closes to 404 without a tenant. So a truly-anonymous guest storefront can't resolve a tenant/flag today — the customer surface is `@Roles(PATIENT)` (consistent with the "public-facing" 31 PWA, which is likewise authenticated). `online_orders.guest_phone` is reserved (nullable) for the future guest/custom-domain path.
+- **No compensating restock on CANCEL** (yet): a cancelled order that had already reserved stock leaves the decrement in place (reconciled via 28) — kept simple; the no-oversell invariant (never dispense more than on-hand) is the priority and holds.
+- **Delivery enum renamed** `RiderStatus` to avoid colliding with the existing 09 `DeliveryStatus` (message-delivery) enum.
+
+WORK TYPE: FEATURE (branch feat/34-online-pharmacy). Ended with `[CHECKPOINT]`. Controller handles the staging merge.
+
+---
+
 ## Build-step 33 — Phase 3: Doctor Portal + AI Decision Support
 
 **Status:** ✅ DONE/APPROVED (2026-07-05) · **Branch:** `feat/33-doctor-portal-ai` (WORK TYPE: FEATURE) · **Spec:** `specs/33-doctor-portal-ai.md` · **Depends on:** 14, 15, 17, 18, 19, 22, 35 (gateway), 13.
