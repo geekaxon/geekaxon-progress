@@ -901,3 +901,62 @@ The phlebotomist's OFFLINE field PWA — the same home-collection bookings (25),
 - **Assigned-to-me narrowing** enforced server-side (not just the flag/permission) so a phlebotomist can only ever see/act on their own route — a defence-in-depth beyond RLS's tenant scope.
 
 WORK TYPE: FEATURE (branch feat/26-phlebotomist-app). Ended with `[CHECKPOINT]`. Controller handles the staging merge.
+
+---
+
+## Build-step 27 — Phase 2: Sample Tracking & Chain of Custody ✅ DONE/APPROVED (2026-07-05)
+
+**Branch:** `feat/27-sample-tracking` (stacked on `feat/26-phlebotomist-app`). **Spec:** `specs/27-sample-tracking.md`. No CODEREF matched 27 (proceeded on the spec alone).
+
+### What it is
+Chain of custody over the **19 sample**, extended ADDITIVELY (the 19 Sample model is extended, never replaced). A physical sample passes many hands (collection → transport → reception → bench → storage/disposal); if a result is wrong or a sample is lost, you must know exactly where the chain broke and who held it. Each **scan** records a stage event (WHO/WHEN/WHERE) and the ordered chain is the sample's **custody timeline**. Lost/damaged/rejected handling re-opens a recollection; a mismatch guard blocks resulting a wrong/rejected sample (patient-safety).
+
+### Data model (NEW migration `20260705230000_sample_tracking`)
+- **`Sample` extended additively:** `custodyStatus CustodyStatus @default(ACTIVE)` (a non-ACTIVE sample blocks resulting), `containerType String?` (tube type), `storageLocation String?` (where it rests).
+- **NEW table `sample_events`** (the ONLY table this step owns): `id, tenantId, sampleId, stage SampleStage, actorId, location?, note?, scannedAt, createdAt` + index `(tenantId, sampleId, scannedAt)`. Append-only evidence.
+- **NEW enums:** `SampleStage` (COLLECTED, IN_TRANSIT, RECEIVED, ACCESSIONED, ON_BENCH, STORED, DISPOSED, REJECTED), `CustodyStatus` (ACTIVE, LOST, DAMAGED, REJECTED). Exported from `@mp/db`.
+- RLS: `apply_tenant_rls('sample_events')` (canonical 02). `samples` already carries the policy from 19.
+
+### Design decisions
+- **Ownership / no circular deps:** SampleTracking OWNS only `sample_events`. The `samples` row (custody status, container, storage, received/rejected lab-status) stays owned by 19 and is mutated ONLY through two NEW `LabService` seams — `findSampleWithOrder(barcode)` (resolve barcode → sampleId + orderId + patientId + SampleView; 404 on unknown) and `updateSampleFields(barcode, patch)`. The recollection is reached through `HomeCollectionService`. So dependency flow is SampleTracking → Lab and SampleTracking → HomeCollection → Lab (no cycle back). The mismatch guard lives INSIDE LabService (reading the sample's now-present custodyStatus) so LabModule needs NO dependency on SampleTracking.
+- **Flag gating = OR:** PRESENT when `lab.results` OR `lab.homeCollection` is on (a lab that resultss and/or does home collection actually handles samples). A single `@RequireFeature` can't express OR, so — like 12/18/21 — the controller has NO class flag decorator and checks programmatically: `SampleTrackingService.assertModulePresent` 404s FIRST (flag before permission), THEN `PermissionService.roleHasPermission(role, 'lab.order')` → 403. A pharmacy-preset tenant (no lab flags) → 404 (module absent).
+- **Permission REUSED — no catalog change:** the SAME `lab.order` the existing sample collect/receive routes ride ("order lab tests + manage the catalog / packages / samples"). LAB_TECH/PATHOLOGIST/DOCTOR/PHLEBOTOMIST already hold it. Consistent with 26's "no catalog change".
+- **REJECTED is not a scan target** — it rides the dedicated `/reject` action (which also sets custody + triggers recollection), exactly as COLLECTED rode the collect action in 26. The scan DTO rejects a REJECTED (or unknown) stage.
+- **Mismatch guard only ever tightens 19:** with no scanned barcode and no sample yet (walk-in), resulting is untouched; the guard adds (a) scanned-barcode-belongs-to-this-order and (b) sample-must-be-ACTIVE. Wired into BOTH `enterResults` (optional `sampleBarcode`) and `approve`.
+- **Recollection is best-effort:** `HomeCollectionService.recollectForRejectedSample(labOrderId)` returns null when the tenant has no home collection, the order was a walk-in (no booking via new repo `findLatestByOrder`), or it was already re-opened; it reuses the 25 recollect shape (original → RECOLLECT, fresh BOOKED linked `recollectOfId`, no re-charge, patient WhatsApp). Never fatal to the reject (the sample rejection is the source of truth).
+
+### Pure `@mp/shared/samples`
+`SampleStageLit`/`CustodyStatusLit`, `SAMPLE_STAGES`/`CUSTODY_STATUSES`/`REJECTION_CUSTODY`, `SAMPLE_STAGE_FLOW`, `canTransitionStage`/`nextStages`, `isTerminalStage`/`canReject`, `blocksResulting` (custody !== ACTIVE), `currentStageOf` (last event stage, else COLLECTED), `isSampleStage`/`isRejectionCustody`.
+
+### API — `SampleTrackingModule` (`@Controller('samples')`)
+- `POST /samples/:barcode/scan` (stage + location + note + containerType → SampleEvent; validates the legal transition; STORED records storage location, RECEIVED marks the sample received; `@Audited sample.scan`).
+- `POST /samples/:barcode/reject` (custodyStatus LOST/DAMAGED/REJECTED + reason → custody status + REJECTED evidence event + sample REJECTED + best-effort recollection; `@Audited sample.reject`).
+- `GET /samples/:barcode/custody` (the full ordered custody timeline + current stage + sample state).
+- Guards: JwtAuthGuard → programmatic `assertModulePresent` (404) → `lab.order` (403).
+
+### Lab (19) additive changes — do-not-break honoured
+- `SampleView` + `SampleRow` + `SAMPLE_SELECT` + `updateSample` extended with custodyStatus/containerType/storageLocation (FakeLabRepo mirrored). New `SampleWithOrder` view. New `findSampleWithOrder`/`updateSampleFields` seams. `assertResultableSample` private guard called from `enterResults` (+ optional `sampleBarcode` in the DTO) and `approve`. All 19 tests still pass unchanged (additive/optional).
+
+### Web (`/samples`, EN+UR, `noindex`)
+Scanner-first bench station: barcode input (Enter to look up) → custody panel (current stage, custody status, storage, container, ordered timeline) → next-stage scan form (only the legal `nextStages`, + location/note/container) + reject panel (lost/damaged/rejected + required reason, confirm). Degrades to clean sign-in / no-access states. Uses `@mp/shared` `nextStages`/`isTerminalStage`/`REJECTION_CUSTODY` so the client offers only legal moves.
+
+### Gate results
+- typecheck **26/26**; lint **15/15** (0 warn); build **15/15** (`/samples` route 2.1 kB / 147 kB First Load).
+- jest **api 540/540 [+25]** (`sample-tracking-helpers` 10 + `sample-tracking.e2e` 15) + **db 129/129 [+3 sample-tracking-isolation]** + i18n **19/19** parity (44 new keys EN+UR).
+- Vertical smoke (e2e over the real module graph): pharmacy tenant→404; RECEPTION (no lab.order)→403; unknown barcode→404; scan RECEIVED→sample received + event logged (who/when/where); full ordered chain RECEIVED→ACCESSIONED→ON_BENCH→STORED (+storage location); illegal COLLECTED→ACCESSIONED→400; REJECTED/unknown stage on scan route→400; reject DAMAGED→custody DAMAGED + status REJECTED + reason evidence; a rejected sample takes no further scans + cannot be re-rejected→400; bad reject body→400; home-collected sample reject→recollection re-opened (new booking id) + original booking RECOLLECT; walk-in reject→recollectionBookingId null; result with ANOTHER order's barcode→400, own barcode→201; result a REJECTED sample→400; every custody mutation audited.
+
+### Files
+- NEW `packages/shared/src/samples.ts` (+ export in `index.ts`).
+- `packages/db/prisma/schema.prisma` (Sample extended + SampleEvent + 2 enums), migration `20260705230000_sample_tracking/migration.sql`, `packages/db/src/index.ts` (enum exports), NEW `packages/db/src/sample-tracking-isolation.spec.ts`.
+- NEW `apps/api/src/sample-tracking/` (constants, repositories, dto, service, controller, module, index, __fakes__, helpers.spec, e2e.spec); registered in `app.module.ts`.
+- Lab: `lab.service.ts`, `lab.repositories.ts`, `lab.dto.ts`, `__fakes__.ts`.
+- Home-collection: `home-collection.service.ts`, `home-collection.repositories.ts`, `__fakes__.ts`.
+- i18n: `packages/i18n/src/messages/{en,ur}.json` (44 `st*` keys).
+- Web: NEW `apps/web/app/samples/{page.tsx,SamplesClient.tsx}`.
+
+### Notes / follow-ups
+- No R2 object storage wired (proof/photo keys remain opaque strings; container/storage are plain text) — consistent with 26.
+- A "rejected-samples queue" list surface (spec §3.3) was NOT built — the API is barcode-centric (§3.2 has no list endpoint); the station is scan/lookup-driven. A queue could land with a future list endpoint if needed.
+- The 404 on `GET custody` is ambiguous between "module absent" and "unknown barcode"; the web treats a lookup 404 as "not found" (server enforces correctly either way).
+
+WORK TYPE: FEATURE (branch feat/27-sample-tracking). Ended with `[CHECKPOINT]`. Controller handles the staging merge.
