@@ -10,6 +10,53 @@
 
 ---
 
+## Build-step 37 — AI Suite: Operations (Advisory) (`ai.ops`)
+
+**Status:** ✅ DONE/APPROVED (2026-07-05) · **Branch:** `feat/37-ai-suite-ops` (WORK TYPE: FEATURE) · **Spec:** `specs/37-ai-suite-ops.md` · **Depends on:** 35 (gateway), 24 (dashboard data), 28 (stock/batches), 15 (appointments), 20 (sales velocity), 21/23 (financials). · **CODEREF:** none matched 37 (only `37-ai-suite-ops.md`) — proceeded on the spec alone. · **Schema/RLS:** **NO migration — OWNS no tables**; reuses 35's `ai_tasks`/`ai_suggestions` and READS existing appointment/sales/stock/batch/finance tables through its OWN `runWithTenant` repo (RLS is the floor; aggregates only, never raw/cross-tenant). · **Flags:** all PRE-EXISTED — `ai.ops` (dependsOn `ai.suite`) was added to the catalog in 35; `full`=FLAG_KEYS auto-includes it; source flags `clinic.appointments`/`pharmacy.inventory` pre-existed — **no catalog/preset change**. · **Permissions:** REUSED — `ai.use` already held by TENANT_OWNER (all TENANT perms) / ADMIN / MANAGER (the owner/manager audience for ops); **no grant change**.
+
+### Problem
+Owners and managers want forward-looking, advisory help built on data they already have: who'll no-show, what to reorder, what will expire, what the numbers mean, and a natural-language way to ask — surfaced through the dashboard (24) and the relevant modules (29 reorder, 28/15). All ADVISORY: a human acts; nothing auto-executes. Everything routes through the 35 gateway so it is logged, budgeted and per-tenant-keyed, and is surfaced only when the tenant owns both `ai.ops` and the specific insight's source module (no expiry insight without inventory).
+
+### What changed
+**Pure core `@mp/shared/ops-ai.ts`** (browser-safe, no `Date.now()` — `asOf` is always passed in — no provider/keys) — the five ops task types + the deterministic ADVISORY FLOOR each returns before a real provider is wired (and the shape a provider answer is validated against later):
+- `OPS_TASKS`/`OPS_TASK_TYPES`/`isOpsTask` — the dotted task-type strings (`predict.noshow`, `predict.demand`, `predict.expiry`, `analytics.ask`, `ops.chat`); `AI_OPS_SUITE_FLAG` (re-exports the 35 `AI_OPS_FLAG`).
+- `OPS_SURFACE_FLAG` + `opsSurfaceFlagFor(task)` — the SOURCE-module flag each insight additionally rides (`predict.noshow`→`clinic.appointments`, `predict.demand`/`predict.expiry`→`pharmacy.inventory`; `analytics.ask`/`ops.chat`→null, they read only what already exists).
+- `predictNoShows(rows)` — smoothed no-show probability per upcoming appointment from the patient's OWN prior attendance (Laplace prior PRIOR_SHOWS=4/PRIOR_MISSES=1 so a 1-of-1 miss ≠ certainty), HIGH/MEDIUM/LOW band, reminder/overbook suggestion, most-risky-first, `advisoryOnly:true`; `NOSHOW_SYSTEM_POLICY`/`_DISCLAIMER`.
+- `predictDemand(rows, coverTargetDays=14)` — daily velocity (`soldQty/windowDays`) → days-of-cover → reorder hint sized to restore the cover target (`ceil(velocity·target − onHand)`); reorders only when there's real velocity AND cover below target; lowest-cover-first, no-velocity last; `DEMAND_SYSTEM_POLICY`/`_DISCLAIMER`.
+- `predictExpiryRisk(batches, asOf, horizonDays=90)` — projects unsold-at-expiry from velocity (`atRiskQty = qty − floor(velocity·daysToExpiry)`); surfaces only batches within the horizon with real risk (already-expired OR some qty projected to survive), soonest-expiry-first, HIGH/MEDIUM/LOW band, promote/return suggestion; `EXPIRY_SYSTEM_POLICY`/`_DISCLAIMER`.
+- `answerAnalytics(question, metrics)` — **GROUNDED**: matches the question's words to the provided read-only metrics (by key+label), cites the exact figures with signed delta/`deltaPct`/direction (up/down/flat), explains the change; NEVER invents — no match summarises what's available, no metrics says it has nothing to answer from; `grounded:true`+`readOnly:true`; `ANALYTICS_SYSTEM_POLICY`/`_DISCLAIMER`.
+- `opsChatReply(question)` — staff how-to/lookup from a small curated `OPS_HOWTO` book (refund/reorder/expiry/discount/appointment/report/stock/login) + an honest fallback pointing to a human; `advisoryOnly:true`; `OPS_CHAT_SYSTEM_POLICY`/`_DISCLAIMER`/`_FALLBACK`.
+- `callCenterScaffold()` — the §2 goal 6 voice SCAFFOLD: a `CallCenterScaffold` descriptor of six DISABLED hook points (book/reschedule→15, reminder-confirm→37, order-status→34, availability→36, triage-handoff→32, staff-how-to→37) `deferredTo:43`, `advisoryOnly:true`; pure metadata, no AI call, no action.
+- Added the 5 ops task types additively to `AI_TASK_TYPES` + `DEFAULT_TASK_TIER` in `ai-gateway.ts` (advisory, cost-aware: `predict.*`/`ops.chat`→FAST, `analytics.ask`→BALANCED).
+
+**API `apps/api/src/ops-ai/` — NEW `OpsAiModule` (owns no tables):**
+- `ops-ai.controller.ts` — `@Controller('ai/ops')` `@RequireFeature('ai.ops')` (FeatureGuard FIRST, 404 for a tenant without the ops sub-suite). `POST /ai/ops/{predict-noshow,predict-demand,predict-expiry,analytics-ask,ops-chat}` each `@HttpCode(200)` `@RequirePermission('ai.use')` `@Audited('ai.ops.*','ai_suggestion')`, plus read-only `GET /ai/ops/call-center/scaffold` (`ai.use`, no gateway call).
+- `ops-ai.service.ts` — per method: `requireSurface` (per-insight SOURCE flag via `opsSurfaceFlagFor` → 404 if the source module is off) → READ the tenant's own read-only aggregates from the repo → compute the deterministic `@mp/shared` floor → `run()` routes through **35 `AiGatewayService.runAiTask`** with `{ floor }` → returns `{ id, taskType, decisionRequired:true, result:floor }`. `callCenter()` returns the pure scaffold (no gateway).
+- `ops-ai.repositories.ts` — abstract `OpsAiRepo` + `PrismaOpsAiRepo`: `noShowHistory` (upcoming WAITING appts + each patient's terminal-status/NO_SHOW counts via `groupBy`), `demandInputs` (per-medicine `SaleItem.qty` sum over the window + `Stock` on-hand + brand names), `expiryInputs` (near-expiry `Batch` rows + per-medicine velocity from the same window), `analyticsMetrics` (current-vs-prior-30-day `Sale` aggregate: sales/discount/transactions). Every method wrapped in `runWithTenant(tenantId)`.
+- `ops-ai.dto.ts` — thin parsers (prediction bodies optional `branchId`/`windowDays`/`coverTargetDays`/`horizonDays`; `analytics-ask`/`ops-chat` require a non-empty `question` → 400). `ops-ai.constants.ts` (`AI_OPS_FEATURE`, `OPS_AI_REPO`/`OPS_AI_CLOCK` tokens, window/limit constants). `__fakes__.ts` (`FakeOpsAiRepo`, seeded per tenant). `index.ts`.
+- Registered in `app.module.ts` after `ClinicalAiModule` (with a docstring paragraph); imports `FlagsModule`+`PermissionsModule`+`AiModule`.
+
+### Verification gates (all green)
+- **typecheck:** turbo 27/27 (`@mp/shared` rebuilt first — resolves via built output). **lint:** 15/15, 0 errors, 1 warning (pre-existing `doctor-portal.repositories.ts:220` unused-disable, unrelated to 37). **build:** turbo 15/15. **turbo test:** 20/20.
+- **jest api:** 824/824 (74 suites; **+28** = 15 unit `ops-ai-helpers.spec.ts` + 13 e2e `ops-ai.e2e.spec.ts`). **jest db:** 167/167 (33 suites; isolation INHERITED — 37 owns no tables; all reads go through `runWithTenant` RLS). **i18n:** 19/19 parity (EN/UR/Roman).
+- **Vertical smoke** (e2e over the REAL module graph JwtAuthGuard→FeatureGuard `ai.ops`→RolesGuard `ai.use`→AuditInterceptor, with the AI-gateway + ops repos faked and the REAL provider factory/mock provider; tenants T_FULL=full, T_NOAI=lab, T_PARTIAL=clinic+`ai.suite`/`ai.ops` overrides):
+  - no token→401; a tenant without `ai.ops`→404 (suite absent).
+  - **per-insight SOURCE flag** (Acceptance §6): T_PARTIAL has `ai.ops` on but `pharmacy.inventory` off → `predict-demand`/`predict-expiry`→404, while `predict-noshow` (clinic.appointments, present)/`analytics-ask`/`ops-chat`→200 — "no expiry insight without inventory".
+  - running an ops task needs `ai.use` → RECEPTION→403.
+  - `predict.noshow`: scores from history (flaky patient HIGH + first), routes through 35 (a DONE `AiTask` + a PENDING `AiSuggestion` carrying the advisory floor), audited; PENDING **not applicable** → human APPROVES via the 35 decision surface → applicable (advisory guard).
+  - `predict.demand`: reorder hint sized 100 (10/day·14 − 40 on-hand); well-stocked item not reordered; `advisoryOnly`.
+  - `predict.expiry`: slow-mover-near-expiry flagged, fast-mover-that-sells-through excluded; `advisoryOnly`.
+  - `analytics.ask`: grounded answer over real aggregates, citations show profit 90 ← previous 150 direction DOWN; empty question→400.
+  - `ops.chat`: matched how-to + PENDING suggestion; empty question→400.
+  - call-center scaffold: `GET` returns `deferredTo:43` with every hook `enabled:false` and did NOT route through the gateway (0 tasks).
+
+### Notes / decisions
+- **Advisory-only by construction (§5 do-NOT-break):** every POST returns a PENDING 35 suggestion; nothing auto-acts. The predictions/answers are DETERMINISTIC `@mp/shared` composers (the safe floor the mock provider carries until a real one is wired), so the advisory guarantee is testable code, not model behaviour. The call-center piece is a metadata scaffold only (43 builds the agent).
+- **`analytics.ask` grounding:** answers ONLY from the read-only aggregates the repo hands it (tenant-scoped, current-vs-prior period), cites the exact numbers, and never fabricates a figure/trend/cause — satisfying §3.3/§5 (no raw or cross-tenant access).
+- **No new tables/flags/permissions:** the module reuses 35's persistence + the pre-existing catalog. `asOf` is injected via `OPS_AI_CLOCK` so the pure expiry math stays clock-free and deterministic in tests.
+
+---
+
 ## Build-step 36 — AI Suite: Clinical (Assist-Only) (`ai.clinical`)
 
 **Status:** ✅ DONE/APPROVED (2026-07-05) · **Branch:** `feat/36-ai-suite-clinical` (WORK TYPE: FEATURE) · **Spec:** `specs/36-ai-suite-clinical.md` · **Depends on:** 35 (gateway), 18/20 (Rx/medicine), 19 (lab), 14 (allergies), 17/33 (consult). · **CODEREF:** none (proceeded on the spec alone). · **Schema/RLS:** **NO migration — OWNS no tables**; reuses 35's `ai_tasks`/`ai_suggestions` and READS existing clinical/catalog tables through its OWN `runWithTenant` repo (RLS is the floor). · **Flags:** all PRE-EXISTED (`ai.clinical`, `pharmacy.aiReader`, `pharmacy.pos`, `lab.results`, `clinic.consultation`; `full` preset) — **no catalog change**. · **Permissions:** `ai.use` GRANTED additively to PHARMACIST/SALESMAN/PATHOLOGIST/LAB_TECH (the clinical staff who run the AI); ADMIN/MANAGER/DOCTOR already held it.
