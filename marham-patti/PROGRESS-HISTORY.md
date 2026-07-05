@@ -842,3 +842,62 @@ Lab order/sample (19), patient (14), billing (21), notifications (09) untouched 
 - Presets untouched: `lab.homeCollection` stays opt-in for a lab-preset tenant (spec: "absent unless the tenant runs a lab with home collection on"); Ganatra's `full` preset already enables it.
 
 WORK TYPE: FEATURE (branch feat/25-home-collection). Ended with `[CHECKPOINT]`. Controller handles the staging merge.
+
+---
+
+# Build-step 26 — Phase 2: Phlebotomist Field App ✅ DONE/APPROVED (2026-07-05)
+
+**Branch:** `feat/26-phlebotomist-app` (stacked on `feat/25-home-collection`). **WORK TYPE: FEATURE.** Spec: `specs/26-phlebotomist-app.md` (no CODEREF companion matched 26 — proceeded on the spec alone).
+
+## What shipped
+The phlebotomist's OFFLINE field PWA — the same home-collection bookings (25), from the phlebotomist's phone. It lists MY visits (assigned to me, ordered by route), and drives the doorstep flow: en route → collect (scan the sample barcode → tie it to the lab order → COLLECTED) → capture proof (patient signature + photo) → done, with a failed-draw path (→ FAILED, the office re-opens it as a recollection). Every mutation is offline-idempotent — queued locally, synced on reconnect, deduped by the client action id so a replay never double-posts. It REUSES the 25/27 models and OWNS a single new table (`collection_proofs`, the doorstep evidence); the visit list + status timeline, the barcode→sample tie, and the patient identity are reached through the home-collection / lab / patient services — never mutated directly.
+
+### Data model — NEW migration `20260705220000_phlebotomist_app`
+- **`collection_proofs`** — `{ home_collection_id, signature_key?, photo_key?, captured_at, collected_by, client_action_id? @unique }`. The signature/photo artifacts' object keys (bytes ride storage/R2 in production — the field name is the handle, matching the vitals `imageKeys` posture; no R2 wired yet in the repo). `client_action_id` is the offline idempotency key, GLOBALLY unique so a replayed proof is stored exactly once. `@@index` on (tenant, home_collection_id).
+- **RLS:** `SELECT apply_tenant_rls('collection_proofs')` — the canonical `tenant_isolation` policy (02): visible/writable only under the row's own `app.tenant_id`, WITH CHECK blocks writing another tenant's row, no context → zero rows (fail-closed).
+- **No enum/flag/permission change** — `HomeStatus` (25) reused; the `CollectionProof` Prisma model added near `HomeCollection`.
+
+### Shared — `@mp/shared/phlebotomist` (pure, browser-safe)
+- `FIELD_STATUSES = ['EN_ROUTE','FAILED']` + `isFieldStatus()` — the ONLY statuses a bare field status-write may set (COLLECTED rides the collect action which ties the barcode; RECEIVED is a lab-side step).
+- `routeSequenceOf(assignments)` — the effective route sequence = the LATEST assignment's `sequence` (a reassignment re-orders the stop); null → sorts last.
+- `compareVisits(a,b)` — the ONE route ordering (sequence first, unsequenced last, then slot time) the server's `visits` query and the client board both use.
+
+### API — `PhlebotomistModule` (owns only `collection_proofs`)
+- Class-level `@RequireFeature('lab.homeCollection')` + `@RequirePermission('home.collection.manage')` → FeatureGuard 404 THEN RolesGuard 403 (flag FIRST, then permission) — SAME flag+perm as 25, no catalog change.
+- **`GET /phlebotomist/visits?date=`** — my assigned visits in route order (enriched: patient name/phone, tests+prep from the lab order, sample barcode, proof-captured flag). `date` filters to a calendar day; absent → all my visits.
+- **`POST /phlebotomist/visits/:id/status`** — a FIELD status (EN_ROUTE / FAILED). Idempotent; delegates to `HomeCollectionService.setStatus` (transition guard + patient WhatsApp).
+- **`POST /phlebotomist/visits/:id/collect`** — doorstep collect: `{ barcode? }` → `LabService.collectSample` (ties the physical sample to the order, 27; a prior in-lab sample is tolerated) → `setStatus(COLLECTED)`. Idempotent; requires ASSIGNED/EN_ROUTE.
+- **`POST /phlebotomist/visits/:id/proof`** — `{ signatureKey?, photoKey? }` (≥1 required) → a `CollectionProof` row. Idempotent.
+- All three mutations require an `Idempotency-Key` header (`requireClientActionId`) and ride `SyncService.runIdempotent` (10) — a replay returns the stored result without re-running. All mutations `@Audited`. Every action is narrowed to the caller's OWN assignments (`mineOr404` via `home.listBookings({phlebotomistId})`) — a visit not assigned to me → 404.
+- Registered in `AppModule` after `SyncModule`/`HomeCollectionModule`/`LabModule`/`PatientsModule`.
+
+### Web — `/phlebotomist` (EN + UR, offline PWA, large-touch, noindex)
+- Server page frames the light client island (`noindex`). Uses the app-wide `OfflineProvider` (10) — the global sync indicator already shows offline/syncing/synced.
+- Visit list in route order; each card: route number + patient, status chip, slot time, address, tests, sample/proof line, **Call** (`tel:`) + **Navigate** (maps) + **On my way** / **Collect** / **Draw failed** actions.
+- Collect panel: barcode input (scan/type), a dependency-free **pointer signature pad** (canvas), and a **photo capture** (`<input type=file accept=image/* capture>`); Confirm enqueues proof-then-collect (FIFO so it drains in order offline).
+- `mutate()` tries the server first (with the idempotency key); on a network failure it falls to the outbox and optimistically updates the local status — a real 400/403/404 is surfaced, not queued.
+- New `phleb*` i18n keys in EN + UR (parity kept). Manifest gains a **My Collections** shortcut to `/phlebotomist`.
+
+## Gates (all green)
+- **typecheck** 26/26 · **lint** 15/15 (0 warnings) · **build** 15/15 — `/phlebotomist` route **3.88 kB / 136 kB** First Load (well within the 250 kB script / 700 kB total budget).
+- **jest api 515/515** (+17: 14 e2e + 3 helper) · **db 126/126** (+4 `phlebotomist-isolation`) · **i18n 19/19** parity.
+
+## Vertical smoke (e2e)
+- lab-preset tenant (home collection off) → **404** (module absent); LAB_TECH (flag on, no `home.collection.manage`) → **403**; no token → **401**.
+- `GET /visits` = ONLY my assignments, in route order (sequence 1 before 2; someone else's visit absent); enriched with patient name + test name.
+- `status EN_ROUTE` drives it; `status COLLECTED` → **400** (rides collect); a mutation with no `Idempotency-Key` → **400**.
+- `collect {barcode}` → COLLECTED + the sample barcode tied; a replayed collect (same key) → `replayed:true`, same barcode, exactly ONE sample.
+- `proof {signature,photo}` → tied to the visit + `proofCaptured:true` on the list; empty proof → **400**; a replayed proof (same key) → exactly ONE proof row.
+- a visit not assigned to me → **404** on a mutation.
+
+## Do-NOT-break honored
+- Home-collection status (25) is driven ONLY through `HomeCollectionService.setStatus` (transition legality + patient WhatsApp intact); the sample barcode (27) rides `LabService.collectSample` (no direct sample mutation); offline idempotency (10) is the single `SyncService.runIdempotent` seam. Proof is append-only + `@Audited` (medico-legal evidence). Flag-gated by the SAME `lab.homeCollection`.
+
+## Notes / decisions
+- **Model addition kept minimal** — only `CollectionProof` (as the spec directs). No new flag/permission/enum: the field app is the phlebotomist's face on 25's bookings, so it reuses `lab.homeCollection` + `home.collection.manage` (PHLEBOTOMIST/RIDER already hold it).
+- **27 already partly present:** the `Sample` model + `LabService.collectSample`/`receiveSample` shipped with 19, so the doorstep barcode tie is REAL now (not stubbed); 27 (Sample & Test Tracking) will extend the chain-of-custody additively.
+- **Proof artifacts as opaque keys** — R2/object storage is not wired anywhere in the repo yet (only a brand-logo URL), so `signatureKey`/`photoKey` are opaque handles exactly like vitals' `imageKeys`; the bytes upload to storage in production. The signature pad + photo capture are real UX; the stored key proves capture + ties it to the collection.
+- **Two idempotency layers** on proof (the sync table AND `collection_proofs.client_action_id @unique`) — belt-and-suspenders; the unique index is proven globally in the pglite test so a replay can never double-insert even if the idempotency table is missed.
+- **Assigned-to-me narrowing** enforced server-side (not just the flag/permission) so a phlebotomist can only ever see/act on their own route — a defence-in-depth beyond RLS's tenant scope.
+
+WORK TYPE: FEATURE (branch feat/26-phlebotomist-app). Ended with `[CHECKPOINT]`. Controller handles the staging merge.
