@@ -960,3 +960,65 @@ Scanner-first bench station: barcode input (Enter to look up) → custody panel 
 - The 404 on `GET custody` is ambiguous between "module absent" and "unknown barcode"; the web treats a lookup 404 as "not found" (server enforces correctly either way).
 
 WORK TYPE: FEATURE (branch feat/27-sample-tracking). Ended with `[CHECKPOINT]`. Controller handles the staging merge.
+
+---
+
+## Build-step 28 — Phase 2: Pharmacy Inventory (Batch / Expiry / FEFO) ✅ DONE/APPROVED (2026-07-05)
+
+**Branch:** `feat/28-pharmacy-inventory` (stacked on `feat/27-sample-tracking`). **Spec:** `specs/28-pharmacy-inventory.md`. No CODEREF matched 28 (proceeded on the spec alone). Depends on 20 (Medicine/Stock/StockMovement + the compensating-write hook), 06, 12, 13.
+
+### What it is
+Real inventory UNDER the 20 POS, behind the `pharmacy.inventory` flag — where stock theft is caught and the founding pain (₹1–1.5 lac hidden stock loss) is solved. A pharmacy lives on **batches + expiry**: a medicine's on-hand is now broken into batches (batch no, expiry, qty, cost) so a sale allocates **FEFO** (first-expiry-first-out); expiry / low-stock alerts light up; **reconciliation** (expected vs physical → variance → **who + why**) is the exact accountability the owner never had; damaged/expired write-offs and valuation round it out. Extended 20 ADDITIVELY — never replaced. With `pharmacy.inventory` OFF (or a medicine with no batches yet), 20 sells on simple quantity stock, so the whole step is additive: **no existing pharmacy test changed**.
+
+### Data model (NEW migration `20260705240000_pharmacy_inventory`)
+Four NEW tenant tables (owned here); the 20 stock model extended ADDITIVELY (the 20 migration already left `stock_movements.batch_id` + `sale_items.batch_id` nullable for 28 — FEFO simply fills them, so NO ALTER was needed there).
+- **`batches`** — a physical lot: `id, tenantId, branchId, medicineId, batchNo, expiry, qty, costPrice, location?, createdAt, updatedAt` + indexes `(tenant, medicine, expiry)` / `(tenant, branch, medicine)`.
+- **`reconciliations`** — `id, tenantId, branchId, status ReconStatus @default(OPEN), startedBy, startedAt, closedAt?` + index `(tenant, status)`.
+- **`reconciliation_lines`** — `id, tenantId, reconId, medicineId, batchId?, expectedQty, countedQty, variance @default(0), reason?, responsibleId?` + index `(tenant, recon)`.
+- **`stock_adjustments`** — `id, tenantId, branchId, medicineId, batchId?, qtyDelta, reason, type AdjustType, actorId, createdAt` + index `(tenant, medicine)`.
+- **NEW enums:** `ReconStatus` (OPEN, CLOSED), `AdjustType` (DAMAGE, EXPIRE, CORRECTION, WRITE_OFF). Exported from `@mp/db`.
+- RLS: `apply_tenant_rls` on all 4 (canonical 02). Proven in NEW `packages/db/src/pharmacy-inventory-isolation.spec.ts` (T1/T2 own-rows, WITH-CHECK cross-tenant insert rejected, NULL-context fail-closed) over the real 01→28 migrations in pglite.
+
+### Design decisions
+- **Ownership / no circular deps.** InventoryModule OWNS only its 4 tables. The 20 `stock`/`stock_movements`/`medicines` are read + moved through Inventory's OWN tenant-scoped repo using the SAME compensating (additive) write the 20 hook uses (`applyStockDelta` + `recordMovement`) — exactly as 22/24 read shared tables **without importing the owning module**. So InventoryModule imports only FlagsModule + PermissionsModule; PharmacyModule does NOT import InventoryModule (kept decoupled → zero test blast radius on the other AppModule e2e specs).
+- **FEFO is a 20-finalize (pharmacy) concern.** The batch read + batch decrement at sale live on the 20 `PharmacyRepo` (NEW `listBatchesForFefo(tenant, branch, medicine)` + `applyBatchDelta(tenant, batch, delta, now)`). `PharmacyService.finalize` now, per line: computes the pure `allocateFefo(batches, qty)` plan (soonest-expiry first), decrements the aggregate on-hand by the FULL qty (unchanged), and either — no batches → one SALE movement `batchId:null` (exact prior behaviour) — or, per allocated batch, `applyBatchDelta(-a.qty)` + a SALE movement carrying `batchId` (the 20 hook now resolves to a specific batch), plus a batchless remainder movement for any `shortfall`. `SaleItem.batchId` is filled when a SINGLE batch fully covered the line (so a return restocks the right lot); `returnSale` restocks that batch (`applyBatchDelta(+qty)`) when known. Because `FakePharmacyRepo` seeds no batches by default, `allocateFefo` returns empty → identical behaviour → **all existing pharmacy tests unchanged**.
+- **Flag pre-seeded; added the dependency.** `pharmacy.inventory` already existed in the catalog + presets (pharmacy / clinic_pharmacy / full); this step added `dependsOn ['pharmacy.pos']` (mirrors `pharmacy.barcodeLabels`), so `findDependencyViolations` now rejects enabling inventory without POS.
+- **Permissions REUSED — no catalog change.** `inventory.manage` + `pharmacy.stock.adjust` pre-existed. The whole controller is `@RequireFeature('pharmacy.inventory')` (404 first) THEN `@RequirePermission('inventory.manage')`; the destructive **write-off/adjust is role-locked to `pharmacy.stock.adjust`** via a METHOD-level `@RequirePermission` override (RolesGuard uses `getAllAndOverride([method, class])` → method wins). PHARMACIST holds both; ADMIN/MANAGER hold `inventory.manage` only → can manage inventory but cannot write off (intended: adjustments are more sensitive).
+- **Reconciliation = the theft tripwire.** Start snapshots the EXPECTED (book) counts: one line per in-stock batch (qty>0) + one aggregate line per medicine that has stock but NO batches (so batch and aggregate are never double-counted). Counts are entered against the snapshot (`variance = counted − expected`). Close enforces the accountability gate: **EVERY non-zero variance MUST carry a reason + a responsible person, else 400**. On close each variance squares the book to physical via a CORRECTION `StockAdjustment` + an ADJUST `StockMovement` (the batch + the aggregate move together, attributed to the RESPONSIBLE person, not the closer), the recon is locked + audited, and a net loss best-effort posts to 23.
+- **Loss → 23 is best-effort (full mode).** A LOSS (write-off DAMAGE/EXPIRE/WRITE_OFF with a negative delta, or a net negative reconciliation variance) valued at batch cost (else medicine cost) emits an idempotent `accounting_events` outbox row (source `PURCHASE`, ref `adjust:<id>` / `recon:<id>`, lines debit `COGS` / credit `INVENTORY`) ONLY when `accounting.full` is on — wrapped in try/catch so it degrades cleanly (the movement + adjustment are already the accountable record; dashboard 24 reads them).
+
+### Pure `@mp/shared/pharmacy-inventory`
+`AdjustTypeLit`/`ADJUST_TYPES`/`isAdjustType`/`isLossAdjust`, `ReconStatusLit`/`RECON_STATUSES`/`isReconStatus`, `daysUntil`/`ExpiryBand`/`expiryBand`/`isExpired`/`isNearExpiry`/`isLowStock` (`NEAR_EXPIRY_DAYS=90`, `DEFAULT_LOW_STOCK=10`), `allocateFefo` (`FefoBatch`/`FefoAllocation`/`FefoPlan` — soonest-expiry first, ties by batchId, skips empty batches, reports `shortfall`), `computeVariance`/`needsAccountability`, `valuation` (`ValuationLine`/`Valuation` — cost + retail, missing price → 0). All deterministic + browser-safe (reuses `round2` from `./pharmacy`). Unit-tested in `apps/api/src/pharmacy/pharmacy-inventory-helpers.spec.ts`.
+
+### API — `InventoryModule` (`@Controller('inventory')`)
+- `GET /inventory/stock` (per-medicine aggregate + colour-coded batches + value), `GET/POST /inventory/batches` (a new batch bumps the aggregate on-hand via a logged PURCHASE movement stamped with the batch), `GET /inventory/alerts` (expiry bands + low-stock, for dashboard 24), `GET /inventory/valuation` (cost + retail + per-medicine).
+- `POST /inventory/adjustments` (damage/expire/correction/write-off — reason mandatory, attributable; role-locked to `pharmacy.stock.adjust`).
+- Reconciliation: `POST /inventory/reconciliations` (snapshot), `GET /inventory/reconciliations` (list), `GET /inventory/reconciliations/:id` (detail + lines), `POST /inventory/reconciliations/:id/counts` (enter counts → variance), `POST /inventory/reconciliations/:id/close` (the gate + posting + lock).
+- All mutations `@Audited` (every stock change → a person + reason). Guards: JwtAuthGuard → FeatureGuard `pharmacy.inventory` (404) → RolesGuard `inventory.manage` / `pharmacy.stock.adjust` (403).
+
+### Pharmacy (20) additive changes — do-not-break honoured
+`PharmacyRepo`: NEW `listBatchesForFefo` + `applyBatchDelta` (abstract + Prisma + FakePharmacyRepo `seedBatch` helper). `NewSaleItem`/`SaleItemRow` + `SALE_ITEM_SELECT` gained `batchId`. `PharmacyService.finalize`/`returnSale` allocate FEFO / restock the batch. `@mp/shared/flags.ts` line 53 gained `dependsOn ['pharmacy.pos']`. All 20 behaviour is byte-identical when no batches exist.
+
+### Web (`/inventory`, EN+UR, `noindex`)
+Tabbed back-office desk (`mp-*` classes, mirrors the samples/pharmacy page pattern): **Stock** = receive-batch form (medicine select + batchNo + expiry + qty + cost) + adjust/write-off form (medicine + type + signed delta + reason) + colour-coded stock list (aggregate + per-batch expiry band); **Alerts** = expiring/expired batches + low-stock medicines; **Valuation** = cost + retail totals + per-medicine; **Reconcile** = start → count sheet (per line: counted, and reason + responsible person shown ONLY when the live variance ≠ 0, with an inline "needs a reason + person" warning) → save counts → close. Degrades to clean sign-in / no-access states (the flag/role gate is server-enforced; the initial stock load resolves access).
+
+### Gate results
+- typecheck **26/26**; lint **15/15** (0 warn); build **15/15** (`/inventory` route 3.3 kB / 150 kB First Load).
+- jest **api 563/563 [+23]** (`pharmacy-inventory-helpers` ~15 + `pharmacy-inventory.e2e` 8 + 1 new FEFO case in `pharmacy.e2e`) + **db 133/133 [+4 pharmacy-inventory-isolation]** + i18n **19/19** parity (68 new `inv*` keys EN+UR).
+- Vertical smoke (e2e over the real module graph): no token→401; a lab vertical (no `pharmacy.inventory`)→404 (module absent); SALESMAN (flag on, no `inventory.manage`)→403; batch create→aggregate on-hand +qty + PURCHASE movement carrying the batch (audited); **finalize allocates FEFO**—the soonest-expiry batch is exhausted first, each SALE movement carries its batch id, the aggregate moves by the full qty; alerts→EXPIRED + NEAR bands + low-stock; valuation cost 180 / retail 270; reconciliation snapshots expected 100, count 96→variance −4 + `needsAccountability`, **close BLOCKED without a reason+person→400**, then with reason+person→CLOSED + book squared 100→96 + CORRECTION adjustment (−4) + ADJUST movement attributed to the responsible person + loss 32 posted to 23; ADMIN write-off→403 (role-locked), PHARMACIST write-off without a reason→400, with a reason→newQty 45 + loss posted + audited.
+
+### Files
+- NEW `packages/shared/src/pharmacy-inventory.ts` (+ export in `index.ts`); `packages/shared/src/flags.ts` (dependsOn).
+- `packages/db/prisma/schema.prisma` (4 models + 2 enums in the pharmacy block), migration `20260705240000_pharmacy_inventory/migration.sql`, `packages/db/src/index.ts` (enum exports), NEW `packages/db/src/pharmacy-inventory-isolation.spec.ts`.
+- NEW `apps/api/src/pharmacy-inventory/` (constants, repositories, dto, service, controller, module, index, __fakes__, e2e.spec); registered in `app.module.ts`.
+- Pharmacy (20): `pharmacy.repositories.ts`, `pharmacy.service.ts`, `__fakes__.ts`, `pharmacy.e2e.spec.ts` (+1 FEFO case), NEW `pharmacy/pharmacy-inventory-helpers.spec.ts`.
+- i18n: `packages/i18n/src/messages/{en,ur}.json` (68 `inv*` keys).
+- Web: NEW `apps/web/app/inventory/{page.tsx,InventoryClient.tsx}`.
+
+### Notes / follow-ups
+- No supplier / GRN yet (spec §2 says batches are "created by GRN (29) or manual") — 28 ships the manual batch entry + the FEFO/reconciliation/valuation engine; the GRN contract lands in 29 (it will create batches through the same `batches` table + the aggregate-bump PURCHASE movement pattern this step established).
+- The `/inventory` batch/adjust medicine picker lists only medicines already in the stock view (qty>0 or has batches). A brand-new medicine's FIRST batch is expected via the 29 GRN; a manual first batch for a zero-stock medicine isn't reachable from the UI dropdown today (the API accepts any tenant medicineId).
+- Reconciliation loss valuation uses batch cost when the line is a batch, else medicine cost — a mixed multi-batch aggregate line values at medicine cost (approximation; the movement/adjustment record is exact per line).
+- Alerts are computed on demand (`GET /inventory/alerts`); dashboard 24 already reads the same underlying movements/stock, so no push wiring was needed.
+
+WORK TYPE: FEATURE (branch feat/28-pharmacy-inventory). Ended with `[CHECKPOINT]`. Controller handles the staging merge.
