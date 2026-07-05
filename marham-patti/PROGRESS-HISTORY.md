@@ -780,3 +780,65 @@ Source modules' data contracts read-only (the repo only ever reads 19–23; the 
 - Payments carry no branch_id, so branch attribution of `collected`/`udhaar` joins each payment to its invoice's branch in JS over the (small) day's payment set.
 
 WORK TYPE: FEATURE (branch feat/24-admin-dashboard). Ended with `[CHECKPOINT]`. Controller handles the staging merge.
+
+---
+
+# Build-step 25 — Phase 2: Home Collection (Lab) ✅ DONE/APPROVED (2026-07-05)
+
+**Branch:** `feat/25-home-collection` (stacked on `feat/24-admin-dashboard`). **WORK TYPE: FEATURE.** Spec: `specs/25-home-collection.md` (no CODEREF companion matched 25 — proceeded on the spec alone).
+
+## What shipped
+The lab reaches the patient's home. A booking (tests + address + slot) is verified against a serviceable area, given a capacity-bounded slot, assigned to a phlebotomist, and walked through a status timeline with a patient WhatsApp at each step; a failed draw re-opens as a recollection, and the home fee flows to a billing invoice. It EXTENDS the lab LIS (19) and OWNS no lab/sample/money data of its own — the tests ride a real lab order, the fee rides a real invoice, and both are reached through those modules' services (never mutated directly).
+
+### Data model — NEW migration `20260705210000_home_collection`
+- **`service_areas`** — `{ name, polygon_or_pins JSONB ({pins:[]}/polygon), home_charge_extra Decimal(12,2), active }`. The booking checks a supplied pin against the served list.
+- **`home_collections`** — the booking header: `{ branch_id?, patient_id, lab_order_id?, service_area_id?, address, slot_start, slot_end, status HomeStatus, charge Decimal, invoice_id?, recollect_of_id?, created_by? }`. `@@index` on (tenant,status)/(tenant,patient)/(tenant,slot_start).
+- **`phlebotomist_assignments`** — `{ home_collection_id, phlebotomist_id, sequence?, assigned_at }` (append-only; a reassignment adds a row; `sequence` = route order for 26).
+- **enum `HomeStatus`** = BOOKED, ASSIGNED, EN_ROUTE, COLLECTED, RECEIVED, FAILED, RECOLLECT (shared with 26/27 — kept stable/additive). Re-exported from `@mp/db`.
+- All three tables `SELECT apply_tenant_rls(...)` — RLS proven in a NEW pglite spec `packages/db/src/home-collection-isolation.spec.ts` (T1/T2 scoping, WITH-CHECK blocks cross-tenant insert on bookings + areas, fail-closed with no context).
+
+### Flags & permissions — NO catalog change (both pre-existed)
+- Flag `lab.homeCollection` (group `lab`, defaultOn false, `dependsOn ['lab.catalog']`) was already seeded in `packages/shared/src/flags.ts`. In the `full` preset (Ganatra) → on; NOT in the `lab` preset (opt-in per spec "absent unless… on"). Presets left untouched.
+- Permission `home.collection.manage` (TENANT) was already in `packages/shared/src/permissions.ts`, granted to PHLEBOTOMIST, RIDER and (via all-tenant-keys) TENANT_OWNER. So the field app (26) drives status through the same routes.
+
+### Pure core — `@mp/shared/home-collection` (browser-safe, deterministic)
+- Vocabulary: `HomeStatusLit`/`HOME_STATUSES`/`isHomeStatus`; `HOME_STATUS_FLOW` (the legal-transition map) + `canTransitionHome`/`nextHomeStatuses`/`isTerminalHomeStatus`; `HOME_NOTIFY_STATUSES`/`notifiesPatient` (only ASSIGNED/EN_ROUTE/COLLECTED/RECEIVED message the patient).
+- Area verification: `verifyServiceArea(area, pin?) → {serviceable, charge, reason}` (null/inactive area or a pin outside the served list → refused with a reason; else the area's extra fee) + `pinsOf`.
+- Slot math: `HOME_SLOT_MINUTES=120`, `HOME_DAY_START_HOUR=8`, `HOME_DAY_END_HOUR=20`, `DEFAULT_SLOT_CAPACITY=3`; `daySlots(dateIso)` (6 two-hour UTC windows), `slotWindowOf`, `slotAvailability` (per-slot booked/available), `isSlotOpen` (a full window is refused; only active statuses count against capacity).
+
+### API — `HomeCollectionModule` (declarative gate: flag FIRST, then permission)
+Controller `@Controller('home-collections')` carries class-level `@RequireFeature('lab.homeCollection')` + `@RequirePermission('home.collection.manage')`, so the global FeatureGuard 404s the whole surface for a non-home-collection vertical and the RolesGuard 403s a role without the permission. Routes: `POST /` (book), `GET /` (list, status/phlebotomist filter), `GET /:id`, `POST /:id/assign`, `POST /:id/status`, `POST /:id/recollect`, `GET /verify`, `GET /slots`, `POST|GET /areas`, `PATCH /areas/:id`. Mutations `@Audited`.
+- `HomeCollectionService` composes `FlagService` + `PatientService` (identity/phone) + `LabService.createOrder` (the tests' lab order 19) + `BillingService.createInvoice` (the home fee, source OTHER, **best-effort** — guarded by `billing.assertModulePresent`, so a lab-catalog-only tenant without billing still books and the charge is just recorded) + `NotificationService.notify` (per-step WhatsApp, wrapped in try/catch → degrades). The repo (`runWithTenant` + `where tenantId`) owns only the three home-collection tables.
+- Booking: patient existence → area verdict (non-serviceable → 400) → slot window + capacity (`isSlotOpen`, else 400) → require ≥1 test → `lab.createOrder` → persist booking with fee → best-effort invoice (sets `invoice_id`) → best-effort BOOKED WhatsApp. Assignment: creates the assignment and, on the first (BOOKED), advances → ASSIGNED + notifies. Status: `canTransitionHome` guard (illegal → 400), notify on patient-facing steps; same-status is an idempotent no-op. Recollect: only from FAILED (else 400) → original → RECOLLECT + a fresh BOOKED booking linked `recollect_of_id`, charge 0.
+
+### Web — `apps/web/app/home-collection/` (EN + UR, Simple + Pro)
+`page.tsx` (server, `noindex`) + `HomeCollectionClient.tsx` (island). Access via API status (401→signin, 404/403→noaccess, 200→ok). Simple/Pro toggle: Simple = Book + a Bookings status board (legal next-status buttons + recollect on FAILED); Pro adds Areas management (create + activate/deactivate) and phlebotomist assignment. Live slot picker fetches `/slots` for the chosen date and disables full windows. 40 new `hc*` i18n keys added to BOTH en.json + ur.json (parity gate green).
+
+## Gate results
+- **typecheck 26/26**, **lint 15/15 (0 warnings)**, **build 15/15** (`/home-collection` route 2.6 kB).
+- **jest api 498/498 (+24)** — `home-collection-helpers.spec.ts` (pure: status flow, area verification, slot capacity) + `home-collection.e2e.spec.ts` (real module graph, Prisma faked).
+- **jest db 122/122 (+5)** — `home-collection-isolation.spec.ts`.
+- **i18n 19/19** parity.
+
+## Vertical smoke (e2e)
+- Gating: no token → 401; a `lab`-preset tenant (homeCollection off) → 404 on list + book; LAB_TECH (flag on, no `home.collection.manage`) → 403.
+- Area/verify: serviceable pin → `{serviceable:true, charge:300}`; wrong pin → `{serviceable:false}`.
+- Slots: `GET /slots` → 6 windows, each available 3.
+- Booking: verifies area, opens a real lab order (`labOrderId` set), records charge 300, bills the fee (`invoiceId` set; `GET /invoices/:id` total 300). Non-serviceable pin → 400 (/serviceable/); no tests → 400.
+- Capacity: 3 bookings in the 08:00 slot succeed, the 4th → 400 (/full/); a different slot still books.
+- Assignment: BOOKED→ASSIGNED, one assignment recorded.
+- Timeline: illegal BOOKED→RECEIVED → 400; ASSIGNED→EN_ROUTE→COLLECTED→RECEIVED all 201; status filter finds the RECEIVED booking.
+- Recollection: non-FAILED → 400; FAILED → recollect → new BOOKED with `recollectOfId` = original, charge 0; original now RECOLLECT.
+- Audit: booking writes a `homeCollection.book` audit row.
+
+## Do-NOT-break honored
+Lab order/sample (19), patient (14), billing (21), notifications (09) untouched — reached only through their exported services. `LabStatus`/`SampleStatus` enums not modified. The `HomeStatus` contract is additive and stable for 26/27. Flag-gated; `dependsOn lab.catalog`.
+
+## Notes / decisions
+- **Composition over re-implementation:** rather than duplicating lab-order/invoice logic, the service imports `LabService`/`BillingService` (the lab.module precedent of importing PatientService/BrandService/NotificationService). The e2e reuses the existing `FakeLabRepo`/`FakeBillingRepo`/`FakePatientRepo` to prove the real integration.
+- **Best-effort billing + WhatsApp:** both degrade cleanly (try/catch) so a booking is never blocked on delivery or on a tenant that lacks billing — mirroring lab's notification degradation. `billing.assertModulePresent` gates the invoice so a lab-catalog-only tenant (no billable flag) records the charge without a phantom invoice.
+- **Slots without a config table:** capacity is a pure function over the day's active bookings (`DEFAULT_SLOT_CAPACITY=3`, 2-hour UTC windows) — no new table, and 26/27 can refine it additively. Failed/recollected bookings are excluded from capacity so a re-open never over-counts.
+- **`recollect_of_id` / `invoice_id`** added to the spec's `HomeCollection` model (additive) to link a recollection to its origin and record the billed fee; the spec's core fields are otherwise followed verbatim. The "new sample link" on recollection is deferred to 27 (sample chain), as the spec directs.
+- Presets untouched: `lab.homeCollection` stays opt-in for a lab-preset tenant (spec: "absent unless the tenant runs a lab with home collection on"); Ganatra's `full` preset already enables it.
+
+WORK TYPE: FEATURE (branch feat/25-home-collection). Ended with `[CHECKPOINT]`. Controller handles the staging merge.
