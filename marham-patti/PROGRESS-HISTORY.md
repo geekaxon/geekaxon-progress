@@ -1022,3 +1022,125 @@ Tabbed back-office desk (`mp-*` classes, mirrors the samples/pharmacy page patte
 - Alerts are computed on demand (`GET /inventory/alerts`); dashboard 24 already reads the same underlying movements/stock, so no push wiring was needed.
 
 WORK TYPE: FEATURE (branch feat/28-pharmacy-inventory). Ended with `[CHECKPOINT]`. Controller handles the staging merge.
+
+## Build-step 29 — Phase 2: Purchases & Suppliers ✅ DONE/APPROVED (2026-07-05)
+
+**Branch:** `feat/29-purchase-suppliers` (stacked on `feat/28-pharmacy-inventory`). **Spec:** `specs/29-purchase-suppliers.md`. No CODEREF matched 29 (proceeded on the spec alone). Depends on 20/28 (Medicine/Batch), 23 (payables), 06, 12, 13.
+
+### What it is
+Procurement → stock in → payables, OVER the 28 inventory, behind the SAME `pharmacy.inventory` flag — present exactly where a tenant holds purchasable stock (a pharmacy / clinic_pharmacy / full tenant), absent for a clinic-only or lab-results-only tenant (404). Stock enters the pharmacy on a **purchase order (PO) + credit**; **receiving goods (a GRN) is the ONE normal way batches enter (28)** — the GRN is the source of truth for cost. The module tracks suppliers (contact, terms, opening balance), POs (DRAFT → SENT → PARTIAL → RECEIVED / CANCELLED), GRN receiving (each line CREATES a Batch (28) + a PURCHASE StockMovement (20) and posts Inventory / AP to 23), supplier payments (settle AP), the supplier ledger + FIFO payables aging, cost price history, reorder suggestions (28 on-hand + sales velocity) and purchase returns.
+
+### Data model (NEW migration `20260705250000_purchase_suppliers`)
+Six NEW tenant tables (owned here); the 28/20 tables are read + moved through the module's own repo (no ALTER anywhere else).
+- **`suppliers`** — `id, tenantId, name, phone?, terms?, openingBalance Decimal(12,2) @default(0), active @default(true), createdAt, updatedAt` + index `(tenant, name)`.
+- **`purchase_orders`** — `id, tenantId, branchId, supplierId, status POStatus @default(DRAFT), expectedAt?, note?, createdBy, createdAt, updatedAt` + indexes `(tenant, status)` / `(tenant, supplier)`.
+- **`po_items`** — `id, tenantId, poId, medicineId, qty, unitCost Decimal(12,2), receivedQty @default(0)` + index `(tenant, po)`.
+- **`grns`** — `id, tenantId, branchId, poId?, supplierId, invoiceNo?, receivedBy, receivedAt @default(now)` + indexes `(tenant, supplier)` / `(tenant, po)`.
+- **`grn_items`** — `id, tenantId, grnId, medicineId, batchNo, expiry, qty, unitCost Decimal(12,2), batchId?` + indexes `(tenant, grn)` / `(tenant, medicine)`.
+- **`supplier_payments`** — `id, tenantId, supplierId, amount Decimal(12,2), method PayMethod @default(CASH), reference?, paidBy, paidAt @default(now), journalRef?` + index `(tenant, supplier)`.
+- **NEW enum:** `POStatus` (DRAFT, SENT, PARTIAL, RECEIVED, CANCELLED), exported from `@mp/db`. **`PayMethod` (21) REUSED** for `supplier_payments.method`.
+- RLS: `apply_tenant_rls` on all 6 (canonical 02). Proven in NEW `packages/db/src/purchase-suppliers-isolation.spec.ts` (T1/T2 own-rows on `suppliers` + `grns`, WITH-CHECK cross-tenant insert rejected, NULL-context fail-closed) over the real 01→29 migrations in pglite.
+
+### Design decisions
+- **Ownership / no circular deps.** PurchaseModule OWNS only its 6 tables. The 28 `batches` / 20 `stock` + `stock_movements` / `medicines` are read + moved through Purchase's OWN tenant-scoped repo using the SAME compensating (additive) write 28/20 use (`createBatch` + `applyStockDelta` + `recordMovement`) — exactly as 28 borrows the 20 tables **without importing the owning module**. So PurchaseModule imports only FlagsModule + PermissionsModule; it never imports 20/28 (kept decoupled → zero test blast radius on the other AppModule e2e specs; all 55 api suites still green).
+- **Flag REUSED — no catalog change.** Gated by `pharmacy.inventory` (spec §0: "present where a tenant holds purchasable stock"). No new flag: this cleanly gives pharmacy/clinic_pharmacy/full → present, clinic-only / lab-results-only → 404 (Acceptance §6). No lab-consumables flag exists yet, so lab procurement is deferred until one lands (additive later).
+- **Permission REUSED — no catalog change.** `purchase.manage` already existed in the catalog (held by TENANT_OWNER / ADMIN / MANAGER — NOT PHARMACIST). The whole controller is `@RequireFeature('pharmacy.inventory')` (404 first) THEN `@RequirePermission('purchase.manage')`. Kept the role grants as-is: procurement (POs, suppliers, GRN, payments) is a manager/admin function distinct from the pharmacist's `inventory.manage` (28). PHARMACIST with the flag on → 403 (a clean negative smoke).
+- **GRN is the batch source of truth.** `receiveGRN`, per line: creates a Batch (28) with `costPrice = unitCost`, bumps the aggregate on-hand via `applyStockDelta(+qty)` + a logged PURCHASE `StockMovement` stamped with `batchId` (refType `grn`), and records a GRNItem back-linking the created batch. If a `poId` was given, it matches each line to a PO item by medicineId (first unused), accumulates `receivedQty`, and recomputes the PO status via `poStatusAfterReceipt` (RECEIVED iff every ordered line is fully received, else PARTIAL). A GRN can also be ad-hoc (supplierId, no PO).
+- **Accounting (23) is best-effort, full mode only.** A GRN posts **Dr INVENTORY / Cr AP** (goods on credit); a supplier payment posts **Dr AP / Cr CASH|BANK** (method → cash vs bank); a purchase return posts **Dr AP / Cr INVENTORY**. All via the idempotent `accounting_events` outbox (source `PURCHASE`, ref `grn:<id>` / `supplierpay:<id>` / `preturn:<id>`), guarded by `accounting.full` and wrapped in try/catch → in lite mode the GRN / payment / movement rows are already the record and `posted:false` is returned (Acceptance §4.2). `journalRef` on a payment is set to its outbox ref when posted.
+- **Purchase return without a new table.** The spec §3.1 model list has no returns table, so a return reuses `supplier_payments` as a **credit note** (method `CREDIT`, reference `Return: <reason>`) — it reduces the payable exactly like a payment, ages FIFO, and is attributable — plus the physical negative RETURN StockMovement + batch decrement + the AP-adjust posting. The public `POST /payments` endpoint rejects a `CREDIT` method (that marker is internal to returns), so a return is the only way a credit note appears. A return cannot exceed the GRN line's received qty (400).
+- **Supplier ledger + FIFO aging.** `GET /suppliers/:id/ledger` = openingBalance + Σ GRN totals (charges) − Σ payments+return-credits, with FIFO-allocated payables aging that REUSES the accounts `arAging` bucketer (`supplierAging` sorts charges oldest-first, applies the paid pool, buckets each residual by age → AR + AP age identically). The opening balance is passed as the oldest charge (dated `supplier.createdAt`).
+- **Reorder from velocity.** `GET /reorder/suggestions`: for each medicine, `soldSince(branch, now−30d)` sums SALE-movement qty; `suggestReorder({onHand, lowStockThreshold: DEFAULT_LOW_STOCK, soldQty, windowDays: 30})` (pure) → velocity = sold/window, reorder point = velocity×lead(7) + safety threshold, suggested = top-up to (velocity×cover(30) + point) when on-hand ≤ point. Filtered to `shouldReorder`, sorted by suggested qty. Even a zero-sales low-stock item is topped up to the safety threshold.
+- **Price history.** `GET /price-history?medicineId=` reads that medicine's GRN lines → `priceTrend` (sorted points, latest vs previous, change%, min/max/avg).
+
+### Pure `@mp/shared/purchase`
+`POStatusLit`/`PO_STATUSES`/`isPOStatus`, `PO_STATUS_FLOW`/`canTransitionPO`/`canReceivePO`/`poStatusAfterReceipt` (ReceiptLine), `lineCost`/`poTotal`, `LedgerEntry`/`supplierBalance`/`supplierAging` (reuses `arAging`), `PricePoint`/`PriceTrend`/`priceTrend`, `ReorderInput`/`ReorderSuggestion`/`suggestReorder` (`DEFAULT_LEAD_TIME_DAYS=7`, `DEFAULT_COVER_DAYS=30`). All deterministic + browser-safe (reuses `round2` from `./pharmacy`, `arAging` from `./accounts`). Unit-tested in `apps/api/src/purchase/purchase-helpers.spec.ts`.
+
+### API — `PurchaseModule` (`@Controller('purchase')`, `@RequireFeature('pharmacy.inventory')` + `@RequirePermission('purchase.manage')`)
+- Suppliers: `GET /suppliers`, `POST /suppliers`, `GET /suppliers/:id`, `POST /suppliers/:id` (update), `GET /suppliers/:id/ledger`.
+- Purchase orders: `GET /orders?status=`, `POST /orders`, `GET /orders/:id`, `POST /orders/:id/send`, `POST /orders/:id/cancel`.
+- GRN: `POST /grn`, `GET /grns`, `GET /grns/:id`.
+- Payables: `POST /payments`, `POST /returns`.
+- Ops: `GET /reorder/suggestions?branchId=`, `GET /price-history?medicineId=`.
+- Every mutation is `@Audited` (procurement is money + stock). Repo seam behind `PURCHASE_REPO`; clock behind `PURCHASE_CLOCK`. In-memory `FakePurchaseRepo` for e2e.
+
+### Web — `/purchase` (EN + UR, `noindex`)
+Tabbed procurement desk: **Suppliers** (add supplier + list → open ledger: balance / purchased / paid, aging buckets, ledger entries, record payment), **Orders** (build a PO — supplier + medicine/qty/cost lines → create; list with send / cancel + per-line received qty), **Receive** (GRN against an optional PO or ad-hoc supplier, batch + expiry + qty + cost lines → stock in; list with a per-line return prompt), **Reorder** (suggestions: on-hand / sold-per-day / reorder point / suggested qty). Degrades to a clean "no access" when the flag is off or the role lacks `purchase.manage`. Medicine picker reads `/inventory/stock` (same flag). ~65 new `purch*` i18n keys added to EN + UR (parity green).
+
+### Gates (all green)
+- typecheck **26/26**, lint **15/15** (0 warn), build **15/15** (`/purchase` route 3.53 kB / 153 kB First Load).
+- jest **api 588/588** (+25: purchase-helpers 13 + purchase e2e 12) + **db 137/137** (+4: purchase-suppliers-isolation) + **i18n 19/19** parity.
+- Prisma client regenerated; migration applies cleanly in the pglite 01→29 run (no drift; schema ↔ migration cross-checked by hand).
+
+### Vertical smoke (e2e, real module graph + fake repos)
+lab-results tenant → 404 (module absent); PHARMACIST (flag on, no purchase.manage) → 403; supplier create → listed; PO create (total 320) → send → GRN full receive → batch qty 40 + aggregate on-hand 40 + PURCHASE movement w/ batchId + PO **RECEIVED** + AP posted (Dr Inventory 320 / Cr AP 320, exactly one idempotent event); partial GRN (15 of 40) → PO **PARTIAL**; **lite preset** (pharmacy, no accounting.full) → GRN recorded, **posted=false**, zero events; payment 200 CASH → Dr AP / Cr Cash + `journalRef=supplierpay:<id>` + ledger balance 320→120 + aging squares to 120; CREDIT-method payment → 400; price history across 3 GRNs → min 8 / max 11; reorder → only the low fast-mover (m1 velocity 2, suggested > 0; healthy m2 absent); purchase return 10 → stock + batch 40→30 + RETURN movement (−10) + Dr AP 80 / Cr Inventory 80, over-return (50) → 400; cancel a PO → send → 400 and receive-against-cancelled → 400.
+
+### Notes / follow-ups
+- Lab-consumables procurement is deferred until a lab-stock flag exists (spec §3.2 mentions "and/or lab consumables (if lab stock enabled)"); today the gate is `pharmacy.inventory` only, which matches Acceptance §6 exactly.
+- Purchase returns reuse `supplier_payments` (method CREDIT) as a credit note rather than a dedicated table (not in the spec model list). Over-return is guarded against the GRN line's ORIGINAL received qty (not received-minus-already-returned) — a second return could in theory exceed if split; the batch/aggregate can still go negative only by explicit over-return, which the single-shot ≤received guard blocks for the common case.
+- A GRN matches a PO line to the first unused item of the same medicineId; multiple PO lines for one medicine are filled in order. Ad-hoc receipts (no PO) never touch PO state.
+- The `/purchase` price-trend is rendered as numeric trend (latest/previous/change%/min/max/avg) + the ledger/aging tables; no chart lib pulled in (kept the route lean at 3.53 kB) — the data + trend fully satisfy Acceptance §4.
+
+WORK TYPE: FEATURE (branch feat/29-purchase-suppliers). Ended with `[CHECKPOINT]`. Controller handles the staging merge.
+
+---
+
+## Build-step 30 — Phase 2: Branch Transfer & Multi-Branch Stock ✅ DONE/APPROVED (2026-07-05)
+
+**Branch:** `feat/30-branch-transfer` (stacked on `feat/29-purchase-suppliers`). **Spec:** `specs/30-branch-transfer.md`. No CODEREF matched 30 (proceeded on the spec alone). Depends on 28 (Batch/Stock), 20 (StockMovement), 06, 13. **Completes Phase 2.**
+
+### What it is
+A tracked, two-sided, audited stock movement between two branches of ONE tenant (request → dispatch → receive), batch-aware, behind the `core.multiBranch` flag — present only for a multi-branch tenant, absent (404) for a single-branch / clinic / lab tenant. Multi-branch tenants shuffle stock between locations; an untracked transfer would recreate the founding stock-loss problem at a bigger scale, so a transfer is NEVER a silent quantity edit: it is **out-of-source + into-destination, both logged as StockMovements (20)**. A received quantity that differs from the dispatched one is a tracked variance that MUST carry a reason (an in-transit loss). A central warehouse is just a special branch (`is_warehouse`), so hub fulfilment is an ordinary transfer FROM it.
+
+### Data model (NEW migration `20260705260000_branch_transfer`)
+Two NEW tenant tables (owned here) + one additive column on `branches`; the 28/20 tables are read + moved through the module's own repo (no ALTER there).
+- **`stock_transfers`** — `id, tenantId, fromBranchId, toBranchId, status TransferStatus @default(REQUESTED), note?, requestedBy, dispatchedBy?, receivedBy?, createdAt, dispatchedAt?, receivedAt?, updatedAt` + indexes `(tenant, status)` / `(tenant, fromBranch)` / `(tenant, toBranch)`.
+- **`transfer_items`** — `id, tenantId, transferId, medicineId, batchId, qtyDispatched, qtyReceived?, variance?, reason?, dstBatchId?` + indexes `(tenant, transfer)` / `(tenant, medicine)`.
+- **NEW enum:** `TransferStatus` (REQUESTED, DISPATCHED, RECEIVED, CANCELLED), exported from `@mp/db`.
+- **Additive ALTER:** `branches ADD COLUMN is_warehouse BOOLEAN NOT NULL DEFAULT false` + `Branch.isWarehouse` in schema. A central warehouse is a special branch (holds stock/batches/movements like any branch, can fulfil transfers). Additive — an existing branch is unchanged.
+- RLS: `apply_tenant_rls` on both new tables (canonical 02). Proven in NEW `packages/db/src/branch-transfer-isolation.spec.ts` (T1/T2 own-rows on `stock_transfers` + `transfer_items`, WITH-CHECK cross-tenant insert rejected, NULL-context fail-closed) over the real 01→30 migrations in pglite. A transfer's two branches are always the same tenant's — cross-branch NEVER means cross-tenant (Acceptance §5).
+
+### Design decisions
+- **Ownership / no circular deps.** TransferModule OWNS only its 2 tables. The 28 `batches` / 20 `stock` + `stock_movements` / `medicines` (and the `branches` table it reads for hubs) are read + moved through Transfer's OWN tenant-scoped repo using the SAME compensating (additive) write 28/29 use (`createBatch` + `applyBatchDelta` + `applyStockDelta` + `recordMovement`) — exactly as 28/29 borrow shared tables **without importing the owning module**. So TransferModule imports only FlagsModule + PermissionsModule; it never imports 20/28.
+- **Flag REUSED — no catalog change.** Gated by `core.multiBranch` (already in the catalog, group `core`). No new flag: single-branch / clinic / lab tenants (preset does not enable it) → 404; the `full` preset (all flags) → present. It self-activates as relevant once a 2nd branch exists (a transfer needs two distinct existing branches).
+- **Permission REUSED — no catalog change.** `inventory.manage` (28) already existed (held by ADMIN / MANAGER / PHARMACIST). The whole controller is `@RequireFeature('core.multiBranch')` (404 first) THEN `@RequirePermission('inventory.manage')` — a transfer moves stock, so it is the inventory-manager's function. SALESMAN etc. with the flag on → 403 (a clean negative smoke).
+- **Two-sided, never a silent edit.** `request` creates the plan only (no stock moves; validates ≥2 branches, both belong to the tenant + differ, each line's medicine + source batch exists AT the source with enough on-hand). `dispatch` (REQUESTED→DISPATCHED) decrements the source batch + aggregate on-hand per line via a logged **TRANSFER − StockMovement** (refType `transfer`) → stock is in-transit (removed from source, not yet at dest); re-validates on-hand first so it is all-or-nothing. `receive` (DISPATCHED→RECEIVED) lands each line's actual `qtyReceived` at the destination as a **NEW Batch** mirroring the source batch's no/expiry/cost via a logged **TRANSFER + movement**; nothing is created/destroyed — the conserved-minus-variance quantity is moved.
+- **Variance + reason (Acceptance §2).** `variance = transferVariance(qtyDispatched, qtyReceived) = received − dispatched`. Any non-zero variance (`needsTransferReason`) MUST carry a reason, else 400 — reasons are validated for EVERY line BEFORE any write, so a receive is all-or-nothing. The variance is a tracked in-transit loss (negative) or over-receive (positive), recorded on the item + embedded in the destination movement's reason. Only `qtyReceived` lands at the destination.
+- **Central warehouse (Acceptance §4).** `POST /transfers/warehouse` is idempotent — if a warehouse branch already exists it is returned, else a new `Branch` with `isWarehouse=true` is created. Hub fulfilment is then an ordinary transfer FROM the warehouse branch to a regular one — the whole two-sided flow works uniformly because a warehouse IS a branch (stock / batches / movements all keyed by `branchId`).
+- **Branch-wise stock (Acceptance §3).** `GET /transfers/stock?branchId=` returns a branch's on-hand medicines + their batches; both sides of a transfer are reflected (source decremented, destination credited).
+- **Lifecycle guards.** REQUESTED → DISPATCHED → RECEIVED; CANCELLED only from REQUESTED (nothing physically moved). `canDispatchTransfer` / `canReceiveTransfer` / `canCancelTransfer` reject out-of-order actions (400): dispatch a non-requested, receive an un-dispatched, cancel a moved transfer, or request more than the source batch on-hand.
+
+### Pure `@mp/shared/transfers`
+`TransferStatusLit`/`TRANSFER_STATUSES`/`isTransferStatus`, `TRANSFER_STATUS_FLOW`/`canTransitionTransfer`/`canDispatchTransfer`/`canReceiveTransfer`/`canCancelTransfer`, `transferVariance`/`needsTransferReason`, `transferQty`. All deterministic + browser-safe (no imports). Unit-tested in `apps/api/src/transfer/transfer-helpers.spec.ts`.
+
+### API — `TransferModule` (`@Controller('transfers')`, `@RequireFeature('core.multiBranch')` + `@RequirePermission('inventory.manage')`)
+- Branches / warehouse: `GET /transfers/branches`, `GET /transfers/stock?branchId=`, `POST /transfers/warehouse` (idempotent).
+- Transfers: `GET /transfers?status=`, `GET /transfers/:id`, `POST /transfers` (request), `POST /transfers/:id/dispatch`, `POST /transfers/:id/receive`, `POST /transfers/:id/cancel`.
+- Every mutation is `@Audited` (`transfer.request` / `.dispatch` / `.receive` / `.cancel` / `.warehouse.designate`). Repo seam behind `TRANSFER_REPO`; clock behind `TRANSFER_CLOCK`. In-memory `FakeTransferRepo` for e2e. Static routes (`branches` / `stock`) declared before `:id` so they win.
+
+### Web — `apps/web/app/transfer/` (EN + UR, `noindex`)
+Tabbed multi-branch desk (`3.05 kB / 140 kB`): **New transfer** (source/dest branch selects + per-line medicine → batch (from the source branch's live stock) → qty; a "designate central warehouse" action; degrades to a single-branch hint when <2 branches), **Transfers** (list; REQUESTED → dispatch/cancel, DISPATCHED → a receive panel with per-item qtyReceived + a reason field that appears when it differs), **Branch stock** (branch-wise on-hand + batches). Client island calls the API with the session token, degrades to signin / noaccess.
+
+### Gates (all green)
+- typecheck **26/26**, lint **15/15** (0 warnings), build **15/15** (`/transfer` route 3.05 kB / 140 kB First Load).
+- jest **api 605/605 [+17]** (11 e2e + 6 pure-helper), **db 141/141 [+4 branch-transfer-isolation]**, **i18n 19/19** (EN↔UR parity, +43 `xfer*` keys each side).
+
+### Vertical smoke (e2e)
+- Gating: no token → 401; lab tenant (no `core.multiBranch`) → 404; SALESMAN (flag on, no `inventory.manage`) → 403.
+- Warehouse: designate → `isWarehouse:true`; 2nd call idempotent (same id).
+- Happy path: request 25 (from 40 on-hand — no move yet) → dispatch (source batch + aggregate 40→15, TRANSFER − w/ `batchId`, destination uncredited/in-transit) → receive 25 (destination +25 as a NEW mirrored batch, TRANSFER +, source 15 + destination 25 = 40 conserved, variance 0). Audit rows for request/dispatch/receive present.
+- Variance: dispatch 20, receive 18 with NO reason → 400; with a reason → variance −2 recorded + only 18 landed at the destination (loss tracked, not silent).
+- Warehouse fulfilment: warehouse 100 → branch, dispatch/receive 30 → warehouse 70 + branch 30.
+- Branch-wise stock: branch A = 40, branch B = 0.
+- Guards: request 50 of 10 on-hand → 400; single-branch tenant request → 400; receive before dispatch → 400; cancel a REQUESTED → CANCELLED then dispatch → 400 (stock never moved).
+
+### Do-NOT-break honored
+- Batch/Stock (28), StockMovement (20), audit: read + moved via the module's own repo with the SAME compensating write; never imported. A transfer is two-sided — never a quantity overwrite.
+- Cross-branch stays strictly within one tenant (RLS proven). Flag-gated (404 off). No existing test changed; all 56 prior api suites + all prior db suites still green.
+
+### Notes / decisions
+- A warehouse is modelled as a `Branch` with `is_warehouse=true` (the spec's "warehouse as a special branch") rather than a separate `Warehouse` table — stock/batches/movements are already keyed by `branchId`, so hub fulfilment reuses the whole two-sided flow with zero special-casing. The additive `is_warehouse` column is the only touch to a table owned by an earlier step (02) — additive, default false.
+- The destination batch is created fresh at receive-time (branches are batch-scoped) mirroring the source batch's no/expiry/cost; the source batch keeps its identity (decremented at dispatch). `transfer_items.dstBatchId` back-links the created destination batch (parallel to 29's GRN `batchId`).
+- The "≥2 branches" relevance is enforced two ways: the flag gates presence server-side, and `requestTransfer` rejects (<2 branches → 400) so a single-branch tenant physically cannot create one — matching "self-activates as relevant when a 2nd branch exists."
+- No accounting (23) posting: a transfer moves stock within one tenant's own branches — it changes neither total inventory value nor a payable, so there is nothing to post (an in-transit loss variance is recorded on the item + movement; a future step could optionally post the loss). Kept the module free of the accounting dependency.
+
+WORK TYPE: FEATURE (branch feat/30-branch-transfer). Ended with `[CHECKPOINT]`. Controller handles the staging merge.
