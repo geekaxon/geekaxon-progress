@@ -681,3 +681,50 @@ Encounter/lab/pharmacy/billing source refs read-only (sweep never mutates 17/19/
 WORK TYPE: FEATURE (branch feat/22-doctor-commission). Ended with `[CHECKPOINT]`. Controller handles the staging merge.
 
 ---
+
+---
+
+# Build-step 23 — Accounts & Finance (Lite / Full) (`feat/23-accounts-finance`) ✅ DONE/APPROVED (2026-07-05)
+
+**WORK TYPE: FEATURE** · Phase 1 / item 10 (the books; two modes; vertical-aware posting). Spec `specs/23-accounts-finance.md` (authoritative; **no CODEREF matched** — proceeded on spec alone). Depends on 21 (billing/udhaar events), 20 (pharmacy revenue via billing), 22 (commission payout expense), 14 (udhaar), 06 (audit). The **most sensitive Phase-1 step** — debit = credit (full mode) is sacred; posting is idempotent.
+
+## What shipped
+Two accounting modes, chosen by flag, both **vertical-aware**:
+
+**LITE (`accounting.lite`, default-on).** A `CashLedger` of simple cash **IN / OUT** with a category + optional note (no double-entry, for down-market shops). Running balance = Σ(IN) − Σ(OUT); a **by-category period summary** (in/out/net); **udhaar visibility** = outstanding AR read **READ-ONLY** from open invoices (`total − paid`). Opening balance is a normal IN entry.
+
+**FULL (`accounting.full`).**
+- **Vertical-aware chart seed** (`chartSeedFor`): base accounts always (Cash/Bank/AR/AP/Service Income/General Expense/Owner's Equity/Opening Balance Equity); **pharmacy** adds Inventory/COGS/Pharmacy Sales; **lab** adds Lab Income; **clinic** adds Consultation Income; **commission** adds Doctor Commission Expense/Commission Payable. **A lab NEVER gets a COGS account** (do-NOT-break); a pharmacy does. Seed is idempotent by code. Verticals derived from flags (`pharmacy.pos` / `lab.catalog` / `clinic.consultation` / `clinic.commission`).
+- **Idempotent poster** (`postOutbox`): consumes the SAME `accounting_events` outbox 21 (BILLING/UDHAAR) + 22 (COMMISSION) already emit — never importing those modules. Each event's `payload.lines` codes → accountIds (a code missing from the chart is **lazily materialised** via `accountTypeForCode`, default EXPENSE, so a posting never fails on a gap); creates a balanced `JournalEntry` + `JournalLine`s. Idempotency at two layers: the outbox `@@unique(tenant,source,sourceRefId)` AND a `JournalEntry @@unique(tenant,source,sourceRefId)` with a **P2002 catch** in `createJournal` → a **re-emit never double-posts**. `AccountingEvent.postedAt` is set to mark consumed. Runs implicitly before chart/report reads so numbers are always fresh.
+- **Reports** (pure `@mp/shared` reducers over posted lines joined to accounts): **trial balance** (net per account in its natural column; Σdebit = Σcredit), **P&L** (income credit-normal − expense debit-normal = net profit), **balance sheet** (Assets = Liabilities + Equity + Retained Earnings, retained = net profit), **day book** (grouped by entry), **AR aging** (open invoices bucketed 0-30/31-60/61-90/90+). One `/accounts/reports` call returns all; a `/accounts/ledger?code=` gives a running GL for one account.
+- **Manual journal**: rejects an unbalanced entry (400) and refuses to post into a **CLOSED** period (400). **Opening balances**: each `{code, amount}` placed on its natural side, balanced to Opening Balance Equity, source MANUAL ref `opening` (idempotent — captured once); the lite→full switch (lite history untouched).
+- **Fiscal period** create + **close** which **LOCKS** it: a manual journal dated inside a closed period is refused; an outbox event dated inside a closed period is left **unposted** (immutable). Period resolution = the period containing the entry date.
+
+## Data model / migration
+NEW migration `packages/db/prisma/migrations/20260705190000_accounts_finance/migration.sql` — 5 tables (`accounts`, `journal_entries`, `journal_lines`, `fiscal_periods`, `cash_ledger`) + 4 enums (`AccountType` ASSET/LIABILITY/EQUITY/INCOME/EXPENSE, `PostingSource` BILLING/PHARMACY/COMMISSION/PURCHASE/UDHAAR/MANUAL, `PeriodStatus` OPEN/CLOSED, `CashDir` IN/OUT). Keys: `accounts @@unique(tenant,code)`; `journal_entries @@unique(tenant,source,source_ref_id)` (the poster idempotency) + index (tenant,date); journal_lines indexes (tenant,entry) & (tenant,account). Every table `SELECT apply_tenant_rls(...)` (canonical 02). Prisma schema models added (with `///` docs). `@mp/db` re-exports the 4 new enum types.
+
+## Isolation (Acceptance §7)
+NEW `packages/db/src/accounts-isolation.spec.ts` (pglite, real 01→23 migrations, non-superuser `app_user` + `app.tenant_id` GUC): a tenant sees ONLY its own chart/journals/lines/periods/cash; WITH CHECK blocks recording an account / journal / cash movement tagged for another tenant (`/row-level security/i`); NO context → zero rows (fail-closed). db **114/114 [+6]**.
+
+## Catalogs — NO change
+Perms `accounts.view` / `accounts.post` / `accounts.period.close` and flags `accounting.full` / `accounting.lite` were already in the catalogs (05/04). Held by FINANCE + TENANT_OWNER (ADMIN does NOT hold accounts perms — used for the 403 test).
+
+## Code
+- **Shared** `packages/shared/src/accounts.ts` (barrel-exported): enum mirrors (`AccountTypeLit`/`PostingSourceLit`/`PeriodStatusLit`/`CashDirLit`), the chart registry (`CHART_CODES`, `BASE_ACCOUNTS` + per-vertical arrays, `ACCOUNT_CATALOG`, `accountMetaFor`, `accountTypeForCode`), `chartSeedFor`, report reducers (`trialBalance`/`profitAndLoss`/`balanceSheet`/`generalLedger`/`arAging` + `DEFAULT_AGING_BANDS`), lite math (`cashBalance`/`cashSummarize`). Renamed the account-codes const to `CHART_CODES` to avoid colliding with billing's `ACCOUNT_CODES` in the barrel.
+- **API** `apps/api/src/accounts/` — constants (DI tokens + mode/vertical flags + perms), dto (class-validator-free parsers), repositories (abstract `AccountsRepo` + `PrismaAccountsRepo`, all `runWithTenant`; `createJournal` create+lines with P2002-catch; reads unposted events + open invoices read-only), service (`AccountsService`: mode/presence gates, chart seed, `postOutbox`, manual journal, opening, reports, ledger, lite cash, periods), controller (`/accounts/*`, programmatic **mode-flag 404 FIRST then permission**; full-only handlers `assertFull` → 404 when full off; mutations `@Audited`), module (imports Flags+Permissions, no global guard), `__fakes__` (in-memory `FakeAccountsRepo` with `seedEvent`/`seedInvoice`), `index.ts`. Registered `AccountsModule` in `app.module.ts` (after CommissionModule).
+- **Web** `apps/web/app/accounts/` — `page.tsx` (server frame, `noindex`) + `AccountsClient.tsx` (`'use client'` island): probes `/accounts/mode` → LITE renders one cash-in/out screen (form + running balance + udhaar + by-category summary + entries); FULL renders Reports/Chart/Journal/Periods tabs with an **animated P&L bar chart** (teal income / coral expense, CSS `width 450ms ease`), trial balance, balance sheet, AR aging, day book, chart + opening-balance capture, a live-balanced manual journal, and period create/close. EN + UR strings added to both `@mp/i18n` catalogs (parity kept).
+
+## Endpoints
+`GET /accounts/mode`; LITE `POST /accounts/cash`, `GET /accounts/cash`; FULL `GET /accounts/chart`, `POST /accounts/seed`, `POST /accounts/journal`, `POST /accounts/opening`, `GET /accounts/reports`, `GET /accounts/ledger?code=`, `GET /accounts/periods`, `POST /accounts/periods`, `POST /accounts/periods/:id/close`.
+
+## Gate results
+- typecheck **26/26**; lint **15/15 (0 warnings)**; build **15/15** (`/accounts` route present); prettier clean on all new files.
+- jest **api 448/448 [+33]** (helpers spec: vertical-aware seed, code→type, balanced reducers, GL, cash, aging; e2e: 401/404-both-off/403-ADMIN, mode picker, lite cash + udhaar, full-only→404 in lite, lab-no-COGS vs full-with-COGS chart, unbalanced-journal 400, balanced post, idempotent auto-post + balanced reports, re-emit posts ONE journal, enabled-modules-only, opening balances, period close refuses posting, missing period 404, audit row).
+- jest **db 114/114 [+6 accounts-isolation]**; **i18n 19/19 parity**.
+- **Vertical smoke:** lab tenant (preset `lab`, full mode) chart has LAB_INCOME, no COGS/commission; pharmacy tenant (preset `pharmacy`) → lite mode; full-suite → full mode with COGS + commission accounts; both-accounting-flags-off tenant → 404; ADMIN (no accounts perm) → 403; a re-emitted (source,ref) event posts exactly ONE journal.
+
+## Notes / decisions
+- The poster catches P2002 (Prisma unique violation) rather than pre-checking existence — one round-trip, race-safe. An event dated inside a CLOSED period is intentionally skipped (left unposted) rather than erroring, so a normal pre-close flow is unaffected and immutability holds. Pharmacy COGS/inventory + purchase (PostingSource PHARMACY/PURCHASE) are recognised in the enum but not yet emitted (arrive with 28/29) — the poster handles them additively when they appear.
+- No CODEREF companion existed for 23; proceeded on the spec + the frozen outbox contract (billing/commission emit `{source, sourceRefId, payload:{memo, at, lines[]}}`; 6 codes CASH/BANK/INCOME/AR/COMMISSION_EXPENSE/COMMISSION_PAYABLE).
+
+WORK TYPE: FEATURE (branch feat/23-accounts-finance). Ended with `[CHECKPOINT]`. Controller handles the staging merge.
