@@ -728,3 +728,55 @@ Perms `accounts.view` / `accounts.post` / `accounts.period.close` and flags `acc
 - No CODEREF companion existed for 23; proceeded on the spec + the frozen outbox contract (billing/commission emit `{source, sourceRefId, payload:{memo, at, lines[]}}`; 6 codes CASH/BANK/INCOME/AR/COMMISSION_EXPENSE/COMMISSION_PAYABLE).
 
 WORK TYPE: FEATURE (branch feat/23-accounts-finance). Ended with `[CHECKPOINT]`. Controller handles the staging merge.
+
+---
+
+# Build-step 24 — Admin Dashboard & Owner Control (`feat/24-admin-dashboard`) ✅ DONE/APPROVED (2026-07-05)
+
+**WORK TYPE: FEATURE** · Phase 1 / item 11 (completes Phase 1) — the owner's daily cockpit; the "total control" promise made visible. Spec `specs/24-admin-dashboard.md` (authoritative; **no CODEREF matched** — proceeded on spec alone). Depends on 19–23 (the data it aggregates), 06 (audit highlights), 13 (UI). **Read-mostly aggregation** — it OWNS no source data.
+
+## What shipped
+The owner walks in and instantly sees today's money, what's leaking, what's pending, what's at risk — across whatever modules they run. Three sections, each a flag-adaptive card set:
+
+- **Summary (KPIs):** today's **sales by source** (Σ invoice.total, grouped), **collections vs pending** (collected = Σ non-CREDIT payments in-window; pending = Σ balance of the day's invoices), **udhaar** (Σ CREDIT payments), gross **profit** (sales − pharmacy COGS, the only hard cost at the counter — reconciles with 21 totals + 20/23 cost basis), **cash position** (FULL = Σ debit−credit on CASH/BANK journal accounts; LITE = cash-ledger running balance).
+- **Alerts:** **stock-loss value** (Σ |qtyDelta|×cost over DAMAGE/EXPIRE/negative-ADJUST movements — the founding pain surfaced to the owner), **low-stock** (on-hand ≤ threshold 10), **cashier shift variance** (non-zero closed-shift variance — the theft tripwire), **overdue udhaar/AR** (open invoices ≥ 30 days), **pending lab approvals** (RESULTED orders), **audit highlights** (sensitive action-prefixes: refunds/voids/period-close/opening/returns/amendments/payouts/roles/flags), **expiry risk** (stub `available:false` until 28 ships inventory batches — the card shows for pharmacy so the shape is stable).
+- **Activity:** **footfall** (tokens issued + new patients), **doctor productivity + commission** (encounters per doctor merged with commission entries, ranked), **lab volume + average TAT** (orderedAt→reportedAt hours), **top medicines** (Σ sale-item lineTotal, top-5).
+
+**Flag adaptation (the load-bearing rule).** Each card declares the flag(s) that make it relevant (ANY-of; empty = always) + an optional sensitive permission. `visibleCards(flags, perms, section)` filters: a **pharmacy-only** tenant sees sales/stock-loss/low-stock/expiry/top-medicines but NO lab or doctor cards; a **lab-only** tenant sees TAT/volume/pending-approvals but no pharmacy/doctor cards; a **clinic** tenant sees footfall/doctors+commission. No dead card for a disabled module.
+
+**Sensitivity + presence.** The dashboard is **always present** (core owner control, no module flag), gated by base `reports.view`; the **cash** card additionally needs `accounts.view` and the **audit-highlights** card `audit.view` — resolved per caller in the controller and passed to the service, so a viewer without them simply doesn't get those cards (never a 403 for the whole surface).
+
+**Perf.** Aggregates use Prisma groupBy/count/aggregate over bounded (single-day) row sets and are **cached in-app for 30 s** keyed by (section, tenant, date, branch); the perm-independent raw numbers are cached and the per-caller card set assembled on top. The web chart is **dynamically imported** (off the initial bundle).
+
+**Ownership boundary.** Every figure is aggregated **read-only** through a tenant-scoped repo (`runWithTenant`) — the dashboard never mutates 19–23. The ONLY table it writes is the per-user `dashboard_prefs` layout.
+
+## Data model — NEW migration `20260705200000_admin_dashboard`
+- `dashboard_prefs` (1 table): `id, tenant_id, user_id, layout JSONB {order, hidden}, created_at, updated_at`; `@@unique(tenant_id, user_id)`. `apply_tenant_rls('dashboard_prefs')` — tenant-scoped, WITH CHECK + fail-closed. Proven in a new `packages/db/src/dashboard-isolation.spec.ts` (real 01→24 migrations under pglite: T1/T2 see only their own layout; WITH CHECK blocks a cross-tenant write; no context → zero rows).
+
+## Catalogs — NO change
+Perms (`reports.view`, `audit.view`, `accounts.view`) and flags (`pharmacy.pos`, `lab.catalog`, `clinic.consultation`, `clinic.appointments`, `clinic.commission`, `accounting.lite/full`, `core.multiBranch`) all pre-existing.
+
+## Code
+- **Pure `@mp/shared/dashboard`** (`packages/shared/src/dashboard.ts`, wired into `index.ts`): `DASHBOARD_CARDS` (the catalog), `cardRelevant`/`visibleCards`/`visibleCardKeys` (flag+perm filter), reducers `salesBySource`, `sumBy`, `stockLossValue`, `shiftVarianceAlerts`, `overdueTotal`, `lowStockRows`, `averageTat`, `topBy`, `grossProfit`; wire types `SourceAmount`/`RankedRow`/`AlertItem`/`DashboardSection`/`DashboardCardKey`.
+- **API `DashboardModule`** (`apps/api/src/dashboard/*`, wired into `app.module.ts`): `dashboard.constants.ts` (DI tokens, perms, `LOW_STOCK_THRESHOLD`/`AR_OVERDUE_DAYS`/`DASHBOARD_CACHE_TTL_MS`/`SENSITIVE_AUDIT_ACTIONS`), `dashboard.dto.ts` (`parseScope` date+branch, `parseLayout`), `dashboard.repositories.ts` (abstract `DashboardRepo` + `PrismaDashboardRepo` — ~25 tenant-scoped read methods across invoices/payments/sales/saleItems/medicines/movements/stock/cashLedger/accounts+journalLines/shifts/labOrders/audit/tokens/patients/encounters/commission/doctors/users/branches + prefs), `dashboard.service.ts` (flag→card set, per-section raw compute + 30 s cache, CSV export, prefs), `dashboard.controller.ts` (`reports.view` gate → per-caller sensitive-perm set), `dashboard.module.ts`, `index.ts`.
+- **Web** (`apps/web/app/dashboard/`): `page.tsx` (server frame, `noindex`), `DashboardClient.tsx` (probe `/summary` for access + cards; Simple = KPIs + alerts strip w/ drill links; Pro = grid + activity tables + CSV export; date/branch filter), `SalesChart.tsx` (dynamically-imported animated by-source bars). i18n keys `dash*` added to EN + UR.
+- **Tests:** `dashboard-helpers.spec.ts` (card adaptation per vertical + reducers), `dashboard.e2e.spec.ts` (real module graph, fake repos), `__fakes__.ts` (`FakeDashboardRepo`).
+
+## Endpoints (all `reports.view`; sensitive cards resolved per caller)
+`GET /dashboard/summary?date=&branch=` · `GET /dashboard/alerts` · `GET /dashboard/activity` · `GET /dashboard/export` (CSV) · `GET /dashboard/prefs` · `PUT /dashboard/prefs` (audited `dashboard.prefs.save`).
+
+## Verification gates (all green)
+- typecheck **26/26**, lint **15/15** (0 warn), build **15/15** (`/dashboard` route, 4.17 kB; chart dynamically imported).
+- jest **api 474/474 [+26]** (dashboard-helpers + e2e) + **db 117/117 [+3 dashboard-isolation]**; i18n parity green (EN/UR key sets equal).
+- Vertical smoke (e2e over seeded 21/23 data): summary reconciles (sales 600, by-source CONSULT 200/LAB 300/PHARMACY 100, collected 200, pending 400, udhaar 200, profit 560 = 600−40 COGS, cash 400); alerts (stock-loss 60, low-stock 1, variance 1 @ −50, overdue 500/1, pending-lab 1, audit 1, expiry unavailable); activity (footfall 3 tokens/2 patients, Dr Ayesha 2 consults/500 commission, lab 2 orders/2h TAT, Panadol top 100); **pharmacy tenant → no lab/doctor cards; lab tenant → no pharmacy cards; MANAGER (no accounts/audit.view) → no cash/audit cards; NURSE (no reports.view) → 403**; CSV export reconciles; per-user layout round-trips.
+
+## Do-NOT-break honored
+Source modules' data contracts read-only (the repo only ever reads 19–23; the sole write is `dashboard_prefs`). Sensitive cards never bypass permissions (cash→`accounts.view`, audit→`audit.view`, per caller). Cards respect flags (no card for a disabled module). Aggregates cached (30 s TTL) to honor the perf budget; chart dynamically imported.
+
+## Notes / decisions
+- No module-level feature flag: the dashboard is core owner control, always present, gated only by `reports.view` — matching the always-on audit surface. The flag adaptation is at the CARD level, not the route level.
+- `expiryRisk` and PostingSource PHARMACY/PURCHASE-derived COGS depend on 28 (inventory batches) which hasn't shipped; the expiry card returns `{available:false, count:0}` so its shape is stable and 28 plugs data in additively without a contract change.
+- Profit is defined as sales − pharmacy COGS (the only hard cost known at the counter); consult/lab revenue carries no COGS. This reconciles with 21 invoice totals and the 20/23 cost basis, and is documented in `grossProfit`.
+- Payments carry no branch_id, so branch attribution of `collected`/`udhaar` joins each payment to its invoice's branch in JS over the (small) day's payment set.
+
+WORK TYPE: FEATURE (branch feat/24-admin-dashboard). Ended with `[CHECKPOINT]`. Controller handles the staging merge.
