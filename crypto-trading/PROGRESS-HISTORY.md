@@ -163,3 +163,95 @@
 
 ### [2026-07-06] Planning — DONE
 Strategy layer locked (A/B/C reworked from source PDF: candle-color bias, 5m order blocks, body-midpoint equilibrium, 100% leveling sells, manual TradingView zones all removed; BTC filter, 1% sizing, structural stops, fee filter, drawdown discipline kept). Build order (15 modules), tiers, risk parameters, Telegram command set, dashboard scope, mode-switch state machine, and 7 real-world hardening items (exchange filters, stop-limit+watchdog, WS resilience+NTP, BNB fee reserve, indicator warm-up, dust/fill tracking, DB backups) folded into specs. Deliverables produced: ARCHITECTURE.md, AGENT.md, PROGRESS.md, PROGRESS-HISTORY.md, /specs/01–15, /specs/README-OPERATOR-GUIDE.md.
+
+---
+
+## [2026-07-06] Module 11 — Telegram Control Panel — DONE/APPROVED
+
+**Branch:** feature/11-telegram (WORK TYPE: FEATURE)
+**Spec:** /specs/11-telegram.md (no CODEREF companion; proceeded on spec alone). Library: grammY 1.44.0 (added to @spotedge/bot).
+
+### What was built
+
+**Shared service layer in @spotedge/core (the module-11 + module-14 seam).** Per spec §Service-layer rule, every command calls a core service function — NO business logic in handlers. New files under `packages/core/src/services/`:
+- `ports.ts` — narrow injected ports (SettingsPort/StatePort/LedgerPort/PairsPort/EventsPort/FiltersPort/optional ExchangePort) so core stays DB-free at import (never touches the Prisma singleton). Rows: OpenPositionRow/ClosedTradeRow/LevelingCycleRow/PairView/LogLineView.
+- `engineState.ts` — EngineState vocabulary + stateBadge (🟡PAPER/🔴LIVE/⏸/🛑) + modeForState (duplicated from apps/bot state.ts like money.ts, since core can't import apps/bot).
+- `control.ts` — every command's service function: getStatus/getPositions/getPnl(scope union TODAY|WEEK|MONTH|SYMBOL|A|B|C|PAPER|LIVE)/getTrades/getBalance/getFees/getFilters/getLogs/getRisk/getPairs/getStrategies; mutations controlStop/Start/Pause/Resume, setMode (LIVE gate check), setCapital/setRisk (reuse sizing.ts validateCapital/validateRiskPct + sizingExample), setSummaryTime, setCore (T1-only), setTier, enable/disableStrategy, addPair/removePair, resetPaper, closePosition/closeAll/reconcileNow (ExchangePort-gated → ENGINE_OFFLINE when the runtime engine isn't wired). Money math decimal-safe throughout; capital = base + Σ realized (compounding), deployed = Σ open A/B cost, free = allocated − deployed.
+- `reports.ts` — buildDailySummary (trades, W/L, win rate, net-of-fees, fees, equity, breaker-today, top/bottom pair) shared by REPORT + the scheduled daily summary.
+
+**Telegram face in apps/bot/src/telegram/.**
+- `format.ts` — HTML escaping (single escaping discipline), splitMessage/sendLongMessage (≤3900 chars, split ONLY at line boundaries, 📄(i/n) labels when n>1, 350ms sequential gap, over-long-line hard-split fallback), OutboundQueue (per-chat 1 msg/s, injectable now/sleep).
+- `registry.ts` — the SINGLE command registry (name/category/usage/description/examples/warnings/moneyAffecting) driving HELP + dispatch usage.
+- `help.ts` — helpIndex / helpCard / helpFor / helpManual, all generated from the injected commands array (can't drift).
+- `auth.ts` — ownerOnly middleware (from.id === TELEGRAM_OWNER_ID else silently ignored + logged at warn) + pure isOwner.
+- `confirm.ts` — ConfirmManager: typed (CONFIRM LIVE/CLOSEALL/RESETPAPER) + button (CLOSE/SETCAPITAL/SETRISK/SETCORE) confirmations, 60s TTL, injectable timers, fired-timer + lazy post-TTL expiry both handled.
+- `render.ts` — HTML renderers (status card, monospace tables for POSITIONS/TRADES/PAIRS, balance, fees, filters ✅/❌/⏳ + blocking highlight, risk, strategies matrix, summary).
+- `handlers.ts` — the Dispatcher: parse → typed-confirm resolution → command lookup (unknown → short hint) → STOPPED-state gating (only Status/Reports + START) → route to a service → render. Money commands register a confirm and reply prompt/keyboard; the mutation runs in onConfirm.
+- `push.ts` — pure push formatters (entry/exit/cycle/breaker/watchdog/WS-stale/BNB-low) + PushService (AlertFn seam with error-class RateLimiter 1/15min + daily-heartbeat latch).
+- `context.ts` — the ONLY DB-touching file: Prisma-backed implementations of every port (mode-scoped queries; realizedNetUsd = Σ Trade.netPnlUsd + Σ LevelingCycle.chunkPnlUsd; wipeMode FK-ordered deleteMany, mode-scoped) + buildServiceContext + makeStatePort (adapts the apps/bot StateMachine).
+- `dbStateStore.ts` — DB-backed StateStore (settings keys engine_state/live_gate_approved/state_quiescing) so STOP/PAUSE/MODE survive a restart (replaces the in-memory store in index.ts).
+- `bot.ts` — createTelegram: grammY Bot + Messenger (queue + sendLongMessage, HTML) + owner gate + message/callback handlers + inline Confirm/Cancel keyboards; start() runs bot.init() first so an invalid token → engine-only mode (logged fatal, engine stays alive) per §Edge cases.
+- index.ts wired: DB-backed state store, buildServiceContext, createTelegram, non-fatal start, telegram.stop() added to graceful shutdown.
+
+### Decisions / notes
+- ExchangePort left undefined for now — the runtime engine (candle feed / tick loop / PaperTradingEngine wiring) is not yet assembled in apps/bot, so CLOSE/CLOSEALL/RECONCILE and POSITIONS live price/uPnL degrade to ENGINE_OFFLINE / "—". They light up once module 15 wires the engine + router into the bot. All ledger-derived commands (PNL/TRADES/BALANCE realized/FEES/STATUS/PAIRS/STRATEGIES/RISK/settings mutations/RESETPAPER) are fully functional against the DB.
+- RESETPAPER resets capital_paper to DEFAULT_SETTINGS.capital_paper (11000) and is refused while any PAPER position is open; mode-scoped delete never touches LIVE (test-covered).
+- HTML parse mode chosen (not MarkdownV2) and used everywhere.
+
+### Gate results
+- typecheck: green (db/core/bot/dashboard).
+- build: green (all packages; dashboard Next build unaffected).
+- tests: 333 total — db 14, core 255 (+10 services.control.test: PNL aggregation, RESETPAPER mode isolation ×2, SETRISK bounds ×2, MODE LIVE gate ×2, STATUS/summary/BALANCE), bot 64 (+32 telegram: format 7 incl. 12k→4 labelled parts no mid-line split + OutboundQueue spacing, help 5 registry-driven fake-command, auth 4 foreign-ignored, confirm 6 incl. timeout path, dispatch 6 incl. CLOSEALL/SETRISK confirm flows + STOPPED gating, push 4).
+- boot smoke: invalid token → createTelegram.start() returns false (engine-only), no crash — verified against built dist.
+
+### Deploy-time hand-offs (module-11 [HUMAN_REQUIRED], handled on the VPS)
+- BotFather: operator creates the dedicated bot, puts TELEGRAM_BOT_TOKEN + TELEGRAM_OWNER_ID in the root .env.
+- Live smoke: every command exercised in PAPER against the real bot; transcript pasted here at deploy (spec §Acceptance live smoke).
+
+### Mid-session build-order change
+While module 11 was in progress the controller injected /specs/16-env-loading-hotfix.md (foundational correction to module 01 — root-.env must load regardless of CWD/PM2) and updated ARCHITECTURE.md to build 16 NEXT, before module 12. PROGRESS.md NEXT pointer updated to module 16 accordingly. Module 11 was not interrupted (already complete + gates green).
+
+---
+
+## Module 16 — Environment Loading Hotfix — DONE/APPROVED 2026-07-06
+
+**Type:** FIX (foundational correction to Module 01). Branch `fix/env-loading-hotfix`. Built out-of-sequence NEXT (after 11, before 12) because the bot cannot stay alive under PM2 until root-`.env` loading is deterministic.
+
+### Root cause (from staging)
+Bot booted under PM2 with `cwd: apps/bot` and reported every env var empty (`DATABASE_URL / BINANCE_* / TELEGRAM_* is required`) despite a correct root `.env`. Two causes: (1) `config.ts` called dotenv's `config()` at import time with NO path → resolved `.env` relative to `process.cwd()` (`apps/bot`), where no `.env` exists; (2) PM2's `env_file` was unreliable on the server's PM2 version and silently ignored. The stopgap on the server was `node_args: "-r dotenv/config" + DOTENV_CONFIG_PATH`.
+
+### Decisions
+- **Single shared resolver** `packages/core/src/env/loadRootEnv.ts`: walks UPWARD (≤8 levels) from the module's own directory for a dir containing BOTH `pnpm-workspace.yaml` AND `.env`, loads that `.env`. Anchoring on `pnpm-workspace.yaml` guarantees the true monorepo root (never a stray `.env`). Fallback honors an absolute `DOTENV_CONFIG_PATH`; otherwise throws a clear error naming that override var.
+- **ESM deviation from spec code:** the spec sample defaulted `startDir = __dirname`, but `@spotedge/core` compiles to NodeNext ESM where `__dirname` is undefined at runtime. Implemented with `path.dirname(fileURLToPath(import.meta.url))` instead — same behavior, correct under real Node ESM (verified against compiled dist, not just vitest's shim).
+- **Subpath export** `@spotedge/core/env/loadRootEnv` added to `packages/core/package.json` `exports` (kept OUT of the barrel `index.ts` so importing the resolver never drags in env-reading modules — the whole point is to run it BEFORE those load). `dotenv ^16.4.7` added as a core dependency.
+- **Bot bootstrap split:** `apps/bot/src/index.ts` is now a tiny bootstrap — imports only `loadRootEnv`, calls it as the first statement, then `await import("./main.js")`. The full boot sequence moved verbatim to `apps/bot/src/main.ts` exporting `run(envPath)`. Dynamic import guarantees env is populated before config/Prisma/connector load.
+- **config.ts:** removed the CWD-relative top-level `loadDotenv()` (the bug); it now only validates the already-populated `process.env`. Zod fail-fast + LIVE-from-env refusal unchanged.
+- **FATAL diagnostics:** the config-FATAL block now prints `[FATAL] Loaded env from: <resolved .env path>` above the offending-vars list, so a future mis-load is one-glance diagnosable. `loadRootEnv` also exposes `loadedEnvPath()`.
+- **ecosystem.config.js:** restored to clean canonical form — absolute repo-root `cwd: /www/wwwroot/staging_spotedge`, `script: apps/bot/dist/index.js`, `env: { NODE_ENV: "production" }` only. NO `env_file`, NO `node_args`, NO secrets (file is committed).
+- **deploy.sh:** Prisma `migrate deploy` + seed now carry an explicit `DATABASE_URL="$DATABASE_URL"` prefix (root `.env` sourced in step 1b) instead of `dotenv-cli`. No symlinks, no `packages/db/.env`. Comments updated. (dotenv-cli devDep left in place — non-urgent cleanup per spec §5.)
+
+### Gate results
+- `pnpm run build` — 4/4 tasks green.
+- `pnpm run typecheck` — 6/6 tasks green.
+- `pnpm run test` — 337 passing (core 259 = +4 loadRootEnv, bot 64, db 14).
+- Runtime verification against **compiled dist ESM** (proves `import.meta.url` works under real Node, not only vitest): same repo-root `.env` resolved from `repo-root`, `apps/bot`, and `packages/db` CWDs; full bot bootstrap run from `apps/bot` printed `[FATAL] Loaded env from: <repo>/.env` then the config errors and exited 1 — confirming CWD-independent load + resolved-path print. Temp dummy `.env` created for the check and removed afterward (`.env` is gitignored).
+
+### Acceptance criteria coverage
+- ✅ Unit test: `loadRootEnv()` from a temp nested dir locates + loads the root `.env` (fixture with pnpm-workspace.yaml + .env). Plus multi-CWD equality + no-`.env` throw tests.
+- ✅ Unit test: preset `process.env` value NOT overwritten by a differing `.env` line (dotenv default no-override).
+- ✅ FATAL path prints the resolved `.env` path.
+- ✅ Verified same `.env` found from ≥2 CWDs (did 3).
+- ⏳ PM2 clean-form boot test (`pm2 delete && pm2 start ecosystem.config.js`) — deploy-time gate on the VPS (cannot run PM2 in this env). Code side ready.
+
+### Files
+- NEW `packages/core/src/env/loadRootEnv.ts`
+- NEW `packages/core/src/__tests__/loadRootEnv.test.ts`
+- NEW `apps/bot/src/main.ts` (boot body moved from index.ts)
+- MOD `apps/bot/src/index.ts` (now the bootstrap)
+- MOD `apps/bot/src/config.ts` (removed CWD dotenv)
+- MOD `packages/core/package.json` (dotenv dep + subpath export)
+- MOD `ecosystem.config.js` (clean form)
+- MOD `deploy.sh` (DATABASE_URL prefix; no dotenv-cli)
+- MOD `pnpm-lock.yaml` (core dotenv dep)
+
+**[FIXED_CHECKPOINT]** — touches foundational config every process depends on.

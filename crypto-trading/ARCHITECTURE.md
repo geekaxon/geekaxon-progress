@@ -73,8 +73,9 @@ Excluded by decision: GRAM, CVX. No meme/gaming coins.
 | 13 | Reporting engine | /specs/13-reporting.md | [CHECKPOINT] |
 | 14 | Web dashboard | /specs/14-dashboard.md | [CHECKPOINT] (+ [HUMAN_REQUIRED] for DNS/SSL) |
 | 15 | Live-trading enablement | /specs/15-live-enable.md | **[FIXED_CHECKPOINT]** |
+| 16 | Environment loading hotfix (foundational — **build NEXT**, before resuming any remaining module) | /specs/16-env-loading-hotfix.md | **[FIXED_CHECKPOINT]** |
 
-HARD stops: **01, 02, 03, 06, 11, 15** (recorded in PROGRESS.md). [HUMAN_REQUIRED] hand-offs expected: BotFather setup (11), Nginx/subdomain/SSL/noindex (14), Binance API key creation + LIVE pre-flight (15). Operator steps consolidated in `/specs/README-OPERATOR-GUIDE.md`.
+HARD stops: **01, 02, 03, 06, 11, 15, 16** (recorded in PROGRESS.md). **Build-order note:** module 16 is a foundational env-loading correction discovered during staging — the agent builds it NEXT (immediately), before resuming any other remaining module, since every process depends on correct root-`.env` loading. [HUMAN_REQUIRED] hand-offs expected: BotFather setup (11), Nginx/subdomain/SSL/noindex (14), Binance API key creation + LIVE pre-flight (15). Operator steps consolidated in `/specs/README-OPERATOR-GUIDE.md`.
 
 ## 8. Deployment (deploy.sh spec — agent authors the real script per AGENT.md)
 
