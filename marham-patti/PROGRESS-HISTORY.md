@@ -10,6 +10,23 @@
 
 ---
 
+## Launch hotfix — CRLF-safe env sourcing + env-driven ports/health verified ✅ DONE (2026-07-06)
+
+**WORK TYPE:** FIX · **Phase:** Launch / stabilization (NOT a new build-step — the specced build stays complete at 1–39; no step 40 exists) · **Branch:** `feat/39-ai-cost-control`. Ended with `[CHECKPOINT]`.
+
+**Schema/RLS/auth/flag impact:** NONE. No migration, no new table/enum, no flag/permission/role-grant change, no i18n change. Single-file code fix in `deploy.sh` (the port-wiring + public-`/health` parts had already landed in `1d18c15`; this entry also records their end-to-end verification).
+
+**Problem (found via the staging deploy — the point worth remembering):** the deploy died at `source ./.env` with `./.env: line 4: $'\r': command not found` (exit **127**). The server's `./.env` was saved with **Windows/CRLF** line endings; sourcing it on Linux under `set -euo pipefail` is fatal two ways: (a) a blank CRLF line becomes a lone `\r`, which bash tries to run as a command → `command not found` (127) → `set -e` kills the whole deploy; and (b) even on lines that don't error, every value keeps a trailing CR (`API_PORT=$'4001\r'`), which would later corrupt the health-check URL (`http://127.0.0.1:4001\r/health`). The env file is `www`-owned on the server, so a naive in-place rewrite isn't guaranteed writable.
+
+**What changed (`deploy.sh` §2 only):** replaced `set -a; . ./.env; set +a` with a **CR-normalized process-substitution source** — `set -a; source <(sed 's/\r$//' ./.env); set +a`. This strips the trailing CR from **every** line before bash parses it, so the file sources cleanly whether it's LF or CRLF, yields clean values (no `\r` in `API_PORT`/`WEB_PORT`/secrets), and **never mutates** the read-only `www`-owned server file. Added a comment block explaining the failure mode so it isn't "simplified" back. No other file touched.
+
+**Env-driven ports + public /health (already committed in `1d18c15`; verified here end-to-end):** `ecosystem.config.js` reads `API_PORT`/`WEB_PORT` from `process.env` (falling back to prod 4000/3000) and `mp-web` runs `next start -p ${WEB_PORT}`; the NestJS API binds `config.API_PORT` (`@mp/config`, default 4000); `deploy.sh`'s health-check targets `http://127.0.0.1:$API_PORT/health` (never a hardcoded 4000); `GET /health` is `@Public()` and all five global guards honor it (`JwtAuthGuard`, `RolesGuard`, `FeatureGuard`, `ConsentGuard` short-circuit on `IS_PUBLIC`; `TenantContextGuard` only gates `TENANT_SCOPED` routes, which health is not). `.env.example` documents the convention: **staging `API_PORT=4001`/`WEB_PORT=3001`, prod `4000`/`3000`**, carried by each server's `./.env`.
+
+**Verification (end-to-end, real artifacts — not just unit tests):**
+- **CRLF source, reproduced + fixed:** a CRLF fixture with a blank line reproduces the exact reported failure under `set -euo pipefail` (`line N: $'\r': command not found`, outer exit **127**); the new `source <(sed 's/\r$//' …)` path reaches the end with clean values (`APP_ENV=staging`, `API_PORT=4001`, `WEB_PORT=3001`) and a clean URL. `bash -n deploy.sh` → syntax OK.
+- **Live API boot on the env-driven port:** booted the real built `apps/api/dist/main.js` with `API_PORT=4001` sourced via the new CR-normalized read → log `Marham Patti API listening on :4001 [env=staging build=verify-crlf-test]`. Prisma is lazy (no `$connect` at boot), so an unreachable DB did **not** block liveness.
+- **Health public + auth still enforced:** unauthenticated `GET /health` → **HTTP 200** `{"status":"ok","buildId":"verify-crlf-test","ts":…}` (BUILD_ID surfaced from env); unauthenticated `GET /ai/budget` → **HTTP 401** — proving `/health` is a genuine public exception, not auth being disabled, and that the health-check the deploy runs will pass on 4001.
+
 ## Launch hotfix — production `next build` (staging) fix ✅ DONE (2026-07-06)
 
 **WORK TYPE:** FIX · **Phase:** Launch / stabilization (NOT a new build-step — the specced build stays complete at 1–39; no step 40 exists) · **Branch:** `feat/39-ai-cost-control`. Ended with `[CHECKPOINT]`.
