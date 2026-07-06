@@ -1,6 +1,6 @@
 # PROGRESS.md — SpotEdge Trading Bot
 
-**Status:** Module 03 (Exchange connector) DONE/APPROVED (2026-07-06). NEXT → Module 04 Indicator engine (EMA/RSI/ADX/ATR + ≥500-kline warm-up) — spec /specs/04-indicators.md.
+**Status:** Module 04 (Indicator engine) DONE/APPROVED (2026-07-06). NEXT → Module 05 Filter pipeline — spec /specs/05-filter-pipeline.md.
 **Mode policy:** PAPER only until module 15 approved + owner enables LIVE via Telegram
 **Branch:** staging | **Server:** Oracle VPS (GarageBrainPro host) | **Repo:** PRIVATE
 **HARD checkpoints ([FIXED_CHECKPOINT]):** modules 01, 02, 03, 06, 11, 15
@@ -11,7 +11,7 @@
 - [x] 01 Foundation — DONE/APPROVED 2026-07-06 — monorepo + config/logging/scheduler/state shell; typecheck/build/28 tests green; boots + graceful shutdown verified
 - [x] 02 Database — DONE/APPROVED 2026-07-06 — Prisma schema (10 models/7 enums), init migration, seed (settings + 15 pairs), pnl.ts, in-bot 03:30-UTC backup; typecheck/build green, 46 tests (db 14 + bot 32), boot+shutdown verified
 - [x] 03 Exchange connector — DONE/APPROVED 2026-07-06 — BinanceConnector (ccxt+ws) in @spotedge/core: filter compliance (roundQty/roundPrice/minNotional/TP1-split), clientOrderId idempotency, market fills w/ USD fees, stop-limit+watchdog seam, WS resilience+backoff, clock sync, BNB reserve, reconcile (EXTERNAL_CLOSE), PAPER/LIVE ExecutionRouter; typecheck/build green, 88 tests (core 42 + bot 32 + db 14), boot+shutdown verified; testnet integration deferred to server deploy
-- [ ] 04 Indicator engine — not started
+- [x] 04 Indicator engine — DONE/APPROVED 2026-07-06 — @spotedge/core indicators/: math (SMA-seeded EMA, Wilder RSI/ATR/ADX, VolumeAvg20+ratio, emaRising), structure (no-repaint pivots, body-based S/R zones + srFlip, swings/fibZone, range detector w/ 3×ATR + invalidation, bullish engulfing, higher-low+minor-high break, H4 bearish rejection), CandleStore (600-window ×TF, 500-kline warm-up gate on 1h/4h, onClose append + gap-detect/refetch, snapshot → FilterState sink); typecheck/build green, 127 tests (core 81 = +39 indicator, bot 32, db 14); 15-pair snapshot smoke green
 - [ ] 05 Filter pipeline — not started
 - [ ] 06 Risk engine — not started — [FIXED_CHECKPOINT]
 - [ ] 07 Strategy A (Trend-Pullback) — not started
