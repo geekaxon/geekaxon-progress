@@ -1,6 +1,6 @@
 # PROGRESS.md — SpotEdge Trading Bot
 
-**Status:** Module 01 (Foundation) DONE/APPROVED (2026-07-06). NEXT → Module 02 Database (Prisma schema, migrations, backup job) — spec /specs/02-database.md.
+**Status:** Module 02 (Database) DONE/APPROVED (2026-07-06). NEXT → Module 03 Exchange connector (ccxt, Binance filters, reconcile) — spec /specs/03-exchange-connector.md.
 **Mode policy:** PAPER only until module 15 approved + owner enables LIVE via Telegram
 **Branch:** staging | **Server:** Oracle VPS (GarageBrainPro host) | **Repo:** PRIVATE
 **HARD checkpoints ([FIXED_CHECKPOINT]):** modules 01, 02, 03, 06, 11, 15
@@ -9,7 +9,7 @@
 ## Build Order Checklist
 
 - [x] 01 Foundation — DONE/APPROVED 2026-07-06 — monorepo + config/logging/scheduler/state shell; typecheck/build/28 tests green; boots + graceful shutdown verified
-- [ ] 02 Database — not started — [FIXED_CHECKPOINT]
+- [x] 02 Database — DONE/APPROVED 2026-07-06 — Prisma schema (10 models/7 enums), init migration, seed (settings + 15 pairs), pnl.ts, in-bot 03:30-UTC backup; typecheck/build green, 46 tests (db 14 + bot 32), boot+shutdown verified
 - [ ] 03 Exchange connector — not started — [FIXED_CHECKPOINT]
 - [ ] 04 Indicator engine — not started
 - [ ] 05 Filter pipeline — not started
