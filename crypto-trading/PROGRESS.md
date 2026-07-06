@@ -1,6 +1,6 @@
 # PROGRESS.md — SpotEdge Trading Bot
 
-**Status:** Module 07 (Strategy A — Trend-Pullback) DONE/APPROVED (2026-07-06). NEXT → Module 08 Strategy B (Range Reclaim) — spec /specs/08-strategy-b.md.
+**Status:** Module 08 (Strategy B — Range Reclaim) DONE/APPROVED (2026-07-06). NEXT → Module 09 Strategy C (Core Leveling) — spec /specs/09-strategy-c.md.
 **Mode policy:** PAPER only until module 15 approved + owner enables LIVE via Telegram
 **Branch:** staging | **Server:** Oracle VPS (GarageBrainPro host) | **Repo:** PRIVATE
 **HARD checkpoints ([FIXED_CHECKPOINT]):** modules 01, 02, 03, 06, 11, 15
@@ -15,8 +15,7 @@
 - [x] 05 Filter pipeline — DONE/APPROVED 2026-07-06 — @spotedge/core filters/pipeline.ts: ordered veto chain L0 system gates → L1 BTC market (skips BTCUSDT) → L2 trend bias → L3 ADX regime (routes A/B) → L4 S/R 1:2 geometry → L5 discount (WAITING/IN_ZONE/OVERSHOT); first hard-veto short-circuits + named in `blocking`; single FilterState JSON for both renderers; runFilterCycle persists per-pair, exceptions → DATA veto, never throws; typecheck/build green, 157 tests (core 111 = +30 pipeline, bot 32, db 14)
 - [x] 06 Risk engine — DONE/APPROVED 2026-07-06 — @spotedge/core risk/: PURE sizing.ts (PDF formula, tier caps T1 15/T2 10/T3 5%, floored qty so effective risk ≤ intent, computeNetRR w/ round-trip fees, clamp 0.25–2%, SETRISK/SETCAPITAL guards) + engine.ts (ordered 7-check approveEntry veto chain, approveLevelingSell ≤30% + one-owner rule, RiskEngine orchestrator: compounding capital, breaker trip/reset, reporting-only streak, hourly equity + LEDGER_DRIFT); 193 tests
 - [x] 07 Strategy A (Trend-Pullback) — DONE/APPROVED 2026-07-06 — @spotedge/core strategies/: StrategyPlugin interface + StrategyRegistry (central ENABLE/DISABLE + allowedTiers gate before checkEntry) + strategyA.ts (PURE checkEntry — 1H engulfing[vol≥1.3]/higher-low-break trigger inside discount zone, structural stop floored at 1×ATR(H4), TP1 2×/A+ 3× risk, A+ H4-support proximity; PURE manageExit — TP1 50%+breakeven, higher-low trail −0.25×ATR(1H), SL, 24-H4 time stop); Position.trailHistory Json migration; typecheck/build green, 214 tests (core 168 = +21 strategy-A, bot 32, db 14)
-- [ ] 08 Strategy B (Range Reclaim) — not started
-- [ ] 08 Strategy B (Range Reclaim) — not started
+- [x] 08 Strategy B (Range Reclaim) — DONE/APPROVED 2026-07-06 — @spotedge/core strategies/strategyB.ts: PURE checkEntry (resolveRange → floor/ceiling zones from H4 pivots, ≥2 touches, height≥3×ATR via detectRange, freshness gate; armed floor TOUCH RSI(14,H4)<35 within 12 H4; fresh 1H RECLAIM above floor-zone top; two-layer stop min(floorBottom−0.25×ATR, entry−1×ATR), TP1=range midpoint, TP2=ceiling-zone bottom) + PURE manageExit (SL / RANGE_TP+breakout / TP2 RANGE_TP / REGIME_FLIP kill-switch ADX≥20 on H4 close / TP1 50%+breakeven / TIME_STOP 24-H4); allowedTiers=[T1,T2] (registry-enforced); EntryProposal.tp2Price/ceilingTop + Position.tp2Price/ceilingTop migration; typecheck/build green, 241 tests (core 195 = +27 strategy-B, bot 32, db 14)
 - [ ] 09 Strategy C (Core Leveling) — not started
 - [ ] 10 Paper-trading engine — not started
 - [ ] 11 Telegram control panel — not started — [FIXED_CHECKPOINT]
