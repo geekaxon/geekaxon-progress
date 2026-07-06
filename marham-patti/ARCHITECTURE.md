@@ -25,7 +25,7 @@
 4. **Paper-first reality.** Design *for* paper (one-tap tokens, print/handwrite vitals, doctor comfort levels, end-of-day photo→AI register import).
 5. **Tenant isolation is sacred** and is **always-on infrastructure, never a feature flag.** `tenant_id` + RLS on every business table.
 6. **Configurable per tenant (SaaS).** Every capability is a **feature flag** (sub-feature granularity). Flags bundle into **vertical presets** with per-tenant overrides. Disabled features hide in UI **and** are forbidden server-side, cleanly (no orphan routes/nav).
-7. **White-label ready.** Tenant **theme tokens, app identity (name/logo/PWA/letterhead), notification sender identity, and domain resolution** are honored everywhere from the foundation. (Management UI deferred; hooks are not.)
+7. **White-label ready.** Tenant **theme tokens, app identity (name/logo/PWA/letterhead), notification sender identity, and domain resolution** are honored everywhere from the foundation, so a tenant's branding is applied at runtime across every surface.
 8. **No secrets in the repo.** Only `.env.example` placeholders. ARCHITECTURE.md + PROGRESS.md are PUBLIC.
 9. **Design quality + performance are requirements, not polish.** Polished shadcn/ui + tokens, light/dark, motion, animated charts, skeletons — never raw HTML. **Performance is a gate:** 90+ Lighthouse on public/patient-facing surfaces; a strict fast-&-smooth budget on internal tools (§13).
 10. **"Simplicity" = ease of use for non-technical/illiterate users** (plain language, few clicks, large touch targets, icons, voice, Urdu) — NOT a basic look.
@@ -77,7 +77,7 @@ Production `<PROD_APP_HOST>`, Staging `<STAGING_APP_HOST>`. All tenants resolve 
 
 ## 8. Roles (RBAC; `RolesGuard` + `@Roles()` + permission catalog)
 
-`SUPER_ADMIN` (AboveNext, cross-tenant, NON_TENANT keys), `TENANT_OWNER`, `ADMIN`/`MANAGER`, `DOCTOR`, `RECEPTION`, `NURSE`, `LAB_TECH`, `PATHOLOGIST`, `PHARMACIST`, `SALESMAN`, `CASHIER`, `FINANCE`/`ACCOUNTANT`, `PHLEBOTOMIST`, `RIDER`, `CALL_CENTER` (later), `PATIENT`. Custom tenant roles supported (SaaS). Permissions are catalog-driven string keys, seeded + reconciled on boot. **Permissions are gated behind flags** (a role only matters for a capability the tenant has).
+`SUPER_ADMIN` (AboveNext, cross-tenant, NON_TENANT keys), `TENANT_OWNER`, `ADMIN`/`MANAGER`, `DOCTOR`, `RECEPTION`, `NURSE`, `LAB_TECH`, `PATHOLOGIST`, `PHARMACIST`, `SALESMAN`, `CASHIER`, `FINANCE`/`ACCOUNTANT`, `PHLEBOTOMIST`, `RIDER`, `PATIENT`. Custom tenant roles supported (SaaS). Permissions are catalog-driven string keys, seeded + reconciled on boot. **Permissions are gated behind flags** (a role only matters for a capability the tenant has).
 
 ## 9. Auth
 
@@ -140,7 +140,7 @@ These are the canonical defaults baked into `@mp/brand`/`@mp/ui`; a tenant may o
 
 ## 14. BUILD ORDER (canonical — continuous numbering; phase = label)
 
-> Strict order, one step at a time, foundation/security first. Each step has `specs/NN-slug.md`. Deferred steps carry **stub specs** marked `[DECIDE AT BUILD]` so the build never halts on a missing file before launch scope completes.
+> Strict order, one step at a time, foundation/security first. Each step has `specs/NN-slug.md`. The specced product is **steps 1–39** (below); that is the whole build. If a referenced spec file is missing or empty, the agent STOPS with `[HUMAN_REQUIRED]` rather than guessing.
 
 **FOUNDATION (platform, security, SaaS control, white-label, design+perf)**
 1. `01-foundation-monorepo` — Monorepo, packages, DB/Prisma base, health endpoint, deploy.sh, CI, base config.
@@ -149,7 +149,7 @@ These are the canonical defaults baked into `@mp/brand`/`@mp/ui`; a tenant may o
 4. `04-rbac-permissions` — Role model, permission catalog (seed + boot reconcile), guards.
 5. `05-capabilities-flags` — **Feature-flag engine** (`@mp/flags`): flag catalog (sub-feature), **vertical presets** (Pharmacy/Lab/Clinic/Clinic+Pharmacy/Full), per-tenant overrides, `isFeatureEnabled`, flag-then-permission precedence, clean "off" behavior.
 6. `06-audit-log` — Global AuditLog, sensitive-read auditing, StockMovement pattern, query UI.
-7. `07-branding-whitelabel` — `@mp/brand`: tenant theme tokens (default = §11), app identity (name/logo/PWA/letterhead), **notification sender identity hook**, domain-aware branding. Hooks + theming now; management UI deferred.
+7. `07-branding-whitelabel` — `@mp/brand`: tenant theme tokens (default = §11), app identity (name/logo/PWA/letterhead), **notification sender identity hook**, domain-aware branding — applied at runtime across all surfaces via a `brand.manage` settings screen.
 8. `08-i18n-base` — EN+UR UI i18n + parity gate + RTL; AI-language scaffold (EN+UR+Roman).
 9. `09-notifications-engine` — Provider-agnostic WhatsApp/SMS/in-app, templates, delivery status, OTP transport, per-tenant sender. `[DECIDE AT BUILD]` provider/number.
 10. `10-offline-core` — Local-first store, action queue, idempotent sync, conflict policy + compensating-write hook.
@@ -191,13 +191,7 @@ These are the canonical defaults baked into `@mp/brand`/`@mp/ui`; a tenant may o
 38. `38-ai-feedback-learning` — 👍/👎 + correction → per-tenant memory/rules; safety-critical rules human-reviewed; no unsafe retraining. *(flag `ai.suite`)*
 39. `39-ai-cost-control` — Live spend meter, per-task provider/model selection, budget caps, quality-first routing surface. *(flag `ai.suite`)*
 
-**DEFERRED (stub specs only — `[DECIDE AT BUILD]`; not built before launch scope)**
-40. `40-whitelabel-admin` — *(stub)* White-label **management UI** (tenant theme/identity/sender/domain editor) on top of the `07` hooks.
-41. `41-saas-admin-console` — *(stub)* Platform (SUPER_ADMIN) console: onboarding wizard, tenant list/health, preset assignment + per-tenant flag overrides UI, custom forms/catalogs.
-42. `42-subscription-billing` — *(stub)* Plans (Basic/Pro/Enterprise), monthly/yearly, module/usage pricing, limits, invoices, trial. **Depends on 41.**
-43. `43-crm-callcenter` — *(stub)* Calls, confirmations, complaints, follow-up/lost-patient campaigns, dispositions.
-44. `44-telemedicine` — *(stub)* Video/chat consult, report sharing, e-prescription after call, waiting room.
-45. `45-pharmacy-marketplace` — *(stub)* Multi-vendor, cross-tenant price comparison, per-order commission, payouts, ratings. **Depends on 41.** Build order: 41 → 42 → 45.
+> **This is the complete build. Launch scope = build-steps 1–39, and 1–39 is the entire specced product.** The build order ends here. There are no further specced steps; any future capability is added as a new, fully-authored `specs/NN-slug.md` (starting at 40) only when its requirements are defined — never improvised. A missing spec is always a hard stop (`[HUMAN_REQUIRED]`), never a cue to guess.
 
 ## 15. Deployment (deploy.sh spec for THIS stack)
 
