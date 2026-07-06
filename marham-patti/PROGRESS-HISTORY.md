@@ -10,6 +10,44 @@
 
 ---
 
+## Launch hotfix — production `next build` (staging) fix ✅ DONE (2026-07-06)
+
+**WORK TYPE:** FIX · **Phase:** Launch / stabilization (NOT a new build-step — the specced build stays complete at 1–39; no step 40 exists) · **Branch:** `feat/39-ai-cost-control`. Ended with `[CHECKPOINT]`.
+
+**Schema/RLS/auth/flag impact:** NONE. No migration, no new table/enum, no flag or permission change, no role-grant change. Pure code/build-config fix. i18n: **+7 EN+UR key pairs** (`notFoundTitle/Body/Home`, `errorTitle/Body/Retry/Home`) — parity kept.
+
+**Problem (found via the FIRST production deploy — the point worth remembering):** every dev/CI turbo gate (typecheck/lint/build/test/i18n) was green, but the STAGING deploy failed at `deploy.sh`'s real production build step. `next build` (App Router, `apps/web`) died during **static page generation**:
+
+```
+Error: <Html> should not be imported outside of pages/_document.
+Error occurred prerendering page "/404".
+Export encountered an error on /_error: /404, exiting the build.
+⨯ Next.js build worker exited with code: 1
+```
+
+This is the classic "passes dev gates, fails the real `next build`" gap: dev/`next dev` never statically prerenders `/404` + `/_error`, so the defect only surfaces on the production export the deploy runs.
+
+**Root cause:** `apps/web` is a pure **Next 15 App Router** project — there is NO `pages/` directory and ZERO imports of `Html/Head/Main/NextScript` from `next/document` anywhere in the repo (verified by grep). The failure was the *absence* of an App-Router error surface: with no `app/not-found.tsx`/`error.tsx`/`global-error.tsx`, Next fell back to its **internal Pages-Router** `/404` + `/_error` pages, which import `<Html>` from `next/document`. Prerendering that fallback under the App Router trips the guard and aborts the export.
+
+**Fix — own the App-Router error surface (makes the Pages fallback unreachable):**
+- `apps/web/app/not-found.tsx` — **server** component. Opens in the visitor's persisted UI language via `serverLocale` + the shared `@mp/i18n` catalog (`tr`/`dir` adapter), EN default / UR flips RTL. @mp/ui brand tokens (`text-brand-teal-deep`, `bg-background`, `text-foreground`, `text-muted-foreground`, `font-display`) + `Button asChild` → `<Link href="/">`. No client JS.
+- `apps/web/app/error.tsx` — **client** route-segment boundary (Next contract). Renders INSIDE the root layout, so the i18n/theme/brand providers are live → uses `useI18n()` for active-language copy + `dir`; `reset()` retry + Back-to-home. Logs `error` (digest) to console only.
+- `apps/web/app/global-error.tsx` — **client**, last-resort boundary that REPLACES the root layout when the layout itself throws → renders its own `<html>`/`<body>` and cannot use the providers or `globals.css`. Fully self-contained: brand `--brand-*` CSS vars applied inline via `brandCssVars()`, copy pulled straight from `@mp/i18n`, locale read from the `mp.locale` cookie (EN first paint → adopt cookie in `useEffect`), inline-styled retry button on `--brand-teal`.
+- i18n: +7 flat keys added to BOTH `packages/i18n/src/messages/en.json` and `ur.json` (parity gate stays 19/19).
+
+**Fix — non-standard `NODE_ENV` warning (per ARCHITECTURE):** the build also logged "You are using a non-standard NODE_ENV value." `NODE_ENV` must ONLY ever be a standard Next.js value (production / development / test); the staging-vs-prod distinction is carried by our separate **`APP_ENV`**. `deploy.sh` §2b now normalizes after sourcing the server `./.env`: if `APP_ENV` is unset it adopts the deploy env (defaulting to `staging`, since deploy.sh only ever deploys the staging branch), then **pins `NODE_ENV=production`** for the build. `ecosystem.config.js` inlines `APP_ENV` (from the deploy env, default `production`) into every app's `env` alongside the standard `NODE_ENV: 'production'`, so the runtime sees it explicitly via `pm2 --update-env`.
+
+**Screenshot-token gate still fail-closes after the change:** `screenshotBypassEnabled` = `(APP_ENV ?? NODE_ENV) === 'staging'`. New env shape — staging: `APP_ENV=staging`, `NODE_ENV=production` → **enabled**; prod: `APP_ENV=production` → **off**; wrong/absent token in staging → **403**. The exact cases (`{APP_ENV:'staging',NODE_ENV:'production'}→true`, `{APP_ENV:'production',NODE_ENV:'staging'}→false`) are covered by `packages/ui/src/lib/screenshot.spec.ts` (part of ui 38/38 pass), so the gate remains correct and fail-closed.
+
+**Minor:** `packages/ui/package.json` → `"type": "module"` to clear the `tailwind-preset.js` "module type not specified" Node warning (dist is already ESM). Its CommonJS `jest.config.js` was renamed to `jest.config.cjs` so jest keeps loading it as CommonJS under `type: module` (ui tests stay green at 38/38).
+
+**Verification (the deploy.sh way, not just dev gates):**
+- **Full production build** with `NODE_ENV=production APP_ENV=staging BUILD_ID=…` `pnpm turbo run build` → **15/15 tasks OK**, static generation completes, `/_not-found` route emitted, and a forced `next build` shows **no `<Html>`/prerender error, no "non-standard NODE_ENV" warning, no `tailwind-preset` module-type warning**.
+- **Live render** (`next start`, prod build): a missing route returns **HTTP 404** with EN "Page not found" + "Back to home" + brand token `text-brand-teal-deep` + `dir="ltr"`; with cookie `mp.locale=ur` → "صفحہ نہیں ملا" + "ہوم پر واپس" + `dir="rtl"` (RTL flip). Confirms @mp/ui tokens + EN/UR i18n honored.
+- **All gates:** typecheck **27/27** · lint **15/15** (0 errors; 1 pre-existing unused-`eslint-disable` warning in `@mp/api`, untouched) · jest **api 864/864 + db 178/178 + ui 38/38 + i18n 19/19 (parity)**.
+
+---
+
 ## Build-step 39 — AI Suite: Cost Control & Quality Routing (`ai.suite`) ✅ DONE/APPROVED (2026-07-05)
 
 **WORK TYPE:** FEATURE · **Phase:** AI Suite (item 5) · **Branch:** `feat/39-ai-cost-control` (stacked on `feat/38-ai-feedback-learning`). **This completes launch scope (build-steps 1–39).** Depends on 35 (cost capture / budget primitive), 24 (dashboard), 06 (audit). Ended with `[CHECKPOINT]`.
