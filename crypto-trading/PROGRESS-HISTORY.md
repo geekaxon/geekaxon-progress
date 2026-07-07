@@ -402,3 +402,214 @@ Next.js already type-checks the dashboard as part of `next build` (with `typescr
 - Build order is now COMPLETE: modules 01–17 all DONE/APPROVED. No further module queued.
 
 **Checkpoint printed:** [CHECKPOINT]
+
+---
+
+## Module 18 — Runtime Trading Engine (composition root) — DONE/APPROVED 2026-07-07 — [FIXED_CHECKPOINT]
+
+**Work type:** FEATURE (branch `feature/18-runtime-trading-engine`). New capability: the long-lived loop that turns the built-but-idle libraries into a running bot.
+
+### Why this existed
+An audit of the full build found every trading component correct, tested, and present — indicators, filter pipeline, strategies A/B/C, risk engine, paper executor, exchange connector, live routing — but NOTHING drove them at runtime. `apps/bot/src/main.ts` constructed the connector WITHOUT calling `init()`, started the scheduler, and the only `close_1h`/`close_4h`/tick consumers were a debug log + the daily summary. `PaperTradingEngine`, `runFilterCycle`, `checkEntry`, `manageExit`, `subscribeTicker`, `reconcile()`, `onDailyRollover()` were never invoked outside tests. Each earlier module deferred its runtime wiring as a "deploy-time gate"; that wiring was never built. Module 18 builds it.
+
+### What was discovered missing (built from scratch, not just assembled)
+Beyond the composition root, three pieces the earlier modules assumed existed did NOT:
+1. **Prisma `LedgerRepository`** — only the in-memory backtest ledger existed. Built `apps/bot/src/ledger.ts` (`createPrismaLedger`) implementing the module-10 paper-engine `LedgerRepository` over Prisma Position/Fill/Trade/LevelingCycle, mode-scoped, Decimal-as-string. Plus `loadLivePositionsForReconcile` + `createReconcileHandler` (EXTERNAL_CLOSE → mark position + settle) for the boot reconcile.
+2. **Prisma RiskEngine adapters** — no construction of `RiskEngine` or its ports existed anywhere. Built `apps/bot/src/risk.ts` (`createRiskEngine`) implementing `RiskSettingsReader` (SYSTEM settings), `RiskLedgerReader` (realized = Trade.netPnlUsd + LevelingCycle.chunkPnlUsd; deployed cost = qtyRemaining×avgEntry; unrealized marked from the live tick map; freeUsdt injected per mode; recentLossStreak from trailing closed trades), `EquitySnapshotSink` (EquitySnapshot rows).
+3. **PaperExecutor → PaperTradingEngine wiring** — none existed in apps/bot; the connector fell back to the fail-closed `UnwiredPaperRouter`. Wired in `main.ts`: `PaperExecutor` seeded from `capital_paper`, priced off a shared `marks` map, tierOf from a pair→tier map, bnbFeesActive cached at boot.
+
+### The composition root — `apps/bot/src/engine.ts` (`TradingEngine`)
+- **Startup:** `exchange.init()` (was never called); build one `CandleStore` (1h/4h) and warm every active pair in the BACKGROUND (isWarm gate handles eligibility; boot stays fast; un-warm pairs skipped by the close loop and warmed on the next cycle); construct paper (and, when live-capable, live) `PaperTradingEngine`; boot `reconcile()` (LIVE positions only — no-op in paper) + `rebuildStops()` so a restart re-arms stops without double-ordering.
+- **close_1h:** refresh 1H candles → `runFilterCycle` (persists FilterState via a Prisma `filterState` upsert sink, the SOLE writer — CandleStore given no sink to avoid a double-write race) → for eligible+unowned pairs `registry.checkEntry` → `riskEngine.approveEntry(proposal, state)` → `engine.openPosition` + entry notification; then `manageExit` on every open position; `settleDrain`; hourly equity snapshot.
+- **close_4h:** refresh 4H → `manageExit` with `onH4Close` (increments h4CandlesOpen → time-stop / regime-flip) → Strategy-C leveling SELL checks on T1 symbols with a declared `core_<symbol>` bag, C enabled, no open cycle, not A/B-owned → `strategyC.checkSell` → `riskEngine.approveLevelingSell` → `engine.openLevelingSell`.
+- **daily_rollover:** `riskEngine.onDailyRollover` for PAPER (+ LIVE when capable) — breaker auto-reset (was never called).
+- **Real-time ticker loop:** `subscribeTicker(activeSymbols, cb)` → every tick updates the shared `marks` map synchronously (feeds PaperExecutor.priceOf + risk marks); for symbols with open exposure (in-memory `exposed` set refreshed each cycle) → `engine.onTick` (watchdog force-sell + trail) and `engine.manageRebuys` with `onClose:false` (Strategy-C FORCED rebuy — the insurance path, never waits for a close).
+- **State awareness (module 15):** `placesEntries(state)` gates entries (PAUSED/STOPPED place none); `isStopped(state)` is the kill switch (no filter cycle, no management, exchange stops left in place); DRAINING routes each order by the position's booked mode via the **two mode-scoped engines** (management runs each mode's positions on ITS engine; entries book under `entryMode(state)`). This is the routing truth table expressed as topology; the connector `assertLive` fence stays the hard backstop.
+- **Concurrency:** all scheduler-driven work serialized through a single promise queue (1h/4h/rollover never interleave); ticks guarded per-symbol and skipped while a cycle runs; per-symbol try/catch so one bad symbol never halts the loop (mirrors the pipeline's DATA-veto isolation).
+- **Idempotent restart:** reconcile + rebuildStops + existing clientOrderId idempotency → no double-ordering on a PM2 restart.
+- **Graceful stop:** `engine.stop()` quiesces (removes scheduler listeners, drains the in-flight cycle), LEAVES exchange stops in place (never market-closes on shutdown), ordered BEFORE `exchange.close()` in the shutdown hooks.
+
+### Preflight + STATUS truthfulness
+- `preflight.ts` runtime handles (`wsConnected`/`pairsWarm`/`reconcileClean`) now read the running engine (injected via `PreflightRuntime`), so `MODE LIVE` pre-flight reflects reality instead of failing closed.
+- STATUS: `ExchangePort.engineHealth()` added (warm-pair count, active pairs, last-cycle time) + `wsHealth()` wired; `StatusView` gained `warmPairs`/`lastCycleAt`; `renderStatus` shows `Warm pairs: X/Y` + `Last cycle:`. `WS:` no longer prints "n/a (engine offline)" once ticks flow.
+
+### The two-engine / money-routing decision (CODEREF §7)
+The `PaperTradingEngine` is mode-scoped (`deps.mode` fixes both ledger scoping and executor). During DRAINING both modes hold open positions needing management under their booked mode, so a single instance cannot suffice — wired TWO instances (paper always; live only when `cfg.MODE === "LIVE"`, the operator's deploy act) and route by position mode. In PAPER-only operation the live engine is never constructed and no real order can fire — the agent places no mainnet order. The live executor is a thin adapter over the connector's order methods (which already delegate to the internal `LiveExecutionRouter` + `assertLive`).
+
+### Gate results
+- typecheck + build: **8/8 turbo tasks green** (all 4 packages, incl. `next build` type-check).
+- tests: **463 passed** (core 333, bot 96 [+5 new engine integration], db 14, dashboard 20). No prior test regressed by the StatusView/render/ports additions (additive/optional).
+- New `apps/bot/src/__tests__/engine.test.ts`: fake scheduler + fake connector drive a scripted candle+tick through the REAL pipeline seam / strategy / risk / paper code — asserts warm-up + real health (not offline); FilterState persisted → proposal → risk approval → `openPosition` (Position + entry Fill from the actual fill); a tick through the stop → watchdog force-sell → CLOSED position + Trade row with a net-of-fees loss + booked fees; PAUSED places no entries but still evaluates filters; STOPPED runs no filter cycle at all (kill switch); daily_rollover does not throw.
+- Fence: `routing.test.ts` + `paper.executor.test.ts` still green (33 tests); no direct `live*`/`marketBuy`/`marketSell` call in engine.ts.
+
+### Files
+- NEW: `apps/bot/src/engine.ts`, `apps/bot/src/ledger.ts`, `apps/bot/src/risk.ts`, `apps/bot/src/__tests__/engine.test.ts`.
+- EDIT: `apps/bot/src/main.ts` (assemble + start the engine, exchange ServiceContext port, preflight runtime, `engine.stop()` shutdown hook, `liveRouterFrom` adapter); `apps/bot/src/preflight.ts` (unchanged shape — runtime now passed from main.ts); `apps/bot/src/telegram/render.ts` (warm pairs + last cycle); `packages/core/src/services/ports.ts` (`ExchangePort.engineHealth`); `packages/core/src/services/control.ts` (`StatusView` + `getStatus`).
+
+### Notes / deploy-time [HUMAN_REQUIRED]
+- The **48h continuous PAPER smoke on the VPS** (the deferred module-10 gate) is reviewed via logs by the controller before this is considered operationally proven — not runnable here.
+- LIVE activation stays the operator's act: real Binance key (`cfg.MODE=LIVE` at deploy makes the connector live-capable) + testnet dress-rehearsal + a PASSING pre-flight + typed CONFIRM LIVE. The agent constructs the live path but never places a mainnet order.
+- `bnb_fees_active` is sampled once at boot for the PaperExecutor fee model (refreshes on restart); the risk engine reads it live.
+- SETCORE at runtime writes `core_<symbol>` but the paper executor's virtual base bag seeds at boot — a fresh core bag becomes sellable after the next restart (noted limitation; acceptable for paper).
+
+**Checkpoint printed:** [CHECKPOINT]
+
+## Module 19 — Dashboard Root-Env Loading Hotfix — DONE/APPROVED 2026-07-07 — [CHECKPOINT]
+
+**Work type:** FIX (branch `fix/dashboard-env-hotfix`). Correction to module 14 (dashboard). Small, non-money.
+
+### Why this existed
+On the server the Next.js dashboard could not read `DASHBOARD_SESSION_SECRET` / `DASHBOARD_USERNAME` / `DASHBOARD_PASSWORD` / `DATABASE_URL` from the monorepo-root `.env` — login failed with "DASHBOARD_SESSION_SECRET is missing or too short". Unlike the bot (module 16), the dashboard did not load the root `.env` in code; under PM2 (`cwd: apps/dashboard`) the vars were absent from the process. The operator's stopgap was a manual symlink `apps/dashboard/.env.local -> ../../.env` (Next auto-loads `.env.local`), but a fresh clone lacks it. This module makes the dashboard load the root `.env` in code, matching the bot, so the symlink is no longer required.
+
+### What was found already in place vs. built
+- **Already present (module 14):** `apps/dashboard/instrumentation.ts` `register()` calling `@spotedge/core/env/loadRootEnv` under a `NEXT_RUNTIME === "nodejs"` guard; `lib/config.ts` with LAZY per-request reads and a fail-closed `sessionSecret()` throw. Required change #1 and #2 were therefore satisfied by the existing seam.
+- **Built this module:** the acceptance-required **single masked startup log line** (`register()` was previously silent) + `maskPath()` helper; ecosystem.config.js comment rewritten (env now loads in-code, symlink no longer required); PROGRESS records.
+
+### The edge-runtime question (spec edge case) — resolved by inspection, not assumed
+The middleware runs in the **edge runtime**, where the Node-only `loadRootEnv` (uses `node:fs`/`path`) cannot run — so it reads `process.env.DASHBOARD_SESSION_SECRET` directly. Concern: is that value provided to the edge sandbox once the symlink is gone? Verified empirically against the compiled bundle: `grep process.env.DASHBOARD_SESSION_SECRET apps/dashboard/.next/server/middleware.js` → the secret is a **RUNTIME read, NOT inlined at build** (the local build had NO `.env.local`/symlink and NO root `.env`, yet the runtime read remained). Since `next start` is a single Node process and Next **awaits `instrumentation.register()` during bootstrap BEFORE serving any request**, `loadRootEnv()` mutates `process.env` before the edge middleware sandbox is snapshotted on the first request. Therefore both runtimes see the loaded secret and no `[HUMAN_REQUIRED]` stop was warranted. `loadRootEnv` uses dotenv **no-override**, so a real preset process env still wins.
+
+### Files
+- EDIT: `apps/dashboard/instrumentation.ts` — added `maskPath()` + a single `console.log("[dashboard] root .env loaded from …/<parent>/.env")` on success (masked; the value is never logged), and a benign "not found — using process env as-is" line for dev/CI. Enriched the header comment documenting the nodejs+edge propagation guarantee.
+- EDIT: `ecosystem.config.js` — dashboard `trading-dashboard` ENV comment rewritten: env loads in-code via instrumentation.ts (like the bot), the `apps/dashboard/.env.local` symlink is NO LONGER required (delete on server; fresh clone works), no dotenv preload / node_args / DOTENV_CONFIG_PATH.
+- No change needed: `deploy.sh` already documents "no symlinks / no dotenv-cli"; `lib/config.ts` already lazy + fail-closed; `.gitignore` already ignores `.env`, `.env.local`, `.env.*.local` (only `.env.example` template is tracked).
+
+### Gate results
+- build: **4/4 turbo tasks green** (core → bot → dashboard `next build`); fresh `middleware.js` re-confirmed to runtime-read the secret.
+- typecheck: **8/8 green** (dashboard defers to `next build` per module 17).
+- tests: **463 passed** (core 333, bot 96, db 14, dashboard 20) — unchanged; instrumentation change has no runtime surface a unit test drives.
+
+### Notes / deploy-time
+- Operator action on the server: delete the `apps/dashboard/.env.local` symlink and restart the dashboard; login must still work (acceptance). Fresh clone + root `.env` + `next build` + `pm2 start` → login works with no symlink.
+
+**Checkpoint printed:** [CHECKPOINT]
+
+---
+
+## Module 20 — Dashboard ccxt Import-Chain Fix (correction to module 14) — DONE/APPROVED 2026-07-07 — [CHECKPOINT]
+
+**Work type:** FIX (correction to shipped module 14 dashboard). Branch `fix/dashboard-ccxt-import`.
+
+### Problem
+The dashboard is a SEPARATE process from the bot; its API routes only read the ledger / render reports / issue control actions through the shared `@spotedge/core` service layer — they never talk to the exchange. But every route imported the main barrel `import { ... } from "@spotedge/core"`, and `packages/core/src/index.ts` does `export * from "./exchange/BinanceConnector.js"`. `BinanceConnector.ts` is the ONLY file in the package that imports `ccxt` (audited: `grep -rln "from \"ccxt\"" src` → exactly `exchange/BinanceConnector.ts`). `ccxt` is a bot-only dependency and is not resolvable from the dashboard's runtime, so the routes threw `Error: Cannot find module 'ccxt'` at runtime (/api/overview, /api/equity, /api/status, …). Effect: the dashboard could not read engine status and showed "offline" even though the bot engine was fully running (Telegram STATUS confirmed WS connected, 15/15 warm, cycles firing). The engine was fine; only the dashboard's data APIs were broken.
+
+### Audit (why the fix is a one-line-boundary, not a refactor)
+Traced the import graph. Only `BinanceConnector.ts` imports `ccxt`. The only RUNTIME importer of `./exchange/BinanceConnector.js` is `index.ts` itself. Everything else in the package is connector-free:
+- `exchange/types.ts` — pure types + `TF_MS` (imports only `@spotedge/db` types).
+- `exchange/ExecutionRouter.ts` — interface + types only (`@spotedge/db` type, `./types.js`); `BinanceConnector` imports FROM it, not the reverse.
+- `exchange/routing.ts`, `exchange/reconcile.ts`, `exchange/filters.ts`, `exchange/fees.ts`, `exchange/backoff.ts`, `exchange/clientOrderId.ts` — pure.
+- `services/control.ts`, `services/reports.ts`, `services/liveEnable.ts`, `services/ports.ts`, `services/engineState.ts` — import only db types, utils/money, utils/time, risk/*, strategies/*, backtest/types (types). No exchange runtime import. All view types + `runBacktestCommand` live in `services/control.ts`.
+- `backtest/feed.ts`, `backtest/engine.ts`, `backtest/ledger.ts`, `backtest/metrics.ts` — import `exchange/types.js` (pure) + paper engine + indicators/risk/strategies; `paper/PaperExecutor.ts` and `paper/engine.ts` import `ExecutionRouter` (the interface) with `import type`. None reach `BinanceConnector`.
+
+Conclusion: excluding the single `BinanceConnector.js` re-export yields a fully connector-free surface — so `dashboard.ts` = `index.ts` minus that one line.
+
+### Change (CODEREF Fix A — clean module boundary; Fallback B not needed)
+1. **`packages/core/src/dashboard.ts`** (new) — a barrel re-exporting the connector-free surface: every `export *` in `index.ts` EXCEPT `./exchange/BinanceConnector.js`. Strong header comment documents WHY and the INVARIANT (never add BinanceConnector or any new ccxt importer here).
+2. **`packages/core/package.json`** — added the subpath to the `exports` map:
+   `"./dashboard": { "types": "./dist/dashboard.d.ts", "default": "./dist/dashboard.js" }`. `tsc -p tsconfig.json` compiles `src/dashboard.ts` → `dist/dashboard.js` automatically.
+3. **Repointed all 17 dashboard imports** `from "@spotedge/core"` → `from "@spotedge/core/dashboard"` across `apps/dashboard/app/api/**/route.ts` and `apps/dashboard/lib/**` (sed; regex `from "@spotedge/core"` with the closing quote directly after `core` does NOT match `@spotedge/core/env/loadRootEnv`, which stays as-is). Verified: 17 `/dashboard` imports, `loadRootEnv` import in `instrumentation.ts` preserved, zero bare-barrel imports remain.
+4. **Bot unchanged** — `apps/bot` keeps importing the full `@spotedge/core` barrel (it needs the connector).
+
+### Test (acceptance: dist require-graph contains no ccxt)
+New **`packages/core/src/__tests__/dashboardBarrel.test.ts`** (4 tests): statically BFS-traces the module graph reachable from `src/dashboard.ts` by following every `import/export ... from "..."` specifier (relative `.js` → `.ts` source), asserting (a) no reachable module imports `ccxt`, (b) `exchange/BinanceConnector` is never in the file set, (c) the connector-free service/report/backtest/indicator modules ARE reachable (sanity), and (d) when a build is present, the emitted `dist/dashboard.js` graph likewise contains no `ccxt` / BinanceConnector. (Comment lines in `dist/dashboard.js` that mention "BinanceConnector" are not `from "..."` specifiers, so the trace correctly ignores them.)
+
+### Gate results
+- `pnpm --filter @spotedge/core build` → green (tsc, emits `dist/dashboard.js` + `.d.ts`).
+- `pnpm --filter @spotedge/dashboard build` → green; `next build` compiled all routes with the `@spotedge/core/dashboard` subpath (middleware 40.2 kB; all /api routes built).
+- `pnpm turbo typecheck` → 8/8 successful (bot/core/db typecheck + dashboard build-then-typecheck per module 17).
+- `pnpm -r test` → **467 passed** — core 337 (+4 dashboardBarrel), bot 96, db 14, dashboard 20.
+
+### Files
+- ADDED `packages/core/src/dashboard.ts`
+- ADDED `packages/core/src/__tests__/dashboardBarrel.test.ts`
+- EDIT  `packages/core/package.json` (exports map: `./dashboard` subpath)
+- EDIT  17 dashboard files — repointed `@spotedge/core` → `@spotedge/core/dashboard`:
+  `apps/dashboard/app/api/{overview,equity,status,trades,trades/export,reports,pipeline,control,settings,backtest,pair/[symbol]}/route.ts`, `apps/dashboard/lib/{types.ts,route-helpers.ts,backtest-runner.ts,services/context.ts}`
+
+### DO-NOT-BREAK verification
+1. Bot still imports the full barrel — untouched (0 bot files changed). ✓
+2. No business logic moved — only export/import re-organization. ✓
+3. `@spotedge/core/env/loadRootEnv` subpath + dashboard `instrumentation.ts` intact. ✓
+4. All prior tests green; added the ccxt-graph assertion test. ✓
+
+### Notes / deploy-time
+- Deploy: `pnpm --filter @spotedge/dashboard build && pm2 restart trading-dashboard` on the VPS → NO `Cannot find module 'ccxt'`; `/api/overview`, `/api/equity`, `/api/status` return 200 with data; dashboard flips "offline"→"online". Bot unaffected (STATUS still connected; trading continues).
+- INVARIANT for future work: never add a `ccxt`-importing module (e.g. `BinanceConnector.js`) to `dashboard.ts`; `dashboardBarrel.test.ts` guards this.
+
+**Checkpoint printed:** [CHECKPOINT]
+
+---
+
+## Module 21 — Dashboard Status/Equity Export Fix (correction to modules 14/20) — DONE/APPROVED 2026-07-07
+
+**Spec:** `/specs/21-dashboard-status-export-fix.md`. Follow-up to module 20.
+
+**Symptom (from the trading-dashboard error log):** after module 20 introduced the `@spotedge/core/dashboard` subpath, `/api/status`, `/api/equity`, `/api/overview` returned 500 with `TypeError: … is not a function`. The `Cannot find module 'ccxt'` was GONE (module 20 worked). `/api/status` erroring → the dashboard never read the bot heartbeat → showed "offline / controls disabled" even though the engine was fully live (Telegram STATUS: WS connected, 15/15 warm, cycles firing; Pipeline page rendered correctly).
+
+**Investigation (spec step 1–3) — the spec's "missing/type-only re-export" hypothesis was NOT borne out in the repo:**
+- This box has **no DB / no running dashboard / not the server host** (no `.env`, no postgres, no pm2), so the live 500 could not be reproduced directly.
+- `packages/core/src/dashboard.ts` and `index.ts` are **identical except the single `./exchange/BinanceConnector.js` line**. Every symbol the three routes import — `getStatus`, `getBalance`, `getPnl`, `getLogs`, `equityCurve`, `money` — is a runtime VALUE: verified by importing the built `dist/dashboard.js` in node (`typeof === "function"` / object), by a duplicate-export scan across all barrel modules (**none**), and by an undefined-export scan (**none of 211 exports undefined**).
+- The **bot imports `getStatus` via the FULL barrel** (`apps/bot/src/telegram/handlers.ts:25`) and Telegram STATUS works — a barrel collision would break the bot too. Removing a module from a barrel can only RESOLVE `export *` ambiguities, never create them.
+- `@spotedge/core` is in the dashboard's `serverExternalPackages`, so it is `require()`d at runtime (the real dist, which works), NOT bundled/minified by Next — so the minified `a[d] is not a function` is not mis-mangled core code.
+- Calling `getStatus`/`getBalance`/`getPnl`/`getLogs`/`equityCurve` against a seeded in-memory `ServiceContext` (dashboard-shaped: `exchange`/`backtest` undefined) returns real data with **no throw**.
+- **Conclusion:** the repo code is correct; the server 500 was a STALE/partial deployed build (a newly-added function/port method momentarily undefined). The durable fix is resilience + a regression lock, plus the deploy-time rebuild the spec already mandates (Fix step 3).
+
+**Fix (spec Fix + edge-case #2 + acceptance "partial 200 with nulls, not a 500"):**
+- New **`apps/dashboard/lib/degrade.ts`** (pure — no `server-only`/Prisma import side-effects, so trivially unit-testable): `degradeTracker().safe(label, fn, fallback)` runs each independent fetch, logs + records the label and returns `fallback` on throw, and exposes `degraded`/`failed`. Plus shape-complete typed fallbacks `emptyStatus` / `emptyBalance` / `emptyPnl` so the client never sees `undefined`.
+- **`app/api/status/route.ts`** rewritten: `state`/`mode`/`liveGateOpen` and the bot heartbeat are read directly off the (cheap, exchange-free) context/DB, and the richer `getStatus()` fields (open positions, breaker) are guarded. → the control bar flips **online** and enables controls even if `getStatus()` degrades. Returns `degraded`.
+- **`app/api/equity/route.ts`**: each mode's curve guarded independently → a failure degrades to `[]`, not a 500.
+- **`app/api/overview/route.ts`**: every parallel fetch (`getStatus`/`getBalance`/`getPnl`×3/`openPositions`/`getLogs`/`isBotOnline`/`lastPrices`) wrapped in `safe()` with a typed fallback; returns `degraded`. `botOnline` from the independent `isBotOnline()` read → the "Bot process offline" banner hides while the bot is live.
+- `lib/types.ts`: `OverviewResponse.degraded: boolean` added (matches the existing `PairDetailResponse.degraded` "degraded banner" design). Frontend already consumes every field defensively (`data?.x ?? default`, `DegradedBanner`, `EmptyState`) — no page changes needed.
+
+**Boundary preserved:** routes still import only from `@spotedge/core/dashboard`; `lib/degrade.ts` imports only TYPES from core. `dashboardBarrel.test.ts` (no ccxt/BinanceConnector reachable) still green.
+
+**Test — new `apps/dashboard/lib/__tests__/data-routes.smoke.test.ts` (+10):**
+1. **Export-presence:** every symbol the 3 routes import from `@spotedge/core/dashboard` is `typeof function`/object (the CI-enforceable form of the spec diagnosis — catches a future type-only/missing re-export).
+2. **Seeded data path:** an in-memory `ServiceContext` (one open SOL position, closed ETH trade, two equity snapshots, one event) → `getStatus` (openPositions 1, activePairs 2), `equityCurve` (gap-filled, last `11245.00`), `getBalance` (11000 base + 245 realized = `11245.00`), `getPnl` (net `245.00`, 1 win), `getLogs` (1 line) all return real data with no throw.
+3. **Partial-200 guards:** `safe()` passes value through on success (not degraded), falls back + records the label on throw, a throwing `ledger.snapshots` degrades `equityCurve` to `[]`, and the typed empty fallbacks are shape-complete.
+
+**Gate results:** `pnpm --filter @spotedge/core/@spotedge/bot/@spotedge/db typecheck` green; dashboard typecheck-via-`next build` green (module 17 approach); full suite **477 tests** (core 337, bot 96, db 14, dashboard 30) all passing.
+
+**Files:** `apps/dashboard/lib/degrade.ts` (new), `apps/dashboard/app/api/status/route.ts`, `apps/dashboard/app/api/equity/route.ts`, `apps/dashboard/app/api/overview/route.ts`, `apps/dashboard/lib/types.ts`, `apps/dashboard/lib/__tests__/data-routes.smoke.test.ts` (new).
+
+**Deploy-time (operator):** `pnpm --filter @spotedge/dashboard build && pm2 restart trading-dashboard` (turbo `^build` rebuilds core dist first) → `curl localhost:39461/api/{status,equity,overview}` return 200, dashboard flips "offline"→"online", controls enable, equity/positions/events populate; bot unaffected.
+
+**Note for future work:** the export-presence assertion in `data-routes.smoke.test.ts` is the regression guard — if a route ever imports a symbol that is only a `type` from the barrel, that test fails in CI before it can 500 in production.
+
+**Checkpoint printed:** [CHECKPOINT]
+
+---
+
+## Module 22 — Wire EventLog Sink + Engine Heartbeat (runtime wiring gap) — DONE/APPROVED 2026-07-07 — [FIXED_CHECKPOINT]
+
+**Work type:** FIX (runtime wiring gap; branch `fix/eventlog-sink-and-heartbeat`). Spec: `/specs/22-eventlog-sink-and-heartbeat.md` + CODEREF `/specs/22-22-CODEREF.md`.
+
+**Symptom (operator-reported):** dashboard Overview shows "Bot process offline — No heartbeat recorded yet" though the engine is fully live (FilterState has 15 fresh rows). Stop/Pause/mode controls disabled; "Recent events/warnings" and the daily-audit breaker/veto/heartbeat stats all blank.
+
+**Root cause (confirmed by code audit, not reproduced on this box — no DB/server here):**
+- `apps/bot/src/logger.ts` `logEvent()` persists to `EventLog` ONLY if a sink was installed via `attachEventSink()`. `@spotedge/db` exports `makeEventSink(prisma)` (does `prisma.eventLog.create`, folding the `type` arg into `data`).
+- **`attachEventSink(makeEventSink(prisma))` was NEVER called in `apps/bot/src/main.ts`.** So every `logEvent(...)` across the codebase (boot, boot_complete, state_change, engine_alert, live_gate, backup_ok/failed) logged to console/pino only and silently no-oped the DB write → `EventLog` had 0 rows, ever.
+- The dashboard's `isBotOnline()` (`apps/dashboard/lib/services/context.ts`) reads `EventLog` for a recent row matching `message contains "heartbeat"` OR `data.path:["type"] equals "heartbeat"` within a 5-min window → found none → "offline", controls disabled. Same empty table blanked "Recent events" and the daily audit.
+- Secondary gap: even with the sink attached, no heartbeat event was ever EMITTED, so online-detection had nothing to match.
+
+**Changes (3 edits + 1 deliberate skip):**
+1. **`apps/bot/src/main.ts`** — imported `attachEventSink` (from `./logger.js`) and `makeEventSink` (from `@spotedge/db`); call `attachEventSink(makeEventSink(prisma))` right after config load succeeds and BEFORE the first `logEvent("engine","info","boot",...)`, reusing the shared Prisma singleton (never a second client). After this all existing `logEvent(...)` call sites persist automatically — no call-site changes. `logEvent` keeps swallowing sink errors (rejected promise → `.catch` logs), so a DB blip here never crashes boot.
+2. **`apps/bot/src/engine.ts`** (module 18 runtime engine) — added `HEARTBEAT_MS = 30_000`, a `heartbeatTimer` field, `startHeartbeat()` (called at the end of `boot()` after `subscribeTicker()`), and `emitHeartbeat()`. `startHeartbeat()` emits ONE heartbeat immediately (dashboard online within seconds) then `setInterval(…, 30s)`, and calls `.ref?.()` so an otherwise-idle engine keeps the process (and heartbeat) alive. `emitHeartbeat()` calls `logEvent("engine","info","heartbeat","engine heartbeat",{ type:"heartbeat", mode: state.mode(), wsConnected, warmPairs, openPositions: exposed.size })` inside a try/catch (defensive — logEvent already swallows sink errors). `stop()` clears the interval. Heartbeat reflects PROCESS liveness → continues in PAUSED/STOPPED, ends only on `stop()`/process exit.
+3. **`apps/bot/src/backup.ts`** (nightly 03:30-UTC job) — added `HEARTBEAT_RETENTION_DAYS = 7`, an injectable `pruneRunner` option (defaults to a Prisma `deleteMany` where `ts < cutoff AND data.path:["type"] equals "heartbeat"`), and refactored `runOnce()` → `runBackup()` (unchanged behaviour) + `pruneOldHeartbeats()` (cutoff = now − 7d; best-effort, wrapped in try/catch → a prune blip logs a warning and never fails the backup). The prune matches ONLY `data.type=="heartbeat"` (the machine key the engine always sets), so boot/state/live-gate/backup events are never pruned.
+
+**Deliberate skip — spec §3 (secondary `Setting engine_heartbeat_at` stamp):** the only Setting write path in-process is `setSetting`, which writes a `SettingAudit` row on every value CHANGE. An ISO-timestamp that changes every 30s → 2,880 `SettingAudit` rows/day, purely to provide a freshness signal the dashboard does NOT read today (it reads the EventLog heartbeat). The spec explicitly marks §3 "Optional if it complicates the write path" — audit-log spam is exactly that complication — so it was skipped. Reinstating it later should use a non-audited direct upsert, not `setSetting`.
+
+**Verification of the stored shape (spec §2's one required real check, done by code-audit here):** `makeEventSink` persists `data: { type: evt.type, ...(evt.data ?? {}) }`. For the heartbeat `evt.type === "heartbeat"`, so `data.type === "heartbeat"` → the dashboard's `data.path:["type"] equals "heartbeat"` branch matches; and the message `"engine heartbeat"` contains `"heartbeat"` → the `message contains` branch matches. BOTH matchers hit.
+
+**DO-NOT-BREAK (CODEREF) honoured:** logEvent still swallows sink errors (#1); no existing `logEvent(...)` call site changed (#2); one Prisma instance — the shared singleton (#3); heartbeat continues in PAUSED/STOPPED (#4); no `@spotedge/core` full-barrel import crept into the dashboard — module 20's ccxt boundary untouched (#5).
+
+**Tests (bot +3 → 99; totals: core 337, bot 99, db 14, dashboard 30 = 480):**
+- `engine.test.ts` +1: attaches a capturing `EventSink` via `attachEventSink`, starts the engine, asserts an immediate `heartbeat` event whose `category==="engine"`, `message` contains "heartbeat", `data.type==="heartbeat"`, `data.mode==="PAPER"`, `wsConnected` boolean, `warmPairs` number, `openPositions===0` — locks in BOTH dashboard matchers; detaches the sink in `finally`.
+- `backup.test.ts` +2: `runOnce` calls `pruneRunner` exactly once with cutoff `= T0 − 7*86_400_000`; and a throwing `pruneRunner` never breaks the backup result (still `code:0`). The two existing `runOnce` tests now inject a DB-free `pruneRunner` spy so the suite stays DB-free.
+
+**Gate results:** `pnpm --filter @spotedge/bot test` → 99 passed. `pnpm -r test` → core 337 / db 14 / dashboard 30 / bot 99 = 480 passed. `pnpm -r --filter '!@spotedge/dashboard' build` → tsc clean (core, db, bot). `pnpm --filter @spotedge/dashboard build` → `next build` clean (real TS check per module 17).
+
+**Files changed:** `apps/bot/src/main.ts`, `apps/bot/src/engine.ts`, `apps/bot/src/backup.ts`, `apps/bot/src/__tests__/engine.test.ts`, `apps/bot/src/__tests__/backup.test.ts`, `PROGRESS.md`, `PROGRESS-HISTORY.md`.
+
+**Deploy-time acceptance (operator, `pm2 restart trading-bot`):** `SELECT count(*),max(ts) FROM "EventLog"` > 0 and increasing (boot/state events present, not just heartbeat); heartbeat rows every ~30s (`… WHERE message ILIKE '%heartbeat%' OR (data->>'type')='heartbeat'`); `curl localhost:39461/api/status` → `botOnline:true` with a recent `lastHeartbeat`; dashboard Overview banner cleared, top bar green online, Stop/Pause/mode controls enabled, "Recent events" populated; `pm2 stop trading-bot` → offline after 5 min, restart → online within seconds; retention prune keeps heartbeat rows ≤7 days while other events are retained.
+
+**Checkpoint printed:** [FIXED_CHECKPOINT]
