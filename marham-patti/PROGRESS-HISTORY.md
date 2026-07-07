@@ -10,6 +10,28 @@
 
 ---
 
+## Launch hotfix — Lighthouse public-route JS budget (recharts out of first-load) ✅ DONE (2026-07-07)
+
+**WORK TYPE:** FIX · **Phase:** Launch / stabilization (NOT a new build-step — the specced build stays complete at 1–39; no step 40 exists) · **Branch:** `feat/39-ai-cost-control`. Ended with `[CHECKPOINT]`.
+
+**Schema/RLS/auth/flag impact:** NONE. No migration, no new table/enum, no flag/permission/role-grant change. No i18n change (0 new keys; parity untouched). Pure front-end bundle-graph fix (`@mp/ui` barrel + 3 `apps/web` route files). **Budget NOT raised** — `lighthouserc.json`/`budgets.json` unchanged (250 KB script budget kept); the actual bundle was reduced.
+
+**Problem (found via the Lighthouse CI gate — the point worth remembering):** the Lighthouse job ran correctly but failed the **`resource-summary:script.size ≤ 250,000`** assertion on ALL four audited public routes — `/` 323,590 · `/login` 325,702 · `/ui` 331,153 · `/store` 327,060 (three consistent runs each; real bundle weight, not variance). Ground-truth from the LHR `network-requests`: the single dominant script on EVERY route — including the home page `/`, which renders **no chart at all** — was `chunks/1923-*.js` = **recharts, 151,768 bytes of script transfer** (527 KB raw), i.e. >60 % of the whole budget. **Root cause:** recharts leaked into the **shared first-load graph via the `@mp/ui` barrel**. The root layout imports `ThemeProvider` from `@mp/ui`; the barrel (`packages/ui/src/index.ts`) also re-exported the recharts-based `./components/chart`, so importing *anything* from `@mp/ui` (a Button, the ThemeProvider) dragged recharts in. `next.config.mjs`'s `optimizePackageImports: ['@mp/ui']` did not tree-shake it out for this transpiled workspace barrel. The `/ui` `DemoChart` was already behind `next/dynamic`, but the barrel coupling defeated it: recharts was eager on every route regardless.
+
+**What changed (sever recharts from the barrel; keep it lazy where actually used):**
+- **`packages/ui/package.json`** — added a dedicated subpath export **`"./chart"` → `./dist/components/chart.js`** (types → `./dist/components/chart.d.ts`).
+- **`packages/ui/src/index.ts`** — **removed** the `LineChartCard/AreaChartCard/BarChartCard/DonutChartCard` (+`ChartSeries`/`DonutDatum`) re-export from the barrel; left a comment block explaining WHY (recharts must never be pulled into first-load JS just because a surface imported a Button) so it isn't "simplified" back. recharts is now reachable ONLY via `@mp/ui/chart`.
+- **`apps/web/app/ui/DemoChart.tsx`** + **`apps/web/app/lh-bloated/BloatedClient.tsx`** — import chart cards from `@mp/ui/chart` (DemoChart stays behind `next/dynamic`; BloatedClient still imports EAGERLY on purpose).
+- **`apps/web/app/ui/UiShowcase.tsx`** — added an IntersectionObserver **`WhenVisible`** gate around the below-the-fold `DemoChart` so recharts' lazy chunk is fetched only when the chart scrolls into view (`rootMargin:200px`; falls back to eager render where `IntersectionObserver` is absent). A real user still sees the chart (skeleton → chart); the initial paint and the Lighthouse trace (which does not scroll) never pay for recharts.
+
+**Result (First Load JS, `next build`):** `/ui` 311 KB → **194 KB**; `/`, `/login`, `/store` shed the recharts chunk entirely. `/lh-bloated` stays intentionally heavy (383 KB first-load).
+
+**Verification — re-ran the EXACT gate locally (`lhci autorun` on `lighthouserc.json`, real headless Chromium, 3 runs/route, same config as CI):**
+- **`script.size` (budget 250,000) — ALL PASS:** `/` **206,723** · `/login` **208,838** · `/ui` **212,296** · `/store` **210,193** (was 323–331 K; ≈110 K cut/route, ~15–17 % headroom). recharts (`chunks/1923`) confirmed **absent** from all four routes' network requests.
+- **Category scores (min 0.90) — ALL PASS:** Performance `/`=100 · `/login`=100 · `/ui`=99 · `/store`=100; Accessibility 94/95/95/94; Best-Practices 100/100/96/100. `resource-summary:total:size` warn-budget also clear. Full `lhci autorun` exits **0** ("All results processed!").
+- **Negative gate still BITES (canary intact):** `/lh-bloated` (still eager recharts via `@mp/ui/chart` + `import * as` lucide) scores a **script.size of 483,975** and fails the ≥90 / budget assertion (assert exit 1). It is NOT in `lighthouserc.json`'s URL list, so it stays excluded from the real budget gate — exactly as designed.
+- **Full project gates:** turbo **typecheck 27/27**, **lint 15/15** (0 errors; 1 pre-existing `@mp/api` doctor-portal warning, untouched), **test 20/20** tasks — jest **api 867/867**, **db 178/178**, **ui 38/38**, **i18n 19/19 parity**. `next build` (production, `NODE_ENV=production APP_ENV=staging`) green, 43/43 static pages, no `<Html>`/prerender regressions.
+
 ## Launch hotfix — CRLF-safe env sourcing + env-driven ports/health verified ✅ DONE (2026-07-06)
 
 **WORK TYPE:** FIX · **Phase:** Launch / stabilization (NOT a new build-step — the specced build stays complete at 1–39; no step 40 exists) · **Branch:** `feat/39-ai-cost-control`. Ended with `[CHECKPOINT]`.
