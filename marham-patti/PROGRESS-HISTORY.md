@@ -1691,3 +1691,38 @@ ASSIST-ONLY is absolute — no diagnosis/prescription/dosage (deterministic refu
 - The conversation's `patientId` is provisioned on first use (via 31 `self(ensure=true)`), consistent with how a 31 booking/upload already provisions a fresh OTP login's self `Patient`.
 
 WORK TYPE: FEATURE (branch feat/32-patient-ai-assistant). Ended with `[CHECKPOINT]`. Controller handles the staging merge.
+
+---
+
+## Build-step 43 — Auth & Dashboard Visual Polish + Contrast Fix (`feature/43-auth-ui-polish`) ✅ 2026-07-07
+
+**Spec:** `specs/43-auth-ui-polish.md` (+ `specs/40-44-CODEREF.md` §A contrast seam). WORK-TYPE: FEATURE. Phase 4 / item 4. No schema, RLS ➖, no feature flags (visual layer). Presentation-only: form/session behaviour (40) and `DashboardClient` data contracts + state machine untouched.
+
+### Problem (spec §1)
+(a) OS dark mode → `html.dark`/`@media(dark)` darkened the auth surfaces but the card/title/brand-mark stayed dark-teal → **dark-on-dark, unreadable** (owner screenshots). (b) Login + dashboard read hand-rolled, not premium. (c) Public-route JS budget concern.
+
+### Decisions
+- **Light-locked auth card** (chosen over a dark-aware card): the card stays a light surface in BOTH themes, so no theme-mechanism edge (OS media-query pre-hydration, or the `.dark` class the ThemeProvider toggles on mount) can reproduce dark-on-dark. It floats on a deep-teal radial backdrop in dark, an ice tint in light. New `:root` tokens `--mp-auth-card/-ink/-title/-muted/-input-bg/-input-border`, all AA-verified. Root cause of the bug was the auth section keying dark on `@media(prefers-color-scheme:dark)` while the app themes via `html.dark` — light-locking removes the whole class of mismatch.
+- **Fix at the token layer, not per-element** (spec §3): also made the *global* `.mp-input` dark-aware (`background:var(--mp-input-bg)`, `color:var(--mp-fg)`; added `--mp-input-bg` light `#fbfefe` / dark `#06393b`) — this fixed a *latent* dark-mode bug (inputs were `color:inherit` → light text on a light `#fbfefe` field across every module in dark). Auth inputs are re-overridden light-locked via `.mp-auth .mp-input`. Made `.mp-card` token-driven (`--mp-card`/`--mp-border`/`--mp-fg`) — it was `background:var(--brand-surface,#fff)` = a WHITE card in dark mode (light text on white). Added `html.dark` overrides so `.mp-title/.mp-subtitle/.mp-h3/.mp-settings-subhead` (hardcoded dark-teal) flip to `--mp-fg` in dark. §11 token NAMES unchanged; only values corrected for AA (authorized by spec §1/§5).
+- **Premium login** (all four entrances inherit via the shared `AuthShell`): brand-mark tile (gradient teal square + inline SVG), serif display title (`--brand-font-display`), refined subtitle, focus rings (3px ring + border), button hover/active/focus-visible + shadow, card fade-in (respects the global reduced-motion block), bordered `.mp-msg-error/-ok`. `AuthShell.tsx` markup: mark wrapped in `.mp-auth-logo` + `.mp-auth-brand`. Forms' logic untouched.
+- **Dashboard upgrade** (presentation-only in `DashboardClient` + `page.tsx`): defined the previously-**undefined** `.mp-label/.mp-table/.mp-grid-2/.mp-r` (dashboard used them but no CSS existed → browser defaults; also used by commission/accounts/billing/ai-cost, now consistently styled). KPI cards (`.mp-kpi` serif value + brand accent bar), severity-coloured tap-to-drill alert tiles (`.mp-alert`/`.mp-alert-warn` on `--mp-warn-bg/-fg`, AA both themes; DRILL map preserved), refined toolbar (compact `.mp-btn-sm`, `width:auto`), en-US-grouped number formatting (`Intl.NumberFormat`, deterministic → no hydration mismatch). Removed the **nested `.mp-shell` grid + double `<main>`** on the dashboard page (it sits inside the 40 shell's `.mp-shell-main` already) → replaced with a plain `.mp-dash-head` wrapper. No trend-delta widgets added — the API view carries no prior-period series, so fabricating deltas was rejected as dishonest; hierarchy/severity/formatting carry the premium bar instead.
+- **CI contrast guard** (spec §5): `packages/ui/src/lib/auth-contrast.ts` — `AUTH_DASHBOARD_PAIRS` pins every load-bearing fg/bg pair (auth light-locked = `both`; dashboard `--mp-*` split into `light` + `dark` entries) with its AA threshold, checked via `contrastRatio` from `@mp/brand` (reuses 07's WCAG math; complements, doesn't replace, `checkBrandContrast` which guards tenant overrides). Kept entirely in `@mp/ui` (which has jest + already imports `@mp/brand`) so no brand-rebuild coupling; NOT exported from the ui barrel (stays out of app bundles). Values MIRROR globals.css (documented in both).
+
+### Files
+- `apps/web/app/globals.css` — base `--mp-*` layer: +`--mp-input-bg`, `--mp-warn-bg/-fg` (light `:root` + dark `html.dark`). Rewrote the auth section (light-locked tokens, premium composition, dark-aware global `.mp-input`, `.mp-btn` hover/active/focus, `.mp-btn-sm` width:auto). `.mp-card` → token-driven. New "Owner Dashboard visual upgrade" section (`.mp-dash*`, `.mp-label`, `.mp-kpi*`, `.mp-stat*`, `.mp-alerts/.mp-alert*`, `.mp-grid-2`, `.mp-table`, `.mp-r`, dark heading overrides).
+- `apps/web/app/(auth)/login/AuthShell.tsx` — brand-mark tile markup (`.mp-auth-logo` + `.mp-auth-brand`).
+- `apps/web/app/(app)/dashboard/page.tsx` — removed nested `.mp-shell`/`<main>`; `.mp-dash-head` wrapper.
+- `apps/web/app/(app)/dashboard/DashboardClient.tsx` — presentation rewrite (`.mp-dash` root, `.mp-dash-toolbar`, `KpiCard`, class-based `TileRow`/`Stat`, `fmtNum`); all data logic/interfaces/effects/DRILL unchanged.
+- `packages/ui/src/lib/auth-contrast.ts` (new) + `packages/ui/src/lib/auth-contrast.spec.ts` (new).
+
+### Gate results
+- typecheck 12/12 (turbo, web/ui/brand + deps) · lint clean.
+- test: 20 turbo tasks — **api 874/874**, **ui 43/43** (incl. the 5 new contrast-guard assertions: shipped matrix passes AA; matrix covers light+dark; a `#045E62`-on-`#08494C` dark-on-dark pair BITES; a pale button BITES), **i18n 19/19** (parity — no keys added, existing `dash*`/`entrance` reused), **db 198/198**.
+- `next build` 45/45 routes, URLs unchanged, `/lh-bloated` intact. Public route-JS **unchanged**: `/` 166 B/106 kB, `/login` 132 B/151 kB, `/store` 148 kB, `/ui` 196 kB — CSS-only visual changes add no JS; `budgets.json`/`lighthouserc.json` untouched (never loosened). Chrome-driven Lighthouse ≥90 remains the CI gate (can't run headless Chrome in the build env).
+- Runtime smoke: fresh `next start`, curl-200 on `/`, `/login`, `/login/{rider,phlebotomist,patient,reset}`; served login HTML carries the new `mp-auth-logo`/`mp-auth-brand` markup; served CSS carries `mp-auth-ink`, `mp-kpi-value`, `mp-alert-warn`, `mp-warn-fg`.
+
+### Notes / do-not-break honoured
+- URLs unchanged; `StoredBundle`/`mp.auth`/provider stack/auth API contracts untouched (no logic edits). Entrance identities (42) intact. Flag-then-permission dashboard card adaptation preserved. §11 token names stable. EN+UR parity + RTL (all new CSS uses logical properties; number formatting is digits only). Contrast fix lands at the token layer so 44's system pass inherits it and tenant reskins stay guarded (07 warning + the new 43 guard).
+- Side benefit (not a regression): the global `.mp-input`/`.mp-card`/heading dark fixes + the newly-defined generic table/label/grid classes improve every module that used them unstyled — 44 will formalize these into `@mp/ui`.
+
+WORK TYPE: FEATURE (branch feature/43-auth-ui-polish). Ended with `[CHECKPOINT]`. Controller handles the staging merge.
