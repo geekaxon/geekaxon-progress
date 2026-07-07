@@ -277,3 +277,128 @@ Bot booted under PM2 with `cwd: apps/bot` and reported every env var empty (`DAT
 **Verification:** typecheck ✅ (all 4 workspaces) · build ✅ (incl. dashboard) · tests 375 passing (core 287 = +15 [13 reports fixture-ledger: hand-verified pnlSummary/bySymbol/byStrategy, equity gap-fill, drawdown, feeReport split+projection, dailyAudit PKT/UTC boundary, tradeHistory paging, CSV columns+BOM, weekly digest, mode isolation, empty-period zero-report; +2 setSummaryTime live-reschedule]; bot 74 = +10 [4 ReportPusher daily/Monday-weekly/error-swallow, 4 renderers, 2 dispatch REPORT + REPORT CSV document]; db 14). Real scheduled push + live Telegram REPORT/REPORT-CSV document = deploy-time gates (need a live bot + populated ledger), consistent with modules 10–12.
 **Open items → later modules:** Module 14 dashboard consumes the typed JSON shapes exported here (PnlSummaryView, SymbolPnlView, StrategyPnlView, EquityCurvePoint, DrawdownPoint, FeeReportView, DailyAuditView, TradeHistoryPage, WeeklyDigestView) + the streaming `exportCsv` for the download endpoint. Once the trading engine emits filter-veto / breaker / heartbeat EventLog rows, dailyAudit's veto/breaker/heartbeat sections populate automatically (no reporting change needed).
 **Checkpoint printed:** [CHECKPOINT]
+
+## [2026-07-06] Module 14 — Web Dashboard (trade.geekaxon.com) — DONE/APPROVED
+
+**Branch:** feature/14-dashboard (WORK TYPE: FEATURE). **Scope:** the full Next.js 15 control panel in `apps/dashboard`, calling the SAME `@spotedge/core` control/report services the Telegram bot uses (no business logic in routes/handlers). Built on the existing module-01/scaffold (design tokens in globals.css, config.ts, session.ts).
+
+**Architecture decisions:**
+- **Separate process, shared Postgres.** The dashboard is its own Next process; it reuses the core service functions via a DB-backed `ServiceContext` (`lib/services/context.ts`) that mirrors the bot's Prisma port adapters (settings source = `DASHBOARD`) plus a **DB-backed StatePort** — STOP/PAUSE/RESUME/MODE persist `engine_state`/`mode` to `settings` (+ an EventLog `state_change` row) so the bot picks them up on its loop. Transition edges + LIVE-gate are re-validated here (mirrors `apps/bot/src/state.ts`).
+- **Live updates = DB poll (documented choice over cross-process SSE).** `usePoll` (5s overview/status, 15–60s heavier pages) with a `stale` flag that drives the degraded banner instead of erroring (spec §Edge cases). Bot-online = heartbeat/engine EventLog within a 5-min window.
+- **Live marks** for uPnL / distance-to-SL/TP bars come from Binance's PUBLIC ticker API (`lib/prices.ts`, defensive: empty on failure) — the dashboard has no ccxt feed. Pair-detail candles + EMA20/50/200 overlays likewise use public klines + the bot's OWN `ema()` (core), with trade markers from Position fills + `trailHistory`.
+- **Backtest runs IN-PROCESS** via `lib/backtest-runner.ts`: a `BacktestPort` backed by a public-kline `RawKlineFetcher` + `exchangeInfo`/Pair filters, driving the SAME `runBacktest`/`HistoricalFeed` core code (no API keys), single-flight, persisted to the isolated `backtest_runs` table. Completed runs are re-rendered from the table.
+
+**Auth & hardening:** signed session cookie (jose HS256, httpOnly+secure+sameSite=strict, 7d); bcrypt owner hash seeded into `settings` from env on first use (`lib/auth/password.ts`); edge `middleware.ts` gates every route (redirect pages / 401 API); PURE fixed-window login rate limit 5/15min/IP; **screenshot token** pure decision (`lib/auth/screenshot.ts`) — staging-only, GET-only, `/api/control*` excluded absolutely, fail-closed off staging; `guardControl` rejects screenshot tokens on control routes (defence-in-depth); idempotency-key cache on control POSTs (`lib/idempotency.ts`) → no double-submit; typed double-confirm dialogs (CONFIRM LIVE / CLOSEALL / RESETPAPER) enforced client AND server side.
+
+**Four-layer noindex (all verified via curl on a running build):** Nginx `X-Robots-Tag` (also emitted app-wide in next.config), `robots.txt` disallow-all (`app/robots.ts`), `<meta name="robots" content="noindex,nofollow">` (root layout), login wall.
+
+**Pages (8) + login:** Overview (mode badge, equity card + animated paper/live equity overlay, today/week/month P&L, live positions table w/ SL/TP progress bars, breaker + concurrency-cap tiles, events feed), Pipeline (pair×layer ✅/❌/⏳ matrix w/ tooltips + blocking highlight), Pair detail (bespoke SVG candlestick + EMA overlays + trade markers, 1H/H4 toggle), Trades (filterable/paged history, expandable per-trade fee breakdown, CSV export, Strategy-C cycles tab), Backtest (symbol multi-select form → in-process run → metrics/equity/veto/trades + saved-run list), Reports (daily/weekly cards, cumulative fees-vs-gross, drawdown, win-rate-over-time), Settings (capital/risk-slider/summary-time/BNB-reserve, strategy toggles, pair CRUD, T1 core bags, danger-zone RESETPAPER, SettingAudit history), persistent Control bar (STOP/PAUSE/RESUME/mode switch, WS dot, heartbeat). shadcn/ui primitives throughout, dark default + light toggle (next-themes), Inter, animated Recharts, skeleton loaders, designed empty states, profit-green/loss-red, responsive (phone-first header/nav).
+
+**Control-parity table (every Telegram command → UI):**
+| Command | UI equivalent |
+|---|---|
+| STATUS | `/api/status` → Control bar + Overview status |
+| POSITIONS | Overview open-positions table |
+| PNL | Overview today/week/month cards + Reports |
+| TRADES | Trades → History tab |
+| BALANCE | Overview equity/balance card |
+| FEES | Reports fee report (cumulative + BNB/quote split + projection) |
+| FILTERS | Pipeline matrix + tooltips |
+| LOGS | Overview recent-events feed |
+| RECONCILE | Control bar / `/api/control` RECONCILE (degrades ENGINE_OFFLINE, as Telegram) |
+| STOP/START | Control bar Stop/Start |
+| PAUSE/RESUME | Control bar Pause/Resume |
+| MODE | Control bar mode switch (typed CONFIRM LIVE) |
+| CLOSE | `/api/control` CLOSE (position row action; ENGINE_OFFLINE until engine wired) |
+| CLOSEALL | `/api/control` CLOSEALL (typed confirm) |
+| PAIRS/ADDPAIR/REMOVEPAIR/SETTIER | Settings → Trading pairs (table + add form + tier select + remove) |
+| STRATEGIES/ENABLE/DISABLE | Settings → Strategies switches |
+| SETCAPITAL | Settings → capital (confirm dialog) |
+| RISK/SETRISK | Settings → risk slider (confirm dialog) |
+| SETCORE | Settings → core bags |
+| SETSUMMARY | Settings → summary time |
+| RESETPAPER | Settings → danger zone (typed RESETPAPER, blocked while paper open) |
+| REPORT | Reports page |
+| BACKTEST | Backtest page (in-process runner) |
+| HELP | (nav + labels; not a modal) |
+
+**Files (new):** `lib/services/context.ts`, `lib/{format,api,types,route-helpers,idempotency,prices,backtest-runner}.ts`, `lib/auth/{password,cookies,rateLimit,guard,screenshot}.ts`, `middleware.ts`, `app/robots.ts`, `app/layout.tsx` (Inter+providers), `app/(app)/layout.tsx` + shell, `app/login/page.tsx`, 8 pages under `app/(app)/…`, 11 API route groups under `app/api/…`, `components/{app-shell,nav,control-bar,mode-badge,strategy-badge,stat-card,degraded-banner,empty-state,confirm-dialog,theme-provider,theme-toggle,toast,providers}.tsx`, `components/ui/*` (14 shadcn primitives), `components/charts/{equity,drawdown,win-rate,fee,veto-histogram,candles}.tsx`, `test/stubs/server-only.ts`, `lib/auth/__tests__/{session,rateLimit,screenshot,config}.test.ts`. Edited: `next.config.mjs` (webpack externals ccxt/ws — serverExternalPackages doesn't externalize a workspace pkg's transitive native deps), `tailwind.config.ts` (Inter font), `vitest.config.ts` (server-only alias).
+
+**Verification:** typecheck ✅ (6/6 workspaces) · build ✅ (dashboard: 13 routes + 40kB middleware, all green) · tests **395 passing** (core 287, bot 74, db 14, **dashboard +20** = session round-trip/expiry/tamper, rate-limit 5-then-block/reset/per-IP/clear, screenshot read-only+control-excluded+fail-closed, config screenshot fail-closed + sessionSecret throws). **Live smoke on a running `next start`:** `GET /` → 307 → `/login`; `X-Robots-Tag: noindex, nofollow` present; `robots.txt` disallow-all; `<meta name=robots>` present; `/api/overview` + `/api/control` unauthed → 401; `?screenshot_token=` off-staging → still redirected (fail-closed); 6 rapid `/api/login` → 6th 429 (rate limit precedes credential check).
+**Design self-check (AGENT.md):** dark-default + light toggle, shadcn/ui everywhere (no raw controls), animated Recharts + bespoke SVG candles, skeletons on every data view, designed empty-states, profit-green/loss-red consistent, phone-first responsive header/nav/tables. Screenshots + Lighthouse/380px responsive = deploy-time gate (needs a populated DB + browser).
+**[HUMAN_REQUIRED] at deploy:** Cloudflare DNS (DNS Only) for trade.geekaxon.com, aaPanel site + Nginx reverse proxy (proxy path must match app route prefix) + `X-Robots-Tag`, SSL (guide S5). Env to set on the server: `DASHBOARD_SESSION_SECRET` (≥16), `DASHBOARD_USERNAME`, `DASHBOARD_PASSWORD` (or `DASHBOARD_PASSWORD_HASH`), `APP_ENV`, optional `SCREENSHOT_TOKEN` (staging only), shared `DATABASE_URL`.
+**Open items → later modules:** CLOSE/CLOSEALL/RECONCILE return ENGINE_OFFLINE until the live engine (module 15) is reachable from the shared process — identical to the Telegram face today; a cross-process command seam can be added in 15 if desired. Real charts/marks depend on public Binance reachability at runtime (degrades gracefully).
+**Checkpoint printed:** [CHECKPOINT]
+
+---
+
+## Module 15 — Live-Trading Enablement — DONE/APPROVED 2026-07-07 [FIXED_CHECKPOINT]
+
+**Branch:** feature/15-live-enable (WORK TYPE: FEATURE)
+**Spec:** /specs/15-live-enable.md (no CODEREF matched → built from spec alone). Purpose: the gate between simulation and real money. The agent BUILDS the mechanism; ONLY the owner activates it (Telegram `APPROVE LIVE GATE` → then `MODE LIVE` + `CONFIRM LIVE`). No mainnet order is ever placed by the agent.
+
+### Architectural framing
+Consistent with modules 10–14, the runtime trading engine (the order-placing loop, WS warm-up, 6h reconcile) is wired at DEPLOY time — `ctx.exchange`/`ctx.livePreflight` are the injected seams. Module 15 therefore BUILDS + fully unit-tests the mechanism in `@spotedge/core` (state machine, pre-flight, routing/fence, gate, drain orchestration) and wires the Telegram + dashboard command surfaces; the live probes/order path activates when the operator wires the runtime engine at deploy. This keeps "activation is the operator's act" literally true and testable.
+
+### What was built
+**Core — new `packages/core/src/exchange/routing.ts`** (the fence truth table): `entryMode(state)` (LIVE/LIVE_DRAINING→LIVE else PAPER), `placesEntries`, `isEntryPurpose` (entry/lever open exposure), `routeOrder({state,purpose,positionMode})` — entries take the state's entry mode; management orders (exit/tp/stop/trail/rebuy) take the POSITION's booked mode (this is what makes both drains correct: live positions exit on real money during PAPER_DRAINING, paper positions drain virtually during LIVE_DRAINING); throws on an entry in a no-entry state and on a management order missing positionMode. `assertExecutorMatches(resolved, executorMode)` = the policy fence mirroring the connector's network-boundary `assertLive`.
+
+**Core — new `packages/core/src/services/liveEnable.ts`**: `PreflightProbes` port + `preflightLive(probes, now)` → a `PreflightReport` card (each check `fail`|`warn`, ✅/❌, a throwing probe fails its own check with the error text, never crashes the card). Checks (spec §Pre-flight): (1) keys valid via authenticated account call, (3) IP whitelist derived from that same call, (2) trade-enabled + **withdraw HARD-fail** via key permissions, (4) free-USDT ≥ `freeUsdtFloor = min(capital_live×10%, $500)` + a soft `warn` if free < capital_live, (5) clock<1s / WS connected / pairs warm / reconcile clean / DB backup <24h, (6) BNB reserve `warn` only when BNB fees are on. `pass = every fail-severity check passes` (warns never block). Owner gate: `approveLiveGate(ctx)` (idempotent) via the new `StatePort.setLiveGate`. PAPER→LIVE: `preflightForLive(ctx)` (gate → ENGINE_OFFLINE if no probes → run pre-flight, returns the card on pass AND fail) then `commitLive(ctx)` (→ LIVE, or LIVE_DRAINING when paper positions are still open; persists `mode=LIVE`). LIVE→PAPER: `requestPaper(ctx, choice?)` — no open live → PAPER; MANAGE → PAPER_DRAINING (live managed to natural exit on real money, new signals paper); CLOSEALL → `closeAll` first then PAPER; no choice with open live → `CHOICE_REQUIRED` carrying `drainChoicePrompt` (the locked wording). `settleDrain(ctx)` (runtime calls it after each close): PAPER_DRAINING→PAPER when the last live position closes, LIVE_DRAINING→LIVE when the last paper position closes, and **fails safe to PAPER** if the gate closed mid-drain (never resumes live silently).
+
+**Core — edits**: `services/engineState.ts` +`isDraining`/`drainingMode`/`settledState`; `services/ports.ts` +`StatePort.setLiveGate` (required) + optional `ServiceContext.livePreflight`; `exchange/BinanceConnector.ts` +`fetchApiPermissions()` (read-only SAPI apiRestrictions → `{canTrade, canWithdraw}|null`, UNFENCED like getBalances/checkClockDrift; null→pre-flight FAIL) + `assertLive` doc now cross-references routing.ts; barrel exports routing + liveEnable.
+
+**Bot**: `state.ts` `StateMachine.init` fail-safe (persisted LIVE/LIVE_DRAINING + closed gate → resume PAPER; open gate resumes the exact draining state). `telegram/context.ts` `makeStatePort.setLiveGate → machine.setLiveGate`; `buildServiceContext` threads `livePreflight`. `telegram/registry.ts` +`APPROVE LIVE GATE` command, refreshed `MODE` usage/warnings. `telegram/handlers.ts`: `handleApprove` (typed `CONFIRM LIVE GATE`), `handleModeLive` (pre-flight card → on PASS typed `CONFIRM LIVE` → `commitLive`; GATE_CLOSED/ENGINE_OFFLINE messaged), `handleModePaper` (`MANAGE` immediate; `MODE PAPER CLOSEALL` → typed `CONFIRM CLOSEALL` → `requestPaper CLOSEALL`; bare `MODE PAPER` with open live → the raw HTML choice prompt). `telegram/render.ts` +`renderPreflight`. New `apps/bot/src/preflight.ts` `createLivePreflightProbes(connector, runtime?)` — binds probes to connector (account/permissions/clock/BNB), settings (capital_live, bnb flag, last_backup_at), and a runtime handle (WS/warm/reconcile) that is absent until the live engine is wired (those checks then FAIL — cannot go live without a running loop). `main.ts` wires `livePreflight: createLivePreflightProbes(exchange)`.
+
+**Dashboard**: `lib/services/context.ts` `makeStatePort.setLiveGate` (persists `live_gate_approved`, journalled DASHBOARD; the UI exposes NO action that calls it — gate opening is Telegram-only per spec) + transition uses the mutable gate. `/api/status` returns `liveGateOpen`. `app/api/control/route.ts` MODE → `handleModeLive` (CONFIRM LIVE → preflightForLive → commitLive; returns the pre-flight card + code on failure) / `handleModePaper` (choice MANAGE|CLOSEALL, CLOSEALL needs `confirmText:"CLOSEALL"`, CHOICE_REQUIRED→409). `components/control-bar.tsx` gate-aware LIVE switch (warns when gate closed) + a `DrainChoiceDialog` (MANAGE one-click / CLOSEALL typed-confirm) for LIVE→PAPER with open positions.
+
+### Acceptance criteria — status
+- **State-machine tests (both DRAINING paths, restart-during-drain, STOP-during-drain):** ✅ `apps/bot/src/__tests__/state.test.ts` (+9) — PAPER→LIVE_DRAINING→LIVE, LIVE→PAPER_DRAINING→PAPER, LIVE_DRAINING→PAPER_DRAINING redirect, STOP from both draining states, restart resumes PAPER_DRAINING & LIVE_DRAINING, init fail-safe coerces LIVE/LIVE_DRAINING→PAPER when gate closed.
+- **Pre-flight tests (each check's fail path incl. withdraw hard-fail):** ✅ `services.liveEnable.test.ts` — account-fail, withdraw-enabled hard-fail, trade-off, unreadable perms, free-USDT floor fail + warn, clock≥1s, ws/warm/reconcile/backup fails, no-backup, throwing-probe, BNB warn-only.
+- **Router truth-table test (mode × state × executor):** ✅ `routing.test.ts` (+14) incl. both drains + fence.
+- **Drain orchestration + gate + MODE flows:** ✅ `services.liveEnable.test.ts` (commitLive/requestPaper/settleDrain/approveLiveGate) and `telegram.dispatch.test.ts` (+8: APPROVE LIVE GATE, MODE LIVE gate/fail-card/pass→CONFIRM→LIVE, MODE PAPER choice/MANAGE/CLOSEALL).
+- **Testnet dress rehearsal (full PAPER→LIVE→trade→LIVE→PAPER(MANAGE) on testnet keys, transcripts here):** DEPLOY-TIME [HUMAN_REQUIRED] — needs the runtime engine wired + testnet keys on the VPS; the code path is in place and unit-covered.
+- **No real mainnet order placed by the agent:** ✅ activation is entirely operator-gated (gate + pre-flight + CONFIRM LIVE); the fence + init fail-safe make accidental live impossible.
+
+### Verification
+- typecheck ✅ (6/6 workspaces) · build ✅ (`turbo build` incl. dashboard `next build` — 13 API routes + middleware) · tests **458 passing** (core **333** = +46 [routing 14, liveEnable 32]; bot **91** = +17 [state 9, dispatch 8]; db 14; dashboard 20).
+- Import smoke on built dist: all new exports resolve; `routeOrder` entry/manage truth-table + `freeUsdtFloor(11000)=500` confirmed.
+- Boot-in-PAPER remains the deploy-time smoke (unchanged shell; connector still constructed network-free, pre-flight only fires after the owner opens the gate).
+
+### [HUMAN_REQUIRED] at deploy (spec §Dependencies + §Acceptance)
+Operator creates the real Binance API key (spot trade + read ONLY, **withdrawals disabled**, IP-whitelisted to the VPS), sets `BINANCE_TESTNET=false` in the server `.env`, wires the runtime trading engine's WS/warm/reconcile handles into `createLivePreflightProbes`, and completes the LIVE pre-flight checklist + testnet dress rehearsal (transcripts appended here). First-live-run protocol (guide S7, social not code): first week `SETRISK 0.5` + Tier-1 only, then restore.
+
+**Checkpoint printed:** [FIXED_CHECKPOINT]
+
+---
+
+## Module 17 — Dashboard Typecheck Ordering Hotfix — DONE/APPROVED 2026-07-07
+
+**Type:** Build-tooling correction to Module 14 (Web dashboard). No auth/data/money surface. WORK TYPE: FIX (branch `fix/dashboard-typecheck-hotfix`). Ends **[CHECKPOINT]**. Spec: `/specs/17-dashboard-typecheck-hotfix.md` (no CODEREF companion — none required).
+
+### Root cause
+First staging deploy failed at `@spotedge/dashboard#typecheck` with:
+`TS2307: Cannot find module '../../../app/page.js'` in `.next/types/app/page.ts` and `.next/types/validator.ts`.
+The dashboard's `typecheck` script was a bare `tsc --noEmit`, and its `tsconfig.json` `include` lists `.next/types/**/*.ts`. Next.js's App Router generates those `.next/types/*` stubs (which reference the compiled page modules) only during `next build`/`next dev`. On a clean checkout `.next/types` does not exist, so `tsc` cannot resolve the generated page modules and fails. Compounding it, `deploy.sh` step 5 ran `typecheck` BEFORE `build`, guaranteeing the generated types were absent on first deploy. This is a build-ordering/tooling issue, not a type error in app code.
+
+### Chosen approach — B (recommended, no double build)
+Next.js already type-checks the dashboard as part of `next build` (with `typescript.ignoreBuildErrors` OFF). So the standalone `typecheck` becomes a no-op that defers to build, and the real checking happens in build. Chosen over A (`next build --no-lint && tsc --noEmit`) to avoid a double `next build` when deploy runs typecheck then build.
+
+### Changes
+- `apps/dashboard/package.json` — `"typecheck"` changed from `"tsc --noEmit"` to `"echo 'dashboard: type-checked as part of next build (see specs/17)' && exit 0"`. `"build"` unchanged (`rm -rf .next && next build`).
+- `apps/dashboard/tsconfig.json` — `"exclude"` changed from `["node_modules"]` to `["node_modules", ".next", "out", "dist"]` so a stray `tsc` never walks `.next/types` again. `include` left as-is (keeps `.next/types/**/*.ts` so `next build` does not rewrite tsconfig on every run — verified no churn).
+- `deploy.sh` — step 5 reordered: `pnpm run build` now runs BEFORE `pnpm run typecheck` (Next generates `.next/types` + type-checks the dashboard during build; the workspace typecheck then runs core/bot standalone tsc). Added a comment block explaining the ordering.
+- `turbo.json` — `typecheck.dependsOn` changed from `["^build"]` to `["^build", "build"]` (belt-and-braces: the task graph never runs a types-dependent check before its own build).
+- `apps/dashboard/next.config.mjs` — inspected, NOT modified: contains no `typescript.ignoreBuildErrors` and no `eslint.ignoreDuringBuilds`, so `next build` keeps full TS error reporting ON.
+
+### Gate results (all green)
+- Fresh clean (`rm -rf apps/dashboard/.next node_modules/.cache/turbo`): `pnpm run build` → 4/4 tasks successful (dashboard 13 routes); `pnpm run typecheck` → 8/8 tasks successful (dashboard no-op defers to build; core/bot/db standalone tsc pass).
+- Deliberate TS error probe: added `apps/dashboard/components/__ts_error_probe.tsx` with `const x: string = 123` → `pnpm --filter @spotedge/dashboard run build` → "Failed to compile", `Type error: Type 'number' is not assignable to type 'string'` (TS2322), exit code 1. Proves type-checking is still active under Approach B. Probe removed → rebuild exit 0.
+- `next build` did NOT rewrite `apps/dashboard/tsconfig.json` (git diff = only my one-line exclude edit) — no tsconfig churn.
+- `.next/` confirmed gitignored (`.gitignore:7`).
+- Full test suite: **458 tests** green, unchanged (core 333, bot 91, db 14, dashboard 20) — build-config-only change touches no runtime code.
+
+### Notes
+- deploy.sh completes-past-step-5-on-server is a deploy-time observation (the local fresh-clean reproduction covers the same code path); recorded here per spec acceptance.
+- Build order is now COMPLETE: modules 01–17 all DONE/APPROVED. No further module queued.
+
+**Checkpoint printed:** [CHECKPOINT]
