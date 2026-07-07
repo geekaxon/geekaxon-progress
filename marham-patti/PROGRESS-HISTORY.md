@@ -10,6 +10,43 @@
 
 ---
 
+## Build-step 42 — Branded App Entrances (Staff / Patient / Rider / Phlebotomist) ✅ DONE/APPROVED (2026-07-07)
+
+**WORK TYPE:** FEATURE · **Phase:** 4 (App Shell, Demo Data, Entrances & Design System) / item 3 · **Branch:** `feature/42-branded-entrances`. Ended with `[CHECKPOINT]`. Depends on 40 (shell/session/role-routing), 41 (users to log in as), 07 (brand), 13 (PWA base). **Schema/RLS/migration:** none (no new business tables). **Auth/permission impact:** none — rider/phleb logins REUSE the existing 03 `/auth/staff/login`; no contract reshaping. **Feature flags:** none owned — entrances RESPECT existing flags (`patient.app`, `lab.homeCollection`, `pharmacy.online`); a capability that's off shows the island's clean no-access state inside branded chrome (never a broken app).
+
+**Problem.** Every audience shared one generic PWA identity and one entry experience; `/` was still the step-01 colour-swatch placeholder, and rider/phlebotomist had no tailored login/home. The foodpanda model wants separate branded "apps" per audience (own name/icon/install identity/login/home) over ONE codebase/backend/auth — no forks.
+
+**What changed.**
+- **Entrance chooser `/`** (`apps/web/app/page.tsx`, rewritten) — server component replacing the swatch placeholder: product mark + four large entrance cards (Staff→`/dashboard`, Patient→`/patient`, Rider→`/rider`, Phlebotomist→`/phlebotomist`), `?lang=` EN/UR toggle (plain links, no client JS), RTL-correct, rendered entirely from brand CSS-vars + i18n catalog. `poweredBy` footer. First-load **166 B / 106 kB** (well under the 250 kB script budget). The 40 route guard forwards a logged-out visitor to the right login and a signed-in one straight into their app.
+- **Four scoped PWA manifests** (`public/manifest-{staff,patient,rider,phlebo}.webmanifest`) with per-audience `name`/`short_name`/`id`/`start_url`/`scope`/icon — Staff (scope `/`, start `/dashboard`), Patient (the flagship "Marham Patti", scope `/patient`), Rider (scope `/rider`), Phlebo (scope `/phlebotomist`). Linked per audience: `(app)/layout.tsx` (staff) + `(patient)/layout.tsx` (patient) via `metadata.manifest`; rider/phleb via each **page's** metadata since they share the one `(field)` group. Root `/` + `/login` keep the flagship `manifest.webmanifest`. Verified via curl: each scope emits its own `<link rel="manifest">`.
+- **Four brand-derived install icons** (`public/icon-{staff,patient,rider,phlebo}.svg`) — same teal-tile family, distinct glyph (pulse / heart / scooter / vial).
+- **Light audience chrome** (`components/shell/EntranceChrome.tsx`, new) — a minimal phone-first top bar (brand mark + audience pill + `LanguageSwitcher` + `ThemeToggle` + logout) wrapping patient/rider/phleb (no staff sidebar). One component, audience derived from the path so the shared `(field)` group shows the right identity. Wired in `(patient)/layout.tsx` + `(field)/layout.tsx` (guard → chrome → page). `poweredBy` honoured via `useBrand`. Logout returns each audience to its own door.
+- **Dedicated field logins** (`(auth)/login/rider/page.tsx`, `(auth)/login/phlebotomist/page.tsx`, new) — simplified staff-auth doors (email+password, audience-preset copy). `StaffLoginForm` gained an `audience` prop: on success, a role whose home ≠ the door's home is routed to its **correct** role home with a gentle notice (`entrance.mismatchNotice`) after a 1.4 s beat — never blocked, never blank (Acceptance §4). `loginPathForPath()` now sends `/rider`→`/login/rider`, `/phlebotomist`→`/login/phlebotomist` (patient unchanged).
+- **Page container fix** — the four field/patient pages used `className="mp-shell"`, which collided with the step-40 staff-shell grid (`.mp-shell` is defined twice). Switched them to a new `.mp-entrance-page` centered container (and dropped their stray `<main>` since the chrome now owns it).
+- **Service worker** (`public/sw.js`) — bumped `SHELL_CACHE` v1→v2 and added the four manifests + four icons to the precache list so each installed scope keeps its identity offline. ONE SW, logic unchanged (no fork).
+- **CSS** (`globals.css`, +~220 lines) — `.mp-entry-*` (chooser) + `.mp-entrance-*` (chrome), dark-aware via `--mp-*` tokens from the start (card name/CTA get `html.dark` overrides so no dark-on-dark), RTL logical properties, big touch targets.
+- **i18n** — new nested `entrance` block (18 keys) × EN+UR, inserted after `home` (originals byte-preserved). RTL verified live (اردو chooser renders `dir="rtl"` + Urdu labels).
+
+**Verification gates (all green).** typecheck **42/42** · lint **42/42** (0 errors) · `next build` **45/45** pages, compiled clean, **all URLs unchanged** (only additive `/login/rider`, `/login/phlebotomist`; `/lh-bloated` negative test intact) · jest: **db 198/198**, **i18n 19/19** (EN↔UR parity holds at 1438 keys each), api/ui/others cached-green from 41 · **performance:** `/` 166 B / 106 kB (< 250 kB budget); patient/rider/phleb entry surfaces stay lean (147–149 kB). **Runtime smoke:** curl 200 on `/`, `/?lang=ur`, `/login/rider`, `/login/phlebotomist`, all four manifests + icons; per-scope manifest links + rider manifest name/scope verified. **White-label:** chrome reads brand tokens + `useBrand` appName, `poweredBy` honoured; public surfaces use the default identity (consistent with the shipped `/login`). **Flags:** islands already degrade to a clean `noaccess` state (`paNoAccess` etc.) on 403, now inside branded chrome. **Do-NOT-break:** `StoredBundle`/`mp.auth` untouched, provider stack + brand-var injection intact, auth contracts unchanged, seed.ts untouched, offline SW behaviour preserved.
+
+---
+
+## Build-step 41 — Staging Demo Data Seed ✅ DONE/APPROVED (2026-07-07)
+
+**WORK TYPE:** FEATURE · **Phase:** 4 (App Shell, Demo Data, Entrances & Design System) / item 2 · **Branch:** `feature/41-demo-data-seed`. Ended with `[CHECKPOINT]`. Depends on the full data model (01–39). **Schema/RLS/migration:** none. **Auth impact:** staging-only MFA relaxation seam added to `auth.constants.roleRequiresMfa()` (gate `APP_ENV==='staging' && MFA_STAGING_RELAX && role!=='TENANT_OWNER'`; production path provably unchanged, fail-closed). **Feature flags:** none owned; seeds the Ganatra tenant at the Full preset. *(History entry reconstructed from the PROGRESS.md summary — the full entry was not appended when 41 finished because its work was still uncommitted at the time.)*
+
+**Problem.** Staging had a bare tenant (`seed.ts`: one owner + Full preset). Demoing/QA'ing the 39 modules needed a realistic, populated, invariant-correct dataset — without ever risking production.
+
+**What changed.**
+- **`packages/db/prisma/seed-demo.ts` + `@mp/db` `seed:demo` script.** HARD-GATED at entry (`APP_ENV==='staging' && SEED_DEMO==='1'`, else exits non-zero loudly; **never** in `deploy.sh`). All writes via `runWithTenant`. Deterministic `d_*` ids + upsert → idempotent (2nd run = no dups).
+- **Pure in-memory plan** (`packages/db/src/demo/plan.ts`) builds the whole Ganatra (Full preset) dataset: 12 role logins + 5 doctors, 28 patients (families / shared-phone / no-phone dependent / allergies / udhaar), 161 medicines + batches (expired/near/healthy), 30 lab tests w/ smart age-gender templates + 3 packages, 5 suppliers, ~2–3 wks of history (appointments/tokens, encounters/vitals/Rx, lab lifecycle incl. approved+pending+amended, FEFO pharmacy sales, invoices/payments incl. partial+udhaar+overdue AR, CLOSED shift w/ non-zero variance, DAMAGE/EXPIRE write-offs, PO→GRN chain, home-collection, commission).
+- **Invariants proven BY CONSTRUCTION + self-asserted:** trial balance Σdebit==Σcredit, stock==Σmovements, FEFO ordering, shift variance.
+- **Config seam** (`packages/config`): added `SEED_DEMO?`, `SEED_DEMO_PASSWORD?`, `MFA_STAGING_RELAX?` (optional, fail-closed) + documented in `.env.example`.
+
+**Verification gates (all green).** typecheck 27/27 · lint 15/15 (0 err) · **db 198/198** (+20 incl. full-dataset invariant tests) · **api 874/874** (+5 MFA) · gate-refusal exits 1. NEVER in `deploy.sh`.
+
+---
+
 ## Build-step 40 — App Shell + Session Layer ✅ DONE/APPROVED (2026-07-07)
 
 **WORK TYPE:** FEATURE · **Phase:** 4 (App Shell, Demo Data, Entrances & Design System) / item 1 · **Branch:** `feature/40-app-shell-session`. Ended with `[CHECKPOINT]`. Depends on 03 (auth), 04 (RBAC), 05 (flags), 07 (brand), 08 (i18n), 13 (@mp/ui). **Schema/RLS/migration:** none (one small API read endpoint; reuses existing scopes). **Auth/permission impact:** additive `GET /auth/me` (auth-guarded); no contract reshaping. **Feature flags:** none owned — the shell RESPECTS all flags (flag-first, then permission, then role).
