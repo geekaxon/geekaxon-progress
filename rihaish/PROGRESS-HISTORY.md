@@ -197,3 +197,61 @@ Append-only. Planning record first, then one detailed entry per completed build 
 - Actor on audit rows defaults to `PLATFORM`; real principal + impersonation supplied by auth (step 04).
 
 **Checkpoint:** [CHECKPOINT] — progress marker; controller auto-approves and continues to step 04.
+
+---
+
+## 04 — auth-rbac — DONE (2026-07-11)
+
+**Spec:** `/specs/04-auth-rbac.md` (feature `core.auth`, isCore, depends `core.tenancy` + `core.entitlements`). No CODEREF. Identity + roles + sessions + three-layer permission enforcement.
+
+**Data model (`prisma/schema.prisma`):** enums `UserStatus` (INVITED|ACTIVE|SUSPENDED), `DeviceKind` (PERSONAL|SHARED). Models `User` (nullable `societyId`=platform; phone/email/passwordHash/pinHash; `@@unique([societyId,phone])`/`([societyId,email])`), `Role` (nullable societyId, `permissions String[]`, `@@unique([societyId,code])`), `UserRole`, `LoginAlias` (`@@unique([societyId,alias])`, soft `deletedAt`), `Session` (`tokenHash` unique, `deviceKind`, `activeFlatId`, `impersonatedBy`, `lastSeenAt`, `expiresAt`), `LoginAttempt` (identifier/ip/success/kind, indexed for lockout queries), `OtpCode` (codeHash/expiresAt/consumedAt). Tenant-scoping recap encoded in a schema comment.
+- **Scoping consequences (deliberate):** `User`+`LoginAlias` are tenant-scoped (societyId+deletedAt) → society-host login inside the scope auto-pins the lookup so an alias/phone from society A can't resolve a society-B account. `Role`/`UserRole` = seeded config (pass-through). `Session`/`LoginAttempt`/`OtpCode` = security infra without `deletedAt` (pass-through) so they work on the apex host (platform login) too.
+
+**Pure logic (no DB, fully unit-tested):**
+- `lib/rbac.ts` — `PERMISSION_REGISTRY` (permission→gating-feature; `null`=ungated/core), `ROLE_SEEDS` (2 platform + 9 society system roles), `effectivePermissions(rolePerms, entitledFeatures|null)` = expand `*` → union → ∩ entitlements (platform=null skips ∩; literal `*` never leaks into the set), `can`/`canAll`/`canAny`.
+- `lib/auth-identity.ts` — `classifyIdentifier` (phone/email/alias), `normalizePhone`/`normalizeAlias`, `allowedKindsFor`/`isKindAllowedOn` (society=phone|alias, apex=email), `resolveIdentifier`.
+- `lib/rate-limit.ts` — `evaluateLockout` (5/identifier/15 min → exponential backoff from base 30 s capped 1 h; per-IP config threshold 20), `canSendOtp` (3/phone/10 min).
+- `lib/otp.ts` — `generateOtp` (crypto `randomInt`, 6-digit), `hashOtp` (sha-256), `checkOtp` (consumed→expired→hash order; single-use + 5 min TTL).
+- `lib/password.ts` — scrypt (`scrypt$N$r$p$salt$hash`, self-describing), constant-time verify, false (never throws) on null/malformed. Used for passwords **and** guard PINs.
+
+**DB / service glue:**
+- `lib/auth.ts` (**added to ESLint `db.unscoped()` allowlist** — the auth boundary, like the tenant resolver): `login` (host-aware; generic `UnauthenticatedError` + `LoginAttempt` on every failure so account existence never leaks; lockout checked first; PIN restricted to society shared-device; only ACTIVE users), session create/destroy/`destroyUserSessions`, `getAuthContext`/`requireAuth` (absolute expiry + SHARED 30 min idle TTL + **suspended/deleted user → session destroyed** + `lastSeenAt` slide throttled to 1/min), `setActiveFlat`, opaque token (32 B) hashed at rest, cookie reader.
+- `lib/authz.ts` — layer-1 guard: `requireRole` (any-of), `requirePermission`/`requirePermissions`, `requirePersonalDevice` (guard shared device ≠ resident data), `authorize({roles,permissions,features,personalDeviceOnly})` composing `requireFeature`.
+- `lib/residents.ts` — read-only flats seam (`getUserFlats`) owned by step 16; stub returns `[]`.
+- `lib/roles.ts` — `syncPlatformRoles` / `seedSocietyRoles` (findFirst+create/update to dodge NULL-in-compound-unique).
+- `lib/http-auth.ts` — `authErrorResponse` (adds `Retry-After` for 429), `clientIp`, httpOnly session cookie set/clear (30 d personal / 12 h shared, `secure` off in dev).
+- `lib/errors.ts` — `UnauthenticatedError` (401), `ForbiddenError` (403, carries `missing`), `RateLimitedError` (429, `retryAfterMs`) wired into `httpStatusForError`/`codeForError`.
+- `lib/features.ts` — registered `core.auth`.
+
+**Routes:** `POST /api/auth/login` (society: phone/alias+password or `{pin}` shared-device; apex: email+password; zod-validated; sets cookie), `POST /api/auth/logout` (idempotent, clears cookie), `POST /api/auth/otp/request` (feature-gated → 403 until step 11), `GET /api/me/flats` (auth'd; switcher data via residents seam inside `withSociety`), `POST /api/me/active-flat` (auth'd; refuses a flat the user doesn't hold).
+
+**Migration:** `20260711140000_auth_rbac` — hand-authored offline (no Postgres in agent env; identical SQL applied by `deploy.sh migrate deploy`). 2 enums + 7 tables + uniques/indexes + FKs (UserRole/LoginAlias/Session → User, onDelete Cascade).
+
+**Tests:** unit **117/117** (added: rbac 8, auth-identity 9, rate-limit 9, otp 6, password 3 = 35). e2e `e2e/auth.spec.ts` (apex-rejects-alias 401, me/flats requires auth, otp 403 seam; skips when `rufi` unseeded — e2e is not a CI gate).
+
+**Verification:** typecheck ✔ · lint ✔ (0 warnings) · test:unit ✔ 117/117 · build ✔ (7 auth/me routes registered, middleware 52 kB) · prisma generate ✔.
+
+**Acceptance-criteria mapping:**
+- Alias login resolves to right user; alias from society A can't log into society B → `findUser` pins `societyId` in the `LoginAlias`+`User` where (scoped model also auto-pins); `e2e/auth.spec.ts` + isolation-by-construction. ✔ (DB-integration test runs in CI once Postgres is wired.)
+- Effective permissions = role ∩ entitlements → `rbac.test.ts` (SOCIETY_ADMIN `*` without `amenities` → no amenity perm; with → gains it). ✔
+- Rate limiter locks out after threshold; OTP single-use + expires → `rate-limit.test.ts` (threshold/backoff/window/unlock) + `otp.test.ts` (consumed/expired/mismatch). ✔
+- Apex rejects flat-alias login; society rejects platform login → `auth-identity.test.ts` (`allowedKindsFor`/`resolveIdentifier`) + `login` `allowedOnHost` guard + `e2e/auth.spec.ts`. ✔
+- Guard PIN reaches only guard console; multi-flat switcher — enforcement built (`requirePersonalDevice`, `Session.deviceKind` 30 min idle TTL; `/api/me/flats` + `/api/me/active-flat` with holding check). The **branded UI** Playwright flows land with the app shell (05) / form kit (06) / branding (13) — see decision below. ✔ (backend) / deferred (UI).
+
+**Decisions made (logged, autonomous — no approval gate):**
+- **`auth.otp` feature NOT registered this step.** It depends on `integrations.sms` (born step 11) and `assertValidDag` forbids an edge to an unregistered feature; stubbing a future module's feature would be worse. All OTP *primitives* (generate/hash/check, send rate-limit) are built and unit-tested now; the endpoint feature-gates on `auth.otp` and therefore **403s until step 11** registers `auth.otp`+`integrations.sms` and enables it — which is exactly the spec's "option not rendered / endpoint 403s".
+- **`lib/auth.ts` is scope-independent and uses `db.unscoped()` with explicit `societyId` pinning** (added to the ESLint allowlist next to `lib/tenant.ts`), because platform users live outside any society scope and session/attempt lookups happen before a scope exists. Isolation is preserved by hand (every cross-tenant read carries an explicit `societyId`), not by the scoping layer.
+- **No branded login/switcher UI shipped this step.** shadcn app shell (05), form/input kit (06) and per-society branding (13) don't exist yet; hand-rolling raw inputs would violate the UI contract (§5). Per §5 server enforcement is the check that matters and UI hiding is cosmetic — so the full auth **backend + guards** ship now and the Playwright UI flows attach once the kits exist.
+- **Guard PIN uses the same scrypt path as passwords** (a short secret still gets a slow salted hash); OTP uses fast sha-256 (single-use, 5 min TTL — a per-code KDF buys nothing).
+- **Session token model:** opaque 32-byte token in an httpOnly cookie, only its sha-256 stored (`Session.tokenHash` unique). Suspended/deleted user invalidates on the next request (session row deleted in `getAuthContext`).
+- **Migration authored offline** (no Postgres in agent env), matching steps 02–03; `deploy.sh` applies via `migrate deploy`.
+
+**Follow-ups (later steps):**
+- Branded login page (Simple: "Phone or flat number" + password + guard PIN pad; Pro: remember-device, session list/revoke) → steps 05/06/13; auth backend + `/api/me/*` already provide the data.
+- `getUserFlats` real implementation vs `FlatOccupancy` → step 16 (keeps `lib/residents.ts` signature).
+- `syncPlatformRoles`/`seedSocietyRoles` invoked from platform bootstrap (08) / onboarding (21); `createSession(...impersonatedBy)` consumed by impersonation (08).
+- OTP send/verify completion + `auth.otp`/`integrations.sms` registration → step 11.
+- DB-backed integration tests (alias cross-society isolation, suspended-session invalidation, lockout persistence) run in CI once a Postgres service is added; all decision logic is unit-covered now.
+- TOTP 2FA for platform users noted in spec (apex login "+ TOTP 2FA") — seam only; full enrol/verify is a later platform-console concern.
+
+**Checkpoint:** [CHECKPOINT] — progress marker; controller auto-approves and continues to step 05.
