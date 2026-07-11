@@ -1,0 +1,73 @@
+# AGENT.md — Rihaish
+
+Build-loop mechanics live in `CLAUDE.md` (controller-managed). This file is **what "correct" means for this project**.
+
+## 1. Golden rules (violating any = stop and fix, not "note in PR")
+1. **Never hard-delete.** Soft delete + `AuditLog` entry. Applies to money, users, passes, roles, entitlements.
+2. **Never write a query without `societyId` scope.** Use the enforced data layer (Prisma extension). A raw unscoped query is a build failure.
+3. **Never merge platform billing with society billing.** Different tables, different modules, different UI.
+4. **Never mutate financial history.** Correct by reversal (new ledger entry), never by edit or delete.
+5. **Money = BigInt minor units** + society `currency`/`minorUnitDigits`. No floats, ever. PKR has 0 decimals.
+6. **Timestamps stored UTC**, rendered in society timezone.
+7. **No secrets in the repo.** `.env.example` placeholders only. Society SMS/WhatsApp credentials encrypted at rest, never logged.
+8. **No auto-production deploy.** Staging on push; production only by owner Telegram command.
+9. **Every module registers a feature code + dependency edges** in the feature registry. A module that can't be toggled by L0 is unfinished.
+10. **Utility-bill amounts never enter the maintenance ledger.** Notices are reminders, not receivables.
+11. **CNIC and other sensitive PII**: encrypted at rest, masked in UI (last 4), never in logs, never exported without an audit entry.
+12. **Cross-tenant reads are impossible.** A tenant host can never reach a platform route, and vice versa — including via the screenshot token.
+
+## 2. Per-module workflow
+**The build loop, branch naming (`feature/<NN-slug>` / `fix/<slug>`), the mandatory `WORK TYPE:` line, the no-self-merge rule and the PROGRESS-file update rules all live in `CLAUDE.md`. Follow it — do not re-derive them from here.** This section only adds what is specific to Rihaish:
+
+1. The spec at `/specs/NN-slug.md` is **authoritative**. Missing spec → `[HUMAN_REQUIRED]`, never guess.
+2. Implement the module **and register its feature code + dependency edges** in the feature registry (§1.9). A module that L0 cannot toggle is unfinished.
+3. Write the migration. Write the tests demanded by §3.
+4. Run every verification gate in §3. All must pass before the checkpoint.
+5. Emit the checkpoint marker **exactly as written at the end of that module's spec** — `[FIXED_CHECKPOINT]` only where the spec says so.
+6. **Never self-approve a `[FIXED_CHECKPOINT]`.** If the previous step is a HARD checkpoint still awaiting the operator, stop with `[HUMAN_REQUIRED]`. The soft-checkpoint auto-approval fallback in `CLAUDE.md` does not apply to the HARD list (§4).
+
+## 3. Verification gates (every module)
+- `pnpm typecheck` — zero errors
+- `pnpm build` — succeeds with a fresh `BUILD_ID`
+- `pnpm test:unit` — **mandatory Vitest coverage** on: tenant-scoping layer, entitlement resolver + DAG, charge engine, ledger, payment reversal, invoice numbering
+- `pnpm test:e2e` (Playwright smoke) on: auth, invoice generation, gate-pass verification
+- `pnpm lint` — zero errors
+- **UI design self-check** (UI modules — all must be true, else the module is not done):
+  - [ ] shadcn/ui + design tokens only — no raw HTML, no hand-rolled table, no hand-rolled input
+  - [ ] Light **and** dark verified
+  - [ ] **RTL/Urdu** verified — logical properties (`ms-/me-/ps-/pe-`), never `ml-/mr-`
+  - [ ] Responsive: guard's phone → tablet → desktop
+  - [ ] Skeleton loader, empty state, error state all present
+  - [ ] Every list uses the **Data Table kit** (sort, column visibility, search, filters, pagination, list/card toggle, export)
+  - [ ] Every input uses the **Form kit** (searchable select for >10 options, proper date/time picker, intl phone, masks)
+  - [ ] Client-side navigation — **no full page reload**
+  - [ ] Simple **and** Pro variants implemented where applicable
+  - [ ] Charts animated, accessible, exportable
+  - [ ] Nav + actions gated by role × entitlement, verified against the server guard
+  - [ ] Toasts for feedback; no browser `alert()`
+  - [ ] Module still works correctly with its optional features **disabled** (graceful degradation, never a 500)
+  - [ ] Screenshot attached to the checkpoint
+
+## 4. Checkpoints
+- **`[FIXED_CHECKPOINT]`** — HARD stop, operator must APPROVE. Steps: **01, 02, 03, 04, 05, 06, 07, 08, 15, 16, 17, 18, 19, 22, 28.** These are tenancy, auth, entitlements, the UI kits everything depends on, the data-model foundations, money, and gate-pass security. A wrong call here is expensive or irreversible.
+- **`[CHECKPOINT]`** — soft, auto-approved after 30s. Every other module.
+- **`[HUMAN_REQUIRED]`** — hand-off. Use for: DNS / wildcard SSL / custom-domain SSL, Oracle iptables + Security List ports, aaPanel site creation, missing spec, non-code-fixable deploy failure, anything needing a credential the agent doesn't have.
+
+## 5. Deploy-error triage
+- **Code-fixable** (typecheck, build, lint, migration conflict, missing Prisma client, bad import, failing test): fix and retry. **Maximum 2 attempts**, then `[HUMAN_REQUIRED]` with the exact error.
+- **Infra** (DNS, SSL, port/firewall, aaPanel, disk, DB unreachable, Node missing, permissions): do **not** retry-loop. Emit `[HUMAN_REQUIRED]` immediately with the failing command and output.
+- Never `rm -rf`, never `DROP DATABASE`, never `--force` push, never touch anything named `production`/`prod` outside the sanctioned deploy path.
+
+## 6. Build-tooling & deploy hard rules
+- `pnpm install --frozen-lockfile` **including dev deps** — typecheck/build need them.
+- `prisma generate` runs **after install, before typecheck/build** — in CI *and* in `deploy.sh`. Same order in both.
+- Prisma `binaryTargets = ["native","linux-arm64-openssl-3.0.x"]` — the VPS is **ARM64**. `sharp` must resolve its arm64 build.
+- Fresh `BUILD_ID` every deploy. `pm2 restart` (never `reload`). Health check must gate success.
+- `.env` loaded at repo root via `set -a; . ./.env; set +a`. Keep secret values alphanumeric.
+- Two processes: `rihaish-web` (cluster) + `rihaish-worker` (fork). Nothing heavy runs in a request.
+
+## 7. Screenshot token
+`?screenshot_token=` grants authenticated **read-only** preview. Enabled **only** when `APP_ENV === "staging"`. **Fail-closed** everywhere else. Never in production. Validated **after** the society is resolved and **scoped to that society** — it can never read across tenants. Documented in `.env.example`.
+
+## 8. Design quality is not optional
+Polished, modern, "VIP" UI is part of the definition of done for every UI module — not a follow-up task. Plain HTML, an unstyled table, a native `<select>` with 300 options, or a missing dark/RTL variant means the module **fails** its checkpoint, regardless of whether the logic works.
