@@ -10,6 +10,34 @@
 
 ---
 
+## Build-step 44 — Design System Hardening & Consistency Pass (`feature/44-design-system`) ✅ DONE/APPROVED (2026-07-10)
+
+**WORK TYPE:** FEATURE · **Phase:** 4 (App Shell, Demo Data, Entrances & Design System) / item 5 — **completes Phase 4**. Ended with `[CHECKPOINT]`. Depends on 40 (shell), 43 (corrected tokens/AA guard), 13 (`@mp/ui` foundation). **Schema/RLS/migration:** none. **Auth/permission/flag impact:** none — pure visual layer; all flag-then-permission gating, the 40 nav, and vertical-preset behaviour preserved. **Data contracts/handlers/tests:** unchanged (presentation-only migration; every pre-existing module test passes unchanged).
+
+**Problem.** The 39 module screens were functionally deep but visually drifted: each hand-rolled `.mp-*` atoms (`mp-btn`/`mp-input`/`mp-card`/`mp-badge`) so inputs didn't match selects, buttons/tables/cards/badges varied screen-to-screen. The owner's mandate is one premium, CONSISTENT design system — which comes from a shared component library, not per-screen restyling. Spec 13 promised `@mp/ui` as that system but modules never adopted it.
+
+**What changed.**
+- **Hardened `@mp/ui` into the single system** (`packages/ui/src/components/`, re-exported from `index.ts`): added **StatusPill** (semantic `tone` dot), **Checkbox/Radio/Switch** (`form-controls`), **Alert/Banner** (`alert`), **Avatar**, **Tooltip**, **Breadcrumb**, **Pagination**, **SearchField**, **PageHeader/Toolbar/FilterBar** (`page`), **Drawer** (+ trigger/close/content/title/description/header/footer), **ConfirmDialog**, and **DataTable** (sortable/searchable/paginated) grafted onto the existing `data-list` (added `sortValue` column hook + sort state; `DataTable`/`DataTableColumn` aliases exported). All brand-tokened, light+dark, RTL-correct, AA (43's guard), large-touch, keyboard-accessible.
+- **`<Card>` made self-padding** (`card.tsx`): the retired `.mp-card` supplied `display:grid; gap:0.85rem; padding:1.1rem` — the shadcn-style `<Card>` had none, so bare `<Card>` (the dominant module pattern, 53 sites) would have lost all internal spacing. Card now defaults to `flex flex-col gap-3.5 p-5`; `CardHeader`/`CardContent`/`CardFooter` became padding-less semantic groupings (they stack inside Card's single padding). Only the `/ui` gallery composed those sub-parts, so the change is contained; ui tests + build confirm no regression.
+- **Migrated ALL 33 module screens** off the retired atoms to the shared components (drop the atom class, keep every other class/prop/handler/key; presentation-only). Groups: **clinic** patients/appointments/vitals/consultation/prescriptions; **lab** lab/samples/home-collection/phlebotomist; **pharmacy** pharmacy/inventory/purchase/transfer/store/rider/rx-desk; **money** billing/accounts/commission/dashboard; **admin+apps** ai-cost/audit/brand/consent(manager+gate)/flags/import/notifications/roles/sync + patient app + patient/assistant + doctor portal. Mappings: `<button className="mp-btn[-lg|-sm|-ghost|-danger]">`→`<Button size/variant>` (anchors via `asChild`+`<a>`), `<input className="mp-input">`→`<Input>`, `<select>`→`<NativeSelect>`, `<textarea>`→`<Textarea>`, `<div|section className="mp-card">`→`<Card>`, `<span|p className="mp-badge">`→`<Badge>`. `<Button>` defaults `type="button"`; the two implicit-submit buttons already carried explicit `type="submit"` (preserved). Layout/page classes (`mp-pt*`, `mp-field`, `mp-label`, `mp-msg*`, `mp-table`, `mp-grid-2`, `mp-h2/h3`, module-specific `mp-appt-*`/`mp-vitals-*`/`mp-kpi*`/`mp-alert*`, etc.) left untouched.
+- **Drift guard** `apps/web/scripts/design-drift-check.mjs` — walks the screen roots (`(app)`, `(patient)`, `(field)`, `store`) and fails the build if any retired `mp-(btn|input|card|badge)` atom reappears; wired into `apps/web` `pnpm lint` (`eslint . && node scripts/design-drift-check.mjs`) + a standalone `pnpm drift`. **Proven to bite:** a deliberate `<button className="mp-btn">` probe → exit 1 with a located finding; removed → exit 0. (Uses `dirname(fileURLToPath(import.meta.url))`, not the `URL` global, to satisfy the shared eslint config.)
+- **`/ui` gallery** (`app/ui/UiShowcase.tsx`) extended to showcase the full system (every component, light+dark, LTR+RTL) — the living reference (load-bearing documentation).
+- **i18n:** reused existing keys where possible; EN/UR catalogs updated in lockstep (parity held at 1438/1438, zero missing/extra either direction). No hardcoded UI text (eslint i18n guard green).
+
+**Known follow-ups (noted, not redesigned — per spec §3 "note structurally-poor UX as follow-up"):** (1) a few list-item cards `<li className="mp-card">` became `<Card>` (a `<div>`) rendered directly inside a `<ul>` in Store/Rx-desk/Rider — valid-enough, renders 200, but semantically a `<ul>`+`<div>` mix; revisit with a `List`/`ListItem` primitive. (2) StoreClient's cart heading `<h2 className="mp-badge">` became `<Badge>` (a `<span>`), dropping one heading element — cosmetic. Both are presentation-only and behaviourally identical.
+
+**Verification gates (all green).**
+- **typecheck:** 27/27 turbo tasks (fixed 4 in-progress JSX closing-tag mismatches `</section>|</div>`→`</Card>` in ai-cost/billing/inventory/patient, and `variant="default"`→`"primary"` active-tab ternaries across 9 screens).
+- **lint:** 15/15 incl. the drift guard (`✓ no retired atoms`); zero eslint errors; unused-import cleanup (dropped stray `NativeSelect`/`Badge` imports).
+- **jest:** 20 turbo test tasks — **api 874/874** (75 suites, unchanged), **@mp/ui 55/55** (10 suites; +12 from the new `system.spec.tsx` covering the hardened components), i18n parity, **db 198/198**, brand — all pre-existing module tests unchanged and passing.
+- **next build:** 45/45 routes. **Public route-JS held within the 250 kB script budget** (`budgets.json` untouched, not loosened): `/` **106 kB (unchanged vs 43)**, `/login` 152 kB, `/store` 196 kB; `/lh-bloated` kept as the 383 kB negative test. Internal routes 148–230 kB. System consolidation did not grow the public bundle.
+- **runtime smoke:** production `next start` — `/`, `/login`, `/ui`, `/store` (EN) + `/ui` (UR) all **200**; heavy internal `/dashboard /accounts /lab /pharmacy /billing /purchase` all **200** (client-island shell); `/ui` gallery renders "Design System" + component sections (Alert/Breadcrumb/badge/drawer/tooltip) in EN and UR.
+- **Hygiene:** the stray 528 MB `marham-patti.zip` (a local deploy artifact, not build output) added to `.gitignore` so it can never be committed.
+
+**Do-NOT-break honoured:** URLs unchanged (no route moves); every module's data contracts/handlers/tests intact; 43's AA guard + corrected tokens untouched; perf budgets only held/improved; EN+UR parity + RTL preserved; white-label (07 tokens only — components carry no hardcoded brand). `/ui` kept current as the system's documentation.
+
+---
+
 ## Build-step 42 — Branded App Entrances (Staff / Patient / Rider / Phlebotomist) ✅ DONE/APPROVED (2026-07-07)
 
 **WORK TYPE:** FEATURE · **Phase:** 4 (App Shell, Demo Data, Entrances & Design System) / item 3 · **Branch:** `feature/42-branded-entrances`. Ended with `[CHECKPOINT]`. Depends on 40 (shell/session/role-routing), 41 (users to log in as), 07 (brand), 13 (PWA base). **Schema/RLS/migration:** none (no new business tables). **Auth/permission impact:** none — rider/phleb logins REUSE the existing 03 `/auth/staff/login`; no contract reshaping. **Feature flags:** none owned — entrances RESPECT existing flags (`patient.app`, `lab.homeCollection`, `pharmacy.online`); a capability that's off shows the island's clean no-access state inside branded chrome (never a broken app).
@@ -1726,3 +1754,49 @@ WORK TYPE: FEATURE (branch feat/32-patient-ai-assistant). Ended with `[CHECKPOIN
 - Side benefit (not a regression): the global `.mp-input`/`.mp-card`/heading dark fixes + the newly-defined generic table/label/grid classes improve every module that used them unstyled — 44 will formalize these into `@mp/ui`.
 
 WORK TYPE: FEATURE (branch feature/43-auth-ui-polish). Ended with `[CHECKPOINT]`. Controller handles the staging merge.
+
+---
+
+## Build-step 45 — Design System v2: Inter, Surfaces, Theming & Skeletons (`feature/45-design-system-v2`) ✅ DONE/APPROVED (2026-07-11)
+
+**Phase 5 / item 1.** WORK TYPE: FEATURE. Fixes the owner-reported "teal-on-teal wall" and sets the visual quality bar everything after 45 builds on. Presentation + additive-schema only; no module behaviour, RLS, or auth change.
+
+### What shipped
+1. **Surface & elevation token system (the core fix).** Reworked the semantic `--mp-*` layer in `apps/web/app/globals.css` AND the canonical mirror `packages/ui/src/styles.css`:
+   - **Light:** page `#F6F8FA` (neutral grey), card/sidebar `#FFFFFF` with a 1px neutral border (`--mp-border #E3E8EE`) + soft shadow. New tokens: `--mp-surface-raised`, `--mp-surface-sunken`, `--mp-border-strong`, and a 3-level elevation scale `--mp-shadow-1/2/3`.
+   - **Dark:** true dark NEUTRAL surfaces (page `#0E1416`, card `#171F21`, raised `#1E272A`) instead of brand-teal fills — cards read above the page by lightness, not hue.
+   - **Brand teal demoted to ACCENT** (primary CTA, active nav, links, focus) everywhere; no `--mp-bg`/`--mp-card` uses a teal fill in either mode.
+   - Elevation applied to the CSS surfaces (`.mp-card`, `.mp-kpi`, `.mp-dash-toolbar`, `.mp-entry-card`, `.mp-shell-sidebar`) and, via a Tailwind `boxShadow` override mapped to `--mp-shadow-*`, to every `@mp/ui` `Card` (`shadow-sm` is now theme-aware).
+2. **Inter everywhere (Latin/UI).** Self-hosted SUBSET Inter (latin 400 + 600, ~35 KB total) under `apps/web/public/fonts/` wired via two `@font-face` blocks (`font-display: swap`, `local()` first, Latin `unicode-range` so UR never fetches them). Repointed `--brand-font-display`/`--brand-font-body` → the Inter UI stack and retired the 3 hardcoded `Georgia` serif chrome headings (`.mp-title/.mp-subtitle/.mp-settings-subhead`). Urdu keeps its Nastaliq family (08) untouched; `body` font now `var(--mp-font-ui)`.
+3. **Theme engine.** `@mp/ui` `ThemeProvider` already did Light/Dark/System + per-user persistence; added an explicit `.light` class toggle so the pre-hydration `prefers-color-scheme` fallback (`html:not(.dark):not(.light)`) stands down for a user who chose light on a dark-preferring OS. First-paint dark body updated to the v2 neutral `#0E1416`.
+4. **Palette personalization (per-tenant).** `@mp/brand`: `ThemeDefault` type + `PALETTE_PRESETS` (6 curated, AA-tuned: Teal Trust default, Indigo Clinical, Emerald Care, Violet Modern, Rose Warm, Slate Pro), `getPalettePreset`, `normalizeThemeDefault`. `resolveBrand` colour precedence = default → preset → legacy `themeTokens` → custom `paletteOverrides`; `ResolvedBrand` gains `themeDefault`/`palettePreset`. Threaded through the API brand repo/service/DTO/fakes; a new brand spec proves **every preset passes `checkBrandContrast`**, a custom accent layers over a preset, and an inaccessible custom accent **trips a warning** (the guard bites).
+5. **Skeletons + empty states.** `packages/ui/src/components/skeleton.tsx` gains `SkeletonCard`, `SkeletonKpis`, `SkeletonTable`, `SkeletonChart`, `SkeletonAvatar` (all exported). Applied content-shaped loaders to the Dashboard (KPI row + card + chart), Rider, Phlebotomist and Patient homes, and standard `EmptyState`s (reusing existing i18n keys — no parity gap) to the rider queue + all patient/phleb lists.
+6. **Settings → Personalization.** New client (`apps/web/app/(app)/settings/PersonalizationClient.tsx`) wired into the settings page: per-user Light/Dark/System toggle, a live-preview palette preset picker, and a custom-accent color input whose AA failure **blocks Save**. Saves `{ palettePreset, paletteOverrides, themeDefault }` via `PUT /brand`. New `settings.personalization.*` i18n subtree added to EN + UR (parity green). Palette-picker CSS added (token-driven, RTL-safe).
+7. **Contrast token-pair matrix.** `packages/ui/src/lib/auth-contrast.ts` `AUTH_DASHBOARD_PAIRS` updated to the new v2 surface values (grey light page, neutral dark surfaces, raised/sunken pairs) in BOTH modes; spec still passes AA and still bites on a bad pair.
+
+### Schema (additive)
+`branding_profile` + `theme_default TEXT`, `palette_preset TEXT`, `palette_overrides JSONB` (all NULL-defaulting → existing tenants resolve to SYSTEM + Teal Trust, no backfill). Migration `packages/db/prisma/migrations/20260711000000_design_v2_branding_theme/`. No RLS change; `branding-isolation` suite still green.
+
+### Gate results
+- `pnpm typecheck` — 27/27 tasks pass.
+- `pnpm lint` — 15/15 pass incl. the design-drift guard (no retired atoms; `mp-palette-*` are layout classes) — 1 pre-existing unrelated warning in doctor-portal.
+- `pnpm test` — 20/20 tasks, 198+ tests: contrast guard (both modes) ✓, brand presets/custom-accent AA ✓, i18n EN↔UR parity ✓, all RLS isolation suites (incl. branding) ✓.
+- `pnpm build` — 15/15; Next build clean; compiled CSS verified to contain the v2 tokens (`#f6f8fa`, `--mp-shadow-1`, Inter `@font-face`, `--mp-surface-raised`, `#0e1416`). Public route First-Load JS unchanged (no script added; fonts are ~35 KB CSS-loaded, off the script budget).
+
+### Files touched
+- `apps/web/app/globals.css` (token layer v2, Inter @font-face, elevation, palette CSS, serif retirement), `packages/ui/src/styles.css` (mirror), `packages/ui/src/tailwind-preset.ts` (surface tokens + boxShadow scale + Inter font families), `packages/ui/src/theme.tsx` (`.light` class), `packages/ui/src/components/skeleton.tsx` + `index.ts` (primitives + exports; brand palette re-exports), `packages/ui/src/lib/auth-contrast.ts` (v2 matrix).
+- `packages/brand/src/index.ts` (presets + theme default + resolve precedence + ResolvedBrand fields).
+- `packages/db/prisma/schema.prisma` + new migration.
+- `apps/api/src/brand/{brand.repositories,brand.service,brand.dto,__fakes__,brand.service.spec}.ts`.
+- `apps/web/public/fonts/inter-latin-400.woff2`, `inter-latin-600.woff2`.
+- `apps/web/app/(app)/dashboard/DashboardClient.tsx`, `(field)/rider/RiderClient.tsx`, `(field)/phlebotomist/PhlebotomistClient.tsx`, `(patient)/patient/PatientClient.tsx`.
+- `apps/web/app/(app)/settings/{page.tsx,PersonalizationClient.tsx}`, `packages/i18n/src/messages/{en,ur}.json`.
+
+### Do-NOT-break honoured
+44 component APIs stable (values-only restyle); §11/`--mp-*` token NAMES extended never renamed; 43 contrast guard extended and green; Inter does not regress UR/RTL (Latin-only unicode-range; all new CSS uses logical properties); perf budgets hold (no public script added); offline paths/indicators untouched; entrance identities (42) restyled not merged; auth surface (43, light-locked teal-backdrop card) intentionally left as its own branded treatment; `poweredBy` untouched.
+
+### Notes / follow-ups
+- Skeleton/empty coverage was applied to the dashboard + all four entrances + the named heavy patient/rider/phleb lists (the spec's spot-check set). Remaining module screens inherit the v2 surface/elevation/Inter restyle automatically via tokens; converting their few remaining bare-text loaders to skeletons is a safe incremental follow-up (not required for acceptance).
+- Screenshots were not captured in this headless environment; visual acceptance was verified by (a) the extended AA token-pair matrix in both modes, (b) compiled-CSS token inspection, and (c) a clean production build of every route.
+
+WORK TYPE: FEATURE (branch feature/45-design-system-v2). Ended with `[CHECKPOINT]`. Controller handles the staging merge.
