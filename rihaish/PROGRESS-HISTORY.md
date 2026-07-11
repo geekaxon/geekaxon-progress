@@ -255,3 +255,79 @@ Append-only. Planning record first, then one detailed entry per completed build 
 - TOTP 2FA for platform users noted in spec (apex login "+ TOTP 2FA") — seam only; full enrol/verify is a later platform-console concern.
 
 **Checkpoint:** [CHECKPOINT] — progress marker; controller auto-approves and continues to step 05.
+
+---
+
+## 05 — app-shell — DONE (2026-07-11)
+
+**Branch:** `feature/05-app-shell` · **Spec:** `/specs/05-app-shell.md` (no CODEREF for 05).
+**Feature:** `core.shell` registered — `isCore`, `dependsOn: [core.auth, core.entitlements]` (`lib/features.ts`). Auto-flows into `CORE_FEATURE_CODES`, so the resolver forces it ON for every live society and the DAG forbids disabling it.
+
+**Goal:** the frame every screen lives in — collapsible sidebar, top bar (3 toggles + search + flat switcher + bell + user menu), ⌘K palette, shared states, one toaster, read-only/impersonation banners, RTL + light/dark, client-side navigation only.
+
+### New dependencies (added, lockfile updated — `--frozen-lockfile` safe)
+`@radix-ui/react-dialog@1.1.4`, `@radix-ui/react-dropdown-menu@2.1.4`, `@radix-ui/react-tooltip@1.1.6`, `@radix-ui/react-scroll-area@1.2.2`, `@radix-ui/react-visually-hidden@1.1.1`, `@radix-ui/react-direction@1.1.0`, `cmdk@1.0.4`, `sonner@1.7.1`. Only `@radix-ui/react-slot` was present before; these are the shadcn/ui (new-york) building blocks. `react-direction` is added explicitly because pnpm's strict store does not hoist it and `AppShellClient` imports `DirectionProvider` directly.
+
+### Pure logic (framework-free, unit-tested)
+- `lib/nav.ts` — the society nav registry + its role × entitlement gate. `NavItem` carries `permission?`/`feature?`/`hideOnSharedDevice?`; `canSeeNavItem` / `visibleNav` / `groupNav` / `visibleNavByGroup` implement **the rule that matters: a nav item renders only when `can(permission) && hasFeature(feature)`** (mirrors `lib/authz.ts`; server still enforces the route). No React, no DB, so the sidebar, the palette and the server all filter through the same code. Home + account are ungated so a zero-feature society still renders a usable frame.
+- `lib/nav.test.ts` — **8 tests**: ungated-only baseline, permission-without-feature hidden, feature-without-permission hidden, both-present shown, permission-only item, guard shared-device hides resident items (gate-pass still shows), group ordering, registry integrity.
+
+### shadcn/ui primitives (`components/ui/`, all RTL-logical: `ms-/me-/ps-/pe-`, `start/end`, no `ml-/mr-`)
+`tooltip.tsx`, `dropdown-menu.tsx`, `dialog.tsx`, `sheet.tsx` (drawer, logical `start`/`end` sides), `command.tsx` (cmdk wrapper; `CommandDialog` includes a `VisuallyHidden` `DialogTitle`/`Description` so Radix a11y is satisfied — no missing-title warning, protects the Lighthouse ≥95 target), `skeleton.tsx`, `sonner.tsx` (the one global `Toaster`, themed from tokens, `toast` re-export — `alert()`/`confirm()` banned), `scroll-area.tsx`, `separator.tsx` (dependency-free 1px rule).
+
+### Shell (`components/shell/`)
+- `types.ts` — `ShellData`/`ShellUser`: the serialisable payload the server layout hands the client shell (no functions, no component refs).
+- `nav-icons.ts` — maps a nav item's `icon` string → Lucide glyph on the client, keeping `lib/nav.ts` serialisable across the Server→Client boundary.
+- `app-shell-client.tsx` — the interactive frame. Wraps everything in Radix `DirectionProvider` (so every menu/tooltip/drawer mirrors under RTL), `TooltipProvider`, and `ShellProvider`; lays out sidebar + mobile drawer + top bar + `<main>` (max-w-7xl) + palette + `Toaster`; renders impersonation + read-only banners above the frame.
+- `shell-context.tsx` — client state (sidebar collapsed, mobile drawer open, palette open). Collapse is mirrored to a `rihaish_sidebar` cookie so a reload restores it with **no layout shift** (server reads the cookie in the layout).
+- `sidebar.tsx` — desktop collapsible sidebar (w-64 ↔ w-16 icon rail), brand mark + name/slug, grouped nav in a `ScrollArea`, collapse toggle; hidden under `lg`. `mobile-nav.tsx` — the same nav in a `Sheet` drawer from the logical `start` edge, closes on navigate. `sidebar-nav.tsx` — grouped `NavLink`s with active-route highlight (`usePathname`, locale-stripped), tooltips when collapsed (side computed from locale dir, not a physical guess).
+- `top-bar.tsx` — mobile menu button + compact brand (under `lg`), breadcrumbs, centred `SearchTrigger`, right cluster: `ModeToggle` (rendered only when applicable — hidden now, step 14), `FlatSwitcher`, `LocaleSwitcher`, `ThemeToggle`, `NotificationBell`, `UserMenu`. Sticky, backdrop-blur, never wraps (long names truncate).
+- `search-trigger.tsx` — input-shaped button opening the palette; shows ⌘K on macOS / Ctrl K elsewhere (computed post-mount to avoid hydration mismatch). `command-palette.tsx` — cmdk dialog, global ⌘K/Ctrl+K listener, results = the **already-gated** visible nav (can never surface a forbidden destination), client-side `router.push` (locale-aware).
+- `flat-switcher.tsx` — probes `GET /api/me/flats`, hides itself when <2 holdings, switches via `POST /api/me/active-flat` + `router.refresh()`, toasts result; server refuses a flat the user doesn't hold, so this is convenience not trust. `user-menu.tsx` — avatar initials + identity + account link + sign-out (`POST /api/auth/logout` → `router.refresh()`); degrades to a Sign-in affordance when signed out. `notification-bell.tsx` — graceful "all caught up" empty state (real channel = step 11). `mode-toggle.tsx` — Simple/Pro visual seam (local state; policy + persistence = step 14). `breadcrumbs.tsx` — `Home › <section>` from path × nav, truncates, chevron flips under RTL.
+- States: `states.tsx` — `PageSkeleton`, `EmptyState`, `Forbidden`, shared `StateShell` (all copy passed in, locale-agnostic). `error-state.tsx` — the one state that owns an interaction (retry); used by the route `error.tsx`. `page-header.tsx` — title/description/breadcrumbs/actions, one per screen. `banners.tsx` — `ReadOnlyBanner` (reuses `society.readOnlyBanner`) + `ImpersonationBanner` slot (step 08 fills the label).
+
+### Server wiring
+- `lib/server-auth.ts` — `getServerAuthContext()` adapts RSC `headers()` cookie into a `Request` for `getAuthContext`, so the shell and the API routes resolve identity through the same path.
+- `lib/shell-data.ts` — `buildShellData(society, locale)`: resolves identity, the society's entitled feature set (`resolve`), and `visibleNav`. **A signed-in user only "belongs" when `ctx.societyId === society.societyId`** — a platform session or another society's cookie is treated as a guest, so a cross-society cookie can never light up another tenant's nav. User identity (phone/email → initials, primary-role label) is read **inside `withSociety` scope** (the user is a scoped row). `canSwitchFlats` = personal-device member only.
+- `app/[locale]/app/layout.tsx` — the L1 shell layout (`runtime=nodejs`, `force-dynamic`). Host → `resolveSocietyByHost` (a generic 404 via `notFound()` for an unknown/suspended tenant — never reveals existence; a non-`TenantNotFoundError`, e.g. DB-down, rethrows → 500, correct infra semantics). Reads the sidebar cookie, renders `AppShellClient`. Confirmed **dynamic** (not prerendered) via `prerender-manifest.json` — `/en/app`,`/ur/app` are absent, server-rendered per request; the build's `●` badge is cosmetic.
+- `app/[locale]/app/page.tsx` — dashboard rewritten to live inside the shell (PageHeader + EmptyState welcome; real widgets = steps 15–39). `loading.tsx` → `PageSkeleton` (the spec's `<Suspense fallback>` at route level). `error.tsx` → `ErrorState` with retry.
+
+### i18n
+`messages/en.json` + `messages/ur.json` gained `nav.*` (labels, group headings, aria), `shell.*` (collapse/menu/impersonating + nested `error`/`flats`/`user`/`command`/`notifications`/`mode`), and `dashboard.*`. Every user-facing string routes through `next-intl` (the `react/jsx-no-literals` ESLint rule forbids bare JSX text); Urdu translations authored for all.
+
+### Verification (gates)
+- `pnpm typecheck` ✔ (0 errors)
+- `pnpm lint` ✔ (0 warnings; fixed two `sr-only "Close"` literals in dialog/sheet by wrapping in an expression container per the rule)
+- `pnpm test:unit` ✔ **125/125** (was 117; +8 nav)
+- `pnpm build` ✔ fresh `BUILD_ID`; 9 routes; middleware 52 kB; `/[locale]/app` first-load JS ~102 kB shared. Client shell tree (cmdk/radix/sonner) compiles and bundles cleanly (`page_client-reference-manifest.js` generated).
+- `pnpm test:e2e` — `e2e/app-shell.spec.ts` added: platform-host `/app` → 404 (route isolation), unknown-society host `/app` → 404 (never reveals existence), and a **no-full-reload** navigation assertion (window marker survives a nav click) that `test.skip`s when `rufi`/localhost is unseeded. e2e is not a CI gate (runs against seeded staging) — matches steps 02–04.
+- Runtime smoke: `pnpm start` boots with the new dependency tree; `/app` 500s **only** because this agent env has no `DATABASE_URL`/Postgres (`PrismaClientInitializationError` from `resolveSocietyByHost`), identical to the DB-absent posture of steps 02–04 — not a shell defect.
+
+### UI self-check (AGENT.md §3)
+- [x] shadcn/ui + design tokens only — no raw HTML table/input; every list/table is deferred to the Data-Table kit (step 07), no lists shipped here.
+- [x] Light **and** dark — all tokens; sonner + all primitives theme-aware.
+- [x] RTL/Urdu — logical properties throughout (ESLint `no-restricted-syntax` enforces it); Radix `DirectionProvider` mirrors menus/tooltips/drawers; chevrons/panels flip via `rtl:` utilities; tooltip side computed from locale dir.
+- [x] Responsive — sidebar → drawer under `lg`; top bar collapses search; guard-phone → desktop. Bottom-tab slot deferred to step 23 (shell exposes `<main>` as the content region).
+- [x] Skeleton + empty + error + forbidden — shared primitives, wired via `loading.tsx`/`error.tsx`.
+- [x] Client-side navigation — next-intl `Link`/`router`; `force-dynamic` layout; no full reload (Playwright assertion).
+- [x] Nav + palette gated by role × entitlement — `visibleNav`, unit-tested against the same predicate the server guard uses.
+- [x] Toasts for feedback; `alert()`/`confirm()` banned.
+- [x] Graceful degradation — zero optional features → Home + account only, never an empty frame or a 500.
+- Screenshot: not captured — this agent env has no Postgres, so `/app` cannot render a seeded society; the frame is verified by typecheck + build (client tree compiles) + the pure-gate unit tests. Visual capture belongs to the seeded-staging deploy.
+
+### Decisions (logged; autonomous — no approval gate)
+- **Society app shell only this step; the platform (L0) console keeps its placeholder.** Spec 05 is the L1 frame "consumed by all 35 modules"; the L0 console is step 08 and will reuse these same primitives. Building the platform shell now would pre-empt step 08's scope.
+- **Sidebar collapse persisted via a `rihaish_sidebar` cookie, read server-side** for zero flash. Real per-user DB preference lands with the user-account module (step 09); the cookie is per-browser and documented as the interim. `next-themes` already handles the theme no-flash (script injected, `suppressHydrationWarning` on `<html>` from step 01).
+- **Society brand-colour `--primary` override is a consume-only seam.** `Society` has no brand-colour column yet (step 13 adds it); `AppShellClient` is structured to inject it when present, so step 13 supplies without reworking the shell.
+- **Simple/Pro toggle rendered only where applicable → hidden now** (`showModeToggle=false`); the control is fully built (`ModeToggle`) so step 14 only wires policy + persistence.
+- **`react-visually-hidden` added and used** for the command palette's accessible title/description — fixes the Radix Dialog missing-title a11y warning rather than suppressing it, guarding the Lighthouse ≥95 acceptance.
+- **Guest rendering supported** (no session → Home + account, Sign-in affordance) so the frame is resilient; the branded login page is still a follow-up (steps 06/13, per the step-04 note).
+
+### Follow-ups (later steps)
+- Branded login page + guard PIN pad → steps 06/13 (auth backend + `/api/me/*` already provide the data).
+- `getUserFlats` real implementation → step 16 (the flat switcher already consumes the seam).
+- Data-Table kit + Form kit → steps 07/06 (the shell deliberately ships no list/input so nothing hand-rolled leaks in).
+- Notification bell live data + in-app channel → step 11; impersonation banner label → step 08; UI-mode policy/persistence → step 14; bottom-tab mobile bar → step 23; brand `--primary` injection → step 13.
+- Lighthouse a11y ≥95 + full light/dark/RTL screenshots → captured on the seeded staging deploy (no Postgres in the agent env).
+
+**Checkpoint:** [CHECKPOINT] — progress marker; controller auto-approves and continues to step 06.
