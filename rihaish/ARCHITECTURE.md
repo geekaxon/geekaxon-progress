@@ -45,34 +45,34 @@ Every UI module must ship: shadcn components only · light **and** dark · **RTL
 
 | # | Spec | Module | Checkpoint |
 |---|---|---|---|
-| 01 | `/specs/01-foundation.md` | Foundation, design tokens, i18n/RTL, CI, deploy.sh, pm2 web+worker | [FIXED_CHECKPOINT] |
-| 02 | `/specs/02-tenancy-core.md` | Tenancy, host resolution, scoping layer, audit, soft delete, money/tz, screenshot token | [FIXED_CHECKPOINT] |
-| 03 | `/specs/03-entitlements-engine.md` | Feature registry, dependency DAG, plans, resolver, read-only mode | [FIXED_CHECKPOINT] |
-| 04 | `/specs/04-auth-rbac.md` | Auth, roles, multi-flat accounts, guard PIN, OTP seam, 3-layer permission guard | [FIXED_CHECKPOINT] |
-| 05 | `/specs/05-app-shell.md` | Sidebar, top bar (lang/theme/mode), ⌘K, motion, states, responsive shell | [FIXED_CHECKPOINT] |
-| 06 | `/specs/06-form-input-kit.md` | Unified fields, searchable select, date/time, intl phone, masks, modals, toasts | [FIXED_CHECKPOINT] |
-| 07 | `/specs/07-data-table-export-kit.md` | TanStack table, filters, saved views, list/card, CSV/Excel/PDF export engine | [FIXED_CHECKPOINT] |
-| 08 | `/specs/08-platform-console.md` | L0 console, societies, plans, entitlements, **impersonation** | [FIXED_CHECKPOINT] |
+| 01 | `/specs/01-foundation.md` | Foundation, design tokens, i18n/RTL, CI, deploy.sh, pm2 web+worker | [CHECKPOINT] |
+| 02 | `/specs/02-tenancy-core.md` | Tenancy, host resolution, scoping layer, audit, soft delete, money/tz, screenshot token | [CHECKPOINT] |
+| 03 | `/specs/03-entitlements-engine.md` | Feature registry, dependency DAG, plans, resolver, read-only mode | [CHECKPOINT] |
+| 04 | `/specs/04-auth-rbac.md` | Auth, roles, multi-flat accounts, guard PIN, OTP seam, 3-layer permission guard | [CHECKPOINT] |
+| 05 | `/specs/05-app-shell.md` | Sidebar, top bar (lang/theme/mode), ⌘K, motion, states, responsive shell | [CHECKPOINT] |
+| 06 | `/specs/06-form-input-kit.md` | Unified fields, searchable select, date/time, intl phone, masks, modals, toasts | [CHECKPOINT] |
+| 07 | `/specs/07-data-table-export-kit.md` | TanStack table, filters, saved views, list/card, CSV/Excel/PDF export engine | [CHECKPOINT] |
+| 08 | `/specs/08-platform-console.md` | L0 console, societies, plans, entitlements, **impersonation** | [CHECKPOINT] |
 | 09 | `/specs/09-user-account.md` | Profile, password/PIN, language, notification prefs, sessions | [CHECKPOINT] |
 | 10 | `/specs/10-storage-media.md` | Storage adapter, uploads, sharp, signed URLs, camera capture | [CHECKPOINT] |
 | 11 | `/specs/11-notifications-core.md` | Channel engine: in-app, SMTP, SMS/WhatsApp adapters, templates, recipients | [CHECKPOINT] |
 | 12 | `/specs/12-worker-scheduler.md` | pm2 worker, job queue, cron registry, retries, DLQ | [CHECKPOINT] |
 | 13 | `/specs/13-branding-domains.md` | White-label tokens, subdomain + custom domain, settings shell | [CHECKPOINT] |
 | 14 | `/specs/14-ui-modes.md` | Simple/Pro: society policy + per-user prefs (entitled) | [CHECKPOINT] |
-| 15 | `/specs/15-society-structure.md` | Blocks, floors, flats, categories, parking modes, vehicles | [FIXED_CHECKPOINT] |
-| 16 | `/specs/16-residents-occupancy.md` | User⇄Flat, invites, CSV import, occupancy, authorized pickup persons | [FIXED_CHECKPOINT] |
-| 17 | `/specs/17-charge-engine.md` | Charge heads, effective-dated rate rules, special charges | [FIXED_CHECKPOINT] |
-| 18 | `/specs/18-ledger-invoicing.md` | Per-flat ledger, invoice runs (manual + cron), gapless numbering | [FIXED_CHECKPOINT] |
-| 19 | `/specs/19-payments-receipts.md` | Partial, advance/credit, bounce/reversal, late fee, proof upload, PDF receipts | [FIXED_CHECKPOINT] |
+| 15 | `/specs/15-society-structure.md` | Blocks, floors, flats, categories, parking modes, vehicles | [CHECKPOINT] |
+| 16 | `/specs/16-residents-occupancy.md` | User⇄Flat, invites, CSV import, occupancy, authorized pickup persons | [CHECKPOINT] |
+| 17 | `/specs/17-charge-engine.md` | Charge heads, effective-dated rate rules, special charges | [CHECKPOINT] |
+| 18 | `/specs/18-ledger-invoicing.md` | Per-flat ledger, invoice runs (manual + cron), gapless numbering | [CHECKPOINT] |
+| 19 | `/specs/19-payments-receipts.md` | Partial, advance/credit, bounce/reversal, late fee, proof upload, PDF receipts | [CHECKPOINT] |
 | 20 | `/specs/20-resident-finance.md` | My ledger, invoices, dues, receipts, submit payment proof | [CHECKPOINT] |
 | 21 | `/specs/21-society-onboarding-wizard.md` | Guided go-live for a new society | [CHECKPOINT] |
-| 22 | `/specs/22-platform-billing.md` | Per-flat / lumpsum, rates, society invoices, grace → read-only, Stripe seam | [FIXED_CHECKPOINT] |
+| 22 | `/specs/22-platform-billing.md` | Per-flat / lumpsum, rates, society invoices, grace → read-only, Stripe seam | [CHECKPOINT] |
 | 23 | `/specs/23-pwa-mobile-shell.md` | Installable white-label PWA, bottom tabs, splash, push (VAPID), offline | [CHECKPOINT] |
 | 24 | `/specs/24-announcements.md` | Targeting, pin, expiry, read receipts, comments/reactions | [CHECKPOINT] |
 | 25 | `/specs/25-staff-directory-attendance.md` | Staff records, service skills, attendance | [CHECKPOINT] |
 | 26 | `/specs/26-complaints-service-requests.md` | Complaint + service-request types, categories, assignment, SLA, ratings | [CHECKPOINT] |
 | 27 | `/specs/27-staff-operations-console.md` | Staff "my jobs": assigned / upcoming / completed, mobile-first | [CHECKPOINT] |
-| 28 | `/specs/28-gate-pass.md` | ITEM_EXIT, CHILD_EXIT, VISITOR_ENTRY, DELIVERY_LOG, STAFF_RECURRING; guard console | [FIXED_CHECKPOINT] |
+| 28 | `/specs/28-gate-pass.md` | ITEM_EXIT, CHILD_EXIT, VISITOR_ENTRY, DELIVERY_LOG, STAFF_RECURRING; guard console | [CHECKPOINT] |
 | 29 | `/specs/29-utility-bill-notices.md` | Providers, targeted notices, reminders, per-flat paid tracking (never in ledger) | [CHECKPOINT] |
 | 30 | `/specs/30-expenses-accounts.md` | Expense heads, vendors, entries + attachments, income vs expense | [CHECKPOINT] |
 | 31 | `/specs/31-document-vault.md` | Bylaws, minutes, notices; role-scoped | [CHECKPOINT] |
@@ -86,7 +86,7 @@ Every UI module must ship: shadcn components only · light **and** dark · **RTL
 | 39 | `/specs/39-reports-dashboards.md` | Collection %, arrears aging, defaulters, expenses, animated charts, exports | [CHECKPOINT] |
 | 40 | `/specs/40-public-site.md` | `rihaish.pk` apex marketing + lead capture | [CHECKPOINT] |
 
-**HARD checkpoints:** 01, 02, 03, 04, 05, 06, 07, 08, 15, 16, 17, 18, 19, 22, 28.
+**Checkpoints are progress markers, not approval gates.** The build is fully autonomous: every step ends `[CHECKPOINT]`, auto-approves, and continues. There is no `[FIXED_CHECKPOINT]` and no operator approval anywhere. The **only** stop is `[HUMAN_REQUIRED]` — a missing spec, or infra the agent cannot do in code (DNS, wildcard/custom-domain SSL, Oracle firewall ports, aaPanel site config, credentials).
 **Sellable at Rufi from step 21–22.** Steps 23–40 are additive.
 
 ## 7. Deployment

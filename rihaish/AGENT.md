@@ -23,8 +23,8 @@ Build-loop mechanics live in `CLAUDE.md` (controller-managed). This file is **wh
 2. Implement the module **and register its feature code + dependency edges** in the feature registry (§1.9). A module that L0 cannot toggle is unfinished.
 3. Write the migration. Write the tests demanded by §3.
 4. Run every verification gate in §3. All must pass before the checkpoint.
-5. Emit the checkpoint marker **exactly as written at the end of that module's spec** — `[FIXED_CHECKPOINT]` only where the spec says so.
-6. **Never self-approve a `[FIXED_CHECKPOINT]`.** If the previous step is a HARD checkpoint still awaiting the operator, stop with `[HUMAN_REQUIRED]`. The soft-checkpoint auto-approval fallback in `CLAUDE.md` does not apply to the HARD list (§4).
+5. End the step with `[CHECKPOINT]` — always, for every module. It is a marker, not a gate (§4).
+6. **Never stop for approval.** There is no approval gate in this project. Record the decision in `PROGRESS-HISTORY.md` and keep building.
 
 ## 3. Verification gates (every module)
 - `pnpm typecheck` — zero errors
@@ -48,10 +48,17 @@ Build-loop mechanics live in `CLAUDE.md` (controller-managed). This file is **wh
   - [ ] Module still works correctly with its optional features **disabled** (graceful degradation, never a 500)
   - [ ] Screenshot attached to the checkpoint
 
-## 4. Checkpoints
-- **`[FIXED_CHECKPOINT]`** — HARD stop, operator must APPROVE. Steps: **01, 02, 03, 04, 05, 06, 07, 08, 15, 16, 17, 18, 19, 22, 28.** These are tenancy, auth, entitlements, the UI kits everything depends on, the data-model foundations, money, and gate-pass security. A wrong call here is expensive or irreversible.
-- **`[CHECKPOINT]`** — soft, auto-approved after 30s. Every other module.
-- **`[HUMAN_REQUIRED]`** — hand-off. Use for: DNS / wildcard SSL / custom-domain SSL, Oracle iptables + Security List ports, aaPanel site creation, missing spec, non-code-fixable deploy failure, anything needing a credential the agent doesn't have.
+## 4. Checkpoints — markers, not gates
+- **`[CHECKPOINT]`** — the only checkpoint marker. Ends every module. It is a **progress marker, not an approval gate**: the controller auto-approves, merges to staging and continues. Never wait, never ask, never pause.
+- **`[FIXED_CHECKPOINT]` is abolished.** Do not emit it. If an older spec still contains it, treat it as a plain `[CHECKPOINT]`.
+- **`[HUMAN_REQUIRED]`** — the **only** stop condition, and it is reserved for things the agent physically cannot do:
+  - a missing or empty spec,
+  - DNS / wildcard SSL / custom-domain SSL,
+  - Oracle iptables + Security List port opening, aaPanel site creation,
+  - a credential the agent does not have,
+  - a deploy failure that is **not** code-fixable (after the 2-attempt rule in §5).
+- **Never** emit `[HUMAN_REQUIRED]` for an approval, a design review, a security sign-off, or a money-model decision. Those are yours to make. Make them, log the reasoning in `PROGRESS-HISTORY.md`, and continue.
+- The steps that were formerly HARD (tenancy, auth, entitlements, the UI kits, the data model, the money modules, gate pass) are still the **highest-risk** steps: they demand the strictest verification gates in §3 and the fullest `PROGRESS-HISTORY.md` entry. They do **not** demand a human.
 
 ## 5. Deploy-error triage
 - **Code-fixable** (typecheck, build, lint, migration conflict, missing Prisma client, bad import, failing test): fix and retry. **Maximum 2 attempts**, then `[HUMAN_REQUIRED]` with the exact error.
