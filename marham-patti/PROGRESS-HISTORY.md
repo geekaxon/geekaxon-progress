@@ -10,6 +10,35 @@
 
 ---
 
+## Build-step 46 — Platform Identity (one account across tenants)
+
+- **Work-type:** FEATURE. **Phase 5 / item 2 — THE most safety-critical step.** Branch `feature/46-platform-identity`.
+- **Depends on:** 02 (RLS/`runWithTenant`), 03 (auth: JWT/OTP/refresh chain, `JwtAuthGuard`), 06 (audit), 08 (`Lang`), 31 (patient app / family), 40 (session + api client), 45 (design system). Spec `specs/46-platform-identity.md` + companion `specs/45-53-CODEREF.md`.
+- **Schema/migration/RLS/auth impact:** NEW **platform-level section** of the Prisma schema — the first tables that live ABOVE tenants. Migration `20260711100000_platform_identity`. Two NEW RLS primitives (mirrors of `apply_tenant_rls`). New platform token type (`typ:'platform'`) + `PlatformAuthGuard`. No tenant policy weakened.
+
+### Problem
+With 4–5 clinics at launch (incl. a standalone pharmacy + lab), a real person uses several: she visits Ganatra Clinic, tests at City Lab, orders from a pharmacy. She must have ONE Marham Patti account (one login, one merged history) while EACH tenant sees only its own records (Ganatra must never learn she uses City Lab). Riders/phlebotomists likewise need one identity able to serve many tenants. Staff stay tenant-scoped, unchanged.
+
+### What changed
+**DB (`packages/db`):**
+- New models (all `@@map` snake_case, cuid ids): `PlatformUser` (phone+audience `@@unique`, `Lang`, status — NO tenantId), `PlatformOtp`, `PlatformRefreshToken`, `PatientLink` (platformUserId↔{tenantId,patientId}, status, `consentSnapshot`), `WorkerLink` (rider/phleb→tenant staff User; used by 49), `ShareGrant` (patient-consented doc share; `tenantId`=GRANTEE, `sourceTenantId`=where the doc lives). New enums `PlatformAudience`/`LinkStatus`/`ShareStatus`/`ShareDocType`.
+- Migration adds **`apply_platform_rls(t)`** — `platform_only` policy: rows visible/writable ONLY under `app.platform_scope='on'`; a tenant context sees ZERO rows (fail-closed). And **`apply_platform_link_rls(t)`** — `platform_link_isolation`: USING `tenant_id = current OR platform_scope='on'`, WITH CHECK `platform_scope='on'` (a tenant reads only its own rows and can NEVER forge a link/grant — for another tenant OR itself). Reused by 47/48/50/51/53.
+- `packages/db/src`: added **`runWithPlatformScope`** (the sanctioned platform read/write seam; `runAsPlatform` kept as an alias for the 06 audit reads). Exported the four new enums.
+
+**API (`apps/api/src/platform/`):** new `PlatformModule` (registers no global guard). `PlatformTokenService` (mint/verify `typ:'platform'` access tokens + rotating platform refresh chain w/ reuse detection), `PlatformOtpService` (+ dev stub transport), `PlatformAuthGuard` (controller-scoped; platform routes are `@Public` so the staff guard steps aside, then this enforces a platform token), `PlatformAccountService` (OTP login/upsert, profile, per-tenant **claim** search/confirm, links, family), `PlatformTimelineService` (merged cross-tenant timeline = orchestration of per-link `runWithTenant` reads, each item tenant-chipped — NEVER a join), `PlatformShareService` (create/revoke/list outgoing shares + grantee-tenant doctor-view read from the SOURCE tenant, audited). `PlatformRepository` is the single data seam (platform data under `runWithPlatformScope`; tenant slices under `runWithTenant`; `tenants` on the bare client). Controllers: `POST /platform/auth/{otp/request,otp/verify,refresh,logout}`, `GET/PATCH /platform/me` + `/timeline` `/links` `/family` `/claim/{search,confirm}` `/shares(+/:id/revoke)`, and the STAFF grantee-side `GET /platform/shares/inbound` `/:id/document` (`@Roles` clinical). Audit rows: `platform.link.created`, `platform.share.{granted,revoked,accessed}` (each under the relevant tenant).
+- Endpoints deliberately NOT flag-gated (a platform account must work regardless of any single tenant's flags). `platform.marketplace` (spec §Feature flags) is a tenant-side toggle DEFERRED to 47 (nothing in 46 consumes it) — catalog stays additive.
+
+**Web (`apps/web`):** separate `mp.platform` session (`lib/platform-session.ts`) + client (`lib/platform-api.ts`, refresh vs `/platform/auth/refresh`) — the staff `mp.auth` contract (40) untouched. New `(auth)/login/platform` (phone→OTP, tenant-agnostic), `(platform)` route group (guard `PlatformRouteGuard` + `PlatformChrome` + `manifest-platform.webmanifest`) with the merged-timeline app `PlatformClient` (timeline / clinics+claim / family / shares tabs). Entrance chooser patient card → `/platform` (old `/patient` kept for back-compat). EN+UR parity keys under `platform.*` + auth `platformTitle/Subtitle/NameLabel`.
+
+### Verification gates
+- **typecheck:** all packages green (fixed TS2742 portability on the e2e fake by annotating share-returning methods).
+- **lint:** 0 errors (1 pre-existing doctor-portal warning), `design-drift` guard green.
+- **jest:** **db 212/212** (37 suites) incl. NEW `platform-identity-isolation.spec.ts` **14/14** — PLATFORM tables denied to tenant ctx; link tables tenant-filtered; **Ganatra floor** (T1 can't discover the person's T2 link); WITH-CHECK forge blocked (other-tenant AND self); ShareGrant grantee-reads/source-blind/revoke-hides; fail-closed. **api 894/894** (77 suites) incl. NEW `platform.e2e.spec.ts` **16** (real guard chain, in-memory repo) — OTP login issues a platform bundle; **token audiences never cross** (staff token → 401 on `/platform/me`, platform token → 401 on `/auth/me`); merged timeline across T1+T2 date-desc + chipped; claim search/confirm (+audit) & wrong-phone 404; T2 report shared → T1 doctor view lists+opens (grant+access audited), source T2 blind, revoke → invisible + doc 404; non-clinical role 403 — plus `platform-helpers.spec.ts`. **i18n 19/19** (EN↔UR parity gate green with new `platform.*` keys).
+- **build:** `pnpm -r build` green. `/platform` 4.41 kB (201 kB First Load, on par with `/patient`); `/login/platform` 2.71 kB (153 kB — within the public-route budget); shared JS unchanged; `/lh-bloated` canary intact.
+- **do-not-break:** staff auth/tokens/guard order unchanged (894 api tests untouched); tenant RLS unchanged; `runAsPlatform`/audit reads unchanged; 40 session contract (`mp.auth`) untouched; 31 family re-homed under the platform account (not removed).
+
+---
+
 ## Build-step 44 — Design System Hardening & Consistency Pass (`feature/44-design-system`) ✅ DONE/APPROVED (2026-07-10)
 
 **WORK TYPE:** FEATURE · **Phase:** 4 (App Shell, Demo Data, Entrances & Design System) / item 5 — **completes Phase 4**. Ended with `[CHECKPOINT]`. Depends on 40 (shell), 43 (corrected tokens/AA guard), 13 (`@mp/ui` foundation). **Schema/RLS/migration:** none. **Auth/permission/flag impact:** none — pure visual layer; all flag-then-permission gating, the 40 nav, and vertical-preset behaviour preserved. **Data contracts/handlers/tests:** unchanged (presentation-only migration; every pre-existing module test passes unchanged).
