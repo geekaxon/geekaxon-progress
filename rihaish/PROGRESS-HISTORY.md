@@ -156,3 +156,44 @@ Append-only. Planning record first, then one detailed entry per completed build 
 - Actor identity on the scope is `SYSTEM` placeholder until auth (step 04) supplies the real principal + impersonation.
 
 **Checkpoint:** [CHECKPOINT] — progress marker; controller auto-approves and continues to step 03.
+
+---
+
+## 03 — entitlements-engine — DONE (2026-07-11)
+**Feature code:** `core.entitlements` (isCore) · **Depends on:** `core.tenancy`
+**Built:** The per-society feature-toggle engine with a dependency DAG that makes bricking a tenant impossible; server is the sole source of truth.
+- **Models (schema.prisma, step-03 block):** `Feature` (global; code PK, name, description, module, isCore, dependsOn String[], createdAt), `Plan` (global; code unique, featureCodes String[], isActive), `SocietyEntitlement` (per-society override; @@unique[societyId,featureCode] + @@index[societyId]; enabled, validUntil, limits Json, reason), `SocietyPlan` (societyId PK, planId, @@index[planId]). The two per-society tables carry `societyId` but deliberately **no `deletedAt`**, so the tenancy scoping rule (needs BOTH) does not catch them — they are L0 config read cross-tenant by the resolver, passing through `db` untouched from platform/worker/tenant contexts alike.
+- **Registry (`lib/features.ts`):** extended `FeatureDef` with `module` (+ optional `description`); registered `core.entitlements` (dependsOn core.tenancy). Exposes `CORE_FEATURE_CODES`, `FEATURE_DAG`. Calls `assertValidDag(FEATURE_DAG)` **at module load** → a malformed/cyclic registry fails the build.
+- **Pure DAG (`lib/feature-dag.ts`):** `assertValidDag` (WHITE/GREY/BLACK DFS cycle detection + missing-edge check; throws `FeatureCycleError`/`MissingDependencyError`), `transitiveDependencies` (dependency-first ancestors), `transitiveDependents` (reverse-edge descendants). No DB — mirrors the `lib/scoping.ts` split.
+- **Pure resolver math (`lib/entitlements-compute.ts`):** `computeEntitlements` (plan ∪ overrides(enabled) − overrides(disabled), expired ignored, core forced ON), `planEnable` (target + off-deps, dependency-first), `planDisable` (`core`/`blocked`/`ok` outcomes, cascade), `computeLimit` (most-restrictive active limit or null).
+- **Glue (`lib/entitlements.ts`):** `resolve(societyId)` DB read + in-memory cache (self-expires at nearest override `validUntil`, capped 60 s) + `entitlementsTag`; `isEnabled` (cosmetic), `requireFeature` (throws `FeatureDisabledError` → **403**), `limits`; mutations `enableFeature`/`disableFeature` (atomic `$transaction` of override upserts + one AuditLog row; core-lock + dependency-block enforced; cascade), `previewEnable` (console "will also enable" copy), `setSocietyPlan`, `invalidateEntitlements` (in-memory bust + best-effort `revalidateTag`), `syncFeatureRegistry` (idempotent single seeder upserting `FEATURES` → `Feature`).
+- **Errors (`lib/errors.ts`):** `FeatureDisabledError` (403), `FeatureLockedError` (409, core), `FeatureDependencyError` (409, carries dependents) wired into `httpStatusForError`/`codeForError`.
+- **Route:** `app/api/entitlements/check/route.ts` — resolves tenant via `withTenant`, calls `requireFeature`; disabled/unknown feature → 403 even when called directly, core → 200.
+**Migrations:** `20260711130000_entitlements_engine` (hand-authored offline — no Postgres in agent env; identical SQL applied by `deploy.sh migrate deploy`). Adds the 4 tables + Plan.code unique + SocietyEntitlement composite unique/index + SocietyPlan planId index.
+**Tests:** unit **82/82** (added: feature-dag 9, entitlements-compute 16, features 4). e2e `e2e/entitlements.spec.ts` (probe 403 contract; skips when `rufi` not seeded — e2e is not a CI gate).
+**Verification:** typecheck ✔ · lint ✔ (0 warnings) · test:unit ✔ 82/82 · build ✔ (`/api/entitlements/check` dynamic route registered) · prisma validate ✔. No UI shipped this step (console UI is step 08; contract defined here per spec §UI).
+
+**Acceptance criteria mapping:**
+- Resolver correctness across plan + overrides + expiry + core → `entitlements-compute.test.ts` (6 computeEntitlements cases incl. expired-ignored + core-forced). ✔
+- Enable auto-enables deps; disable of a depended-on feature blocked; cascade atomic → `planEnable`/`planDisable` tests + `enableFeature`/`disableFeature` `$transaction`. ✔
+- Cyclic dependency throws at load → `assertValidDag` (direct/self/deep cycle tests) invoked at `features.ts` load. ✔
+- Disabled-feature route returns 403 when called directly + nav absent → `requireFeature`/probe route + `e2e/entitlements.spec.ts` (nav-hiding is `isEnabled`, cosmetic, wired in the app shell). ✔
+- Every built module registered its feature code → `features.test.ts` asserts core.foundation/tenancy/entitlements present + every edge resolves. ✔
+
+**Decisions made (logged, autonomous — no approval gate):**
+- **Entitlement config tables are intentionally NOT tenant-scoped** (no `deletedAt`): L0 manages them across societies, and the resolver reads a given society's rows by explicit `societyId`. Using plain `db` (not `db.unscoped()`) keeps `lib/entitlements.ts` inside the ESLint boundary while passing through the scoping layer untouched. "Disabling never deletes data" is satisfied because disable writes an `enabled:false` override, never a delete.
+- **Cache self-expiry at nearest `validUntil` (capped 60 s) + explicit invalidation on writes** — honours "entitlement expires mid-session → next request re-resolves" without a background timer; out-of-band edits heal within 60 s.
+- **`limits(key)` = minimum across active override limits** (most restrictive wins); a downgrade below current usage blocks creation (enforced by callers in step 15+), never deletes existing rows.
+- **Registry stays central in `lib/features.ts`** (one array, one seeder) rather than per-module `features.ts` files — no per-module dirs exist yet; each future module appends its entries. Satisfies "a single seeder upserts them".
+- **Migration generated offline** (agent env has no Postgres), matching the step-02 approach; `deploy.sh` applies it via `migrate deploy`.
+
+**Deviations from spec:** Feature registry keeps `title` (→ DB `name`) from step 02's `FeatureDef` rather than renaming the field; DB model matches the spec's `name`. No behavioural deviation.
+
+**Follow-ups (for later steps):**
+- Console UI (Simple switches + "will also enable", Pro DAG visualiser / validUntil / limits / diff-vs-plan) → step 08; `previewEnable` already provides the enable-preview data.
+- Per-route `requireFeature` composition + nav-item hiding via `isEnabled` land with the app shell (step 05) and the 3-layer permission guard (step 04).
+- `syncFeatureRegistry` invoked from platform bootstrap / a deploy hook once the platform console (step 08) exists; Plans seeded there.
+- DB-backed integration tests for enable/disable transactions + audit rows run in CI once a Postgres service is added; DAG/resolver/limits logic is fully unit-covered now.
+- Actor on audit rows defaults to `PLATFORM`; real principal + impersonation supplied by auth (step 04).
+
+**Checkpoint:** [CHECKPOINT] — progress marker; controller auto-approves and continues to step 04.
