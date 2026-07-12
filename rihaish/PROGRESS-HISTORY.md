@@ -377,3 +377,63 @@ Append-only. Planning record first, then one detailed entry per completed build 
 - Full Lighthouse a11y + light/dark/RTL visual screenshots → captured on seeded staging deploy (no Postgres in agent env; the dev route needs none but shell-embedded forms do).
 
 **Checkpoint:** [CHECKPOINT] — progress marker; controller auto-approves and continues to step 07.
+
+---
+
+## 07 — data-table-export-kit — DONE (2026-07-12)
+
+**Branch:** `feature/06-form-input-kit` (continued; controller merges).
+**Feature:** `core.tables` registered in `lib/features.ts` (isCore, `dependsOn: ["core.forms"]`, module `07-data-table-export-kit`). DAG validation green; feature-registry test still passes (count-agnostic).
+
+### The one rule
+"No module may hand-roll a table." Every list flows through `<DataTable>` + the `ListQuery`→`runList` server contract; every export through the export engine. This is what keeps 40 modules feeling like one product.
+
+### Server contract (pure, unit-tested) — `lib/tables/`
+- `types.ts` — `ListQuery {page,pageSize,sort[],search,filters}`, `ListResult<T>`, `Filter` (text|number|dateRange|enum|boolean), `ColumnConfig` (field/sortable/filter/searchable/sensitive), `MAX_PAGE_SIZE=100`, `PAGE_SIZES`, `clampPage/clampPageSize`.
+- `list-query.ts` — `buildListQuery(query, columns)` → Prisma `{where, orderBy, skip, take}`. Hard-caps pageSize at 100 (a client "load all" is a build failure). Filters/sort/search **whitelisted** against the column config by id AND kind; nested field paths (`block.name`) build nested Prisma objects. **Never emits `societyId`/`deletedAt`** and strips any client attempt to filter them — the enforced `db` client injects scope, so every list is society-scoped *by construction* and can't be widened to another tenant from the wire.
+- `server.ts` — `runList(delegate, query, columns)` executes through the scoped `db` (findMany + count share the same `where`). No active scope → `TenantScopeError` (unit-tested on `db.user`, no DB needed).
+- `query-memory.ts` — `filterSortInMemory` + `queryInMemory`: identical filter/sort semantics over an array. Powers the dev demo (no DB) and guarantees an export of a filtered set equals the on-screen filtered count.
+- `field.ts` — dotted-path read (`readPath`) / nest (`nestPath`) helpers shared by both paths.
+
+### Export engine (pure logic unit-tested; io typechecked) — `lib/tables/export/`
+- `csv.ts` — RFC-4180 escaping, UTF-8 BOM (Excel/Urdu), CSV-formula-injection guard (`=+-@` → apostrophe).
+- `xlsx.ts` — exceljs; title band, bold frozen header, RTL sheet view, auto-fit widths.
+- `pdf.ts` — pdf-lib + @pdf-lib/fontkit; branded header (logo + society name), generated timestamp, page numbers, RTL column order, **embedded Noto Naskh Arabic** (`assets/fonts/NotoNaskhArabic-Regular.ttf`, OFL, vendored) for Urdu glyph coverage; Latin falls back to Helvetica with non-WinAnsi chars sanitised. **Documented limitation:** pdf-lib draws glyphs but does no Arabic contextual shaping/bidi — Urdu chars render with correct glyphs but unjoined; a future step can swap the drawer for a HarfBuzz pass.
+- `plan.ts` — `planExport(rowCount)` inline≤1000 / queued>1000; `sensitiveColumns`/`exportTouchesPii`.
+- `service.ts` — `buildInlineExport`: PII gate (`tables.export.pii` via `can()`, else `ForbiddenError` before any bytes) → `generateExport` → **AuditLog** (`table.exported`, records the sensitive column list). `deps` injectable → fully unit-tested with a real CSV round-trip + mocked db.
+- `audit.ts` (`writeExportAudit`), `fonts.ts` (`loadUrduFont`, cached, graceful-absent), `generate.ts` (`generateExport` + date-stamped `exportFilename`).
+
+### Components
+- `components/ui/table.tsx` — shadcn table primitives (logical `text-start`).
+- `components/table/` — `<DataTable>` (TanStack Table v8; manual pagination/sorting/filtering; row model + selection + column-visibility state). Toolbar: debounced (250ms) global search, per-column filter popover (all 5 kinds) + active-filter chips, saved-views menu, column-visibility, density (comfortable/compact), list⇄card toggle. Body: sticky header, **pinned first column** (+ select col), sortable header cycle none→asc→desc, row actions dropdown, row click, **card view is the mobile default** (list hidden `sm:` when a card renderer exists), skeleton/empty/error states. Bulk-action bar on selection (ids persist across pages by `getRowId`). Server-driven fetch with a request-id race guard. `persistence.ts` — `TableStateAdapter` seam; `localStorageAdapter` default (column visibility + saved views persist per browser); server adapter can drop in for cross-device. `labels.ts` — `useDataTableLabels()` from the `table` i18n namespace (EN + UR added). Export materialises the current-view spec (visible cols in order + query + total) and hands it to `onExport`; button hidden when `exportPermitted===false`.
+- `components/charts/` — Recharts wrappers: `LineChartCard`, `BarChartCard` (stacked), `AreaChartCard`, `DonutChartCard`, `Sparkline`. Animated on mount, tokenised `--chart-1..5` (already in globals.css + tailwind), responsive, tooltip/legend, empty state, **sr-only data-table fallback** (AA), RTL (x reversed / y flipped). `export.ts` — client PNG (SVG→canvas with computed-colour inlining so `hsl(var())` survives) + PDF (pdf-lib embeds the PNG); `findChartSvg` helper.
+
+### Dev demo (dev-only, 404 in prod) — reference "flats" table
+- `lib/tables/demo-data.ts` — deterministic 6,000-row in-memory flats (Flat lands step 15), column configs, enum options, server-side export-cell formatter (money via `formatMoney` bigint, dates via Intl).
+- `app/api/design-system/table/route.ts` — POST `ListQuery` → `queryInMemory` → `ListResult` (proves server-side pagination + cap).
+- `app/api/design-system/table/export/route.ts` — POST `{query,columns,format,locale,piiAllowed}`: filters full set, >1000→`202 {queued}` (worker seam, step 12), PII col w/o perm→403, else `generateExport` (Urdu PDF loads the font) with `Content-Disposition`.
+- `app/[locale]/design-system/tables/page.tsx` + `components/design-system/tables-demo-client.tsx` — full gallery: all 11 columns (CNIC sensitive+default-hidden), fetcher→list API, onExport→export API+download/toast, row/bulk actions, card renderer, RTL preview + export-permission + PII-permission toggles, charts section with PNG/PDF buttons.
+- `e2e/data-table.spec.ts` — smoke (list cap, filtered-CSV parity, >1000 queued, PII 403); e2e is not a CI gate here (dev/staging only).
+
+### Decisions
+- **Saved-views/column-vis persistence = localStorage adapter (default), with a `TableStateAdapter` seam** for a server/DB-backed per-user adapter later, instead of adding `TableView`/`TablePreference` Prisma models now. Rationale: the dev reference table is auth-less/scope-less (can't exercise DB persistence), the kit's acceptance ("persists") is met per-browser, and it avoids an untestable migration in a kit step. Consuming modules (15+) can pass a server adapter with zero component changes.
+- **Export audit + PII gate live in `buildInlineExport`** (unit-tested with injected deps) — the real path every module calls. The dev export route mirrors the PII 403 but skips the DB audit (no scope in the gallery).
+- **>1000 rows → 202 queued seam**, not inline generation — the worker/signed-URL delivery lands in step 12/10. Never a blocking request.
+
+### Fix made (unblocks whole project)
+`tailwind.config.ts` used `plugins: [require("tailwindcss-animate")]`. Node's ESM loader loads the `.ts` config in `next dev`, where `require` is undefined → **every page 500'd in dev** (confirmed: the step-06 form gallery failed identically). Converted to the canonical ESM `import tailwindcssAnimate from "tailwindcss-animate"`. Production `pnpm build` was unaffected before and after. This is a pre-existing step-01 bug surfaced by the UI self-check; fixed under autonomous rules and recorded here.
+
+### Gate results
+- `pnpm typecheck` — clean.
+- `pnpm test:unit` — **197 passed** (25 files; +33 new: list-query 16, query-memory 7, export 10). Includes buildListQuery pageSize-cap + scope-never-emitted + all filter kinds; runList TenantScopeError; queryInMemory on-screen/export parity; CSV escaping/BOM/injection; planExport threshold; buildInlineExport PII-refuse/allow-and-audit.
+- `pnpm lint` — 0 warnings/errors (`--max-warnings 0`).
+- `pnpm build` — success; all 16 routes compiled incl. `/[locale]/design-system/tables` (both locales).
+- **Runtime self-check** (dev server): list cap 6000→100 rows; filtered block-A total=1000 and CSV export=exactly 1000 data rows + BOM + CRLF (**parity confirmed**); unfiltered xlsx export→`202 {queued:true,total:6000}`; CNIC export w/o permission→`403 {error:FORBIDDEN,missing:[tables.export.pii]}`; Urdu PDF→valid `%PDF` 28KB branded; xlsx inline valid; `/en` + `/ur` gallery render **200** with `dir="rtl"` on ur.
+
+### Deferred (by design)
+- Server/DB-backed per-user saved-views + column-prefs (adapter seam ready) → consuming modules / a later shared table-prefs table.
+- Queued >1000-row export execution + signed-URL delivery → step 12 (worker) + step 10 (storage).
+- Full Arabic shaping/bidi in PDF (HarfBuzz) → future; glyphs embedded now.
+- Real `Flat`-backed reference table → step 15 (society-structure); in-memory stand-in until then.
+
+**Checkpoint:** [CHECKPOINT] — progress marker; controller auto-approves and continues to step 08.
