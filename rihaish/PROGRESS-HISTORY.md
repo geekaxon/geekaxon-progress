@@ -842,3 +842,50 @@ The second pm2 process is now real: a Postgres-backed job queue + a timezone-awa
 - Parking/vehicles Pro tabs use the data-table kit (added `?q=` ListResult support) to honour the "Data-Table kit for every list" contract rather than hand-rolling.
 
 **Checkpoint:** [CHECKPOINT] — progress marker; controller auto-approves and continues to step 16 (residents-occupancy).
+
+---
+
+## 16 — residents-occupancy — DONE (2026-07-12)
+
+**Branch:** `feature/16-residents-occupancy` · **Spec:** `/specs/16-residents-occupancy.md` (no CODEREF) · WORK TYPE: FEATURE
+
+**Purpose:** Who lives where, who owns what, who gets billed, and who may collect a child from the gate. One account holds many flats via `FlatOccupancy` (many-to-many); residents enter only via invite or CSV import (no self-signup).
+
+### State on entry
+The branch already carried a nearly-complete implementation from a prior session (uncommitted): schema models, migration, `lib/residents/*`, schemas, API routes, and UI. Gates had not been run and progress files were not updated. This step ran the verification gates, fixed the defects they surfaced, added the e2e spec, and recorded/committed.
+
+### Schema / migration (`20260712200000_residents_occupancy`)
+- Enum `Relation {OWNER,OCCUPANT}`.
+- `FlatOccupancy` (societyId+deletedAt → enforced scoping auto-pins reads / soft-deletes; `@@index([societyId,flatId,endDate])`, `@@index([societyId,userId])`; `endDate=null` = current holding).
+- `AuthorizedPickupPerson` (societyId+deletedAt scoped; for CHILD_EXIT in step 28) — `cnicEnc`, `photoFileId`, `isActive`.
+- `ResidentInvite` — single-use security TOKEN resolved on the PUBLIC accept endpoint (no scope yet), so — like `OtpCode` — NO `deletedAt`; scoped explicitly by the service. `token @unique`, `expiresAt`, `acceptedAt`.
+
+### Pure logic (unit-tested)
+- `occupancy.ts` — `deriveFlatOccupancy` (holdings → OccupancyStatus, ignores closed rows, RENTED whenever an occupant present, preserves UNDER_CONSTRUCTION while empty) + `planOccupancyTransfer` (closes old owner + opens new on ownership transfer; adds tenant WITHOUT closing owner when owner rents out; no double-open when incoming user already holds the relation; demotes previous primary).
+- `invite-token.ts` — `newInviteToken` (URL-safe non-guessable), `inviteExpiry` (7d), `inviteUsability` (single-use once accepted, expires after TTL, resend = fresh token + pushed-out expiry usable again), `inviteUrl`.
+- `csv.ts` — RFC-header-validated parse, phone→E.164 normalise, row-level errors (unknown flat, bad phone, invalid relation, in-file duplicate person-flat pair), same person on two flats allowed, optional email/is_primary/occupancy override, empty-file report. No partial import.
+
+### Service / API
+- `service.ts`: scoped invite/resend/accept, `transferOccupancy`, `updateOccupancy`, `suspendResident`, directory/summary/list/export, `getFlatPanel` (current + history timeline + pickup persons), pickup CRUD, `importResidents` (one txn, atomic). Existing phone in the same society → linked to an additional flat, not duplicated. CNIC captured only when `SocietySettings.cnicCaptureEnabled`; encrypted + masked.
+- Routes: `GET/POST /api/residents`, `PATCH /api/residents/[id]`, `POST /api/residents/invite`, `POST /api/residents/invite/[token]/accept` (PUBLIC), `POST /api/residents/import` (`?dryRun`), `POST /api/residents/export`, `POST /api/flats/[id]/occupancy/transfer`, `GET/POST/PATCH/DELETE /api/flats/[id]/pickup-persons`. Typed errors → stable statuses (409/404/410/400) via `residents/http.ts`, else shared auth envelope (401/403/423).
+- `residents.registry` (isCore) registered in `lib/features.ts` (deps flats.registry/core.auth/core.notifications); nav `residents` gated by `society.residents.read` + feature; rbac perms; notifications audience + templates extended.
+
+### UI (`useUiModule` Simple/Pro)
+- Simple: card directory (photo, flat, role, call/WhatsApp) + add-resident invite wizard.
+- Pro: resident DataTable (filters, bulk invite, CSV import dry-run diff, export), shared `FlatPanelDrawer` (occupants + make-primary/move-out/edit, history timeline, pending invites resend/copy, pickup persons, transfer-ownership). Form kit + toasts throughout.
+
+### Defects found & fixed while completing the partial
+- **lint (`react/jsx-no-literals`) ×3** — bare `:` / `·` literals in JSX (`flat-panel-drawer` CNIC line, `resident-cards`, `resident-table`) → wrapped in expression containers.
+- **Unused symbols ×2** (lint warnings, `--max-warnings 0` fails the gate) — removed the unused `Copy` import and the unused `data` prop (+ its `ResidentsData` type import) from `FlatPanelDrawer`; dropped the now-dead `data={data}` at the call site in `residents-client`.
+
+### Gates
+- `pnpm typecheck` ✓ · `pnpm lint` ✓ (0 warnings/errors) · `pnpm test:unit` ✓ 408 passed / 3 skipped (was 383 → +25 residents unit tests) · `pnpm build` ✓ (8 new API routes + `/app/residents` prerendered en+ur).
+- i18n en+ur parity: `residents` ns 121 keys each, no missing/extra.
+- e2e `residents-occupancy.spec` (9 unauth-401 assertions + invite-accept public-client-error + page-no-500) — not a CI gate per house rule.
+
+### Decisions / notes (no approval gate — recorded per CLAUDE.md)
+- **Invoices-untouched acceptance criterion** remains structurally guaranteed (no invoice tables exist until step 18; transfer only writes `FlatOccupancy` + `Flat.occupancy`). Will be covered by a test when the ledger lands.
+- Invite-accept is the one public route (token, not session): the e2e asserts it never 401s and never 500s — a bogus token is a plain client error (404/410/400).
+- `lib/residents.ts` (a pre-existing stub) removed in favour of the `lib/residents/` module directory.
+
+**Checkpoint:** [CHECKPOINT] — progress marker; controller auto-approves and continues to step 17 (charge-engine).
