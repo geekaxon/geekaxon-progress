@@ -1142,3 +1142,111 @@ Not run in-session (controller runs lint → typecheck → test:unit → build, 
 - CSV imports embedded in steps 3/4/7/8 (reuse existing atomic dry-run import modals).
 - Integrations credential configuration + test send (lives in Settings → Integrations; wizard shows status + deep link).
 - First-invoice preview run at launch (launch returns readiness; the preview run is the billing module's existing generate-in-preview surface).
+
+---
+
+## 22 — platform-billing — DONE (2026-07-12)
+
+**Branch:** feature/22-platform-billing (WORK TYPE: FEATURE)
+**Spec:** /specs/22-platform-billing.md (no CODEREF in range).
+
+### What & why
+"How Rihaish gets paid." Built as a **completely separate namespace** from society
+billing (`lib/billing/*`) — distinct tables, module, UI — per spec: sharing them
+would eventually leak or mis-bill. All platform-billing tables carry a `societyId`
+but NO `deletedAt`, so the tenant-scoping rule (needs BOTH) never touches them;
+they are read/written only through the unscoped `platformDb()` client.
+
+### Data model (migration 20260712250000_platform_billing)
+- Enums: `PricingModel` (PER_FLAT|LUMPSUM), `CountMode` (ALL_REGISTERED_FLATS),
+  `BillingCycle` (MONTHLY|QUARTERLY|ANNUAL), `PlatformInvoiceStatus`
+  (ISSUED|PARTIALLY_PAID|PAID|OVERDUE|CANCELLED), `PlatformPaymentProvider`
+  (MANUAL|STRIPE). `PlatformPayment.status` REUSES the shared `PaymentStatus` enum.
+- `PricingProfile` — effective-dated (effectiveFrom/effectiveTo), superseded never
+  edited; per-flat rate or lumpsum; discountPercentBp; @@index(societyId,effectiveFrom).
+- `PlatformInvoice` — `flatCount` + `rateMinor` SNAPSHOTS at generation; idempotent
+  `@@unique([societyId, period])`; number "RIH-YYYY-MM-####" globally unique.
+- `PlatformPayment` — MANUAL v1; bounce/void columns; @@index(societyId,status).
+- `PlatformBillingSettings` — singleton (graceDays 14, reminderDaysBefore [7,3,1],
+  reminderDaysAfter [1,3,7,14], autoReadOnlyOnOverdue true).
+- `PlatformInvoiceSequence` — gapless per (prefix, year, month), atomic upsert.
+
+### Code
+- `lib/platform-billing/`:
+  - `constants.ts` — string-union mirrors of the enums (pure, no Prisma import).
+  - `math.ts` (PURE, tested) — computeInvoiceAmounts (per-flat vs lumpsum; bp
+    discount FLOORED in minor units; clamps negative), resolveEffectiveProfile
+    (window contains instant, latest effectiveFrom wins tie, effectiveTo exclusive),
+    monthlyMinor/mrrMinorFor (cycle normalisation), invoiceStatusFrom, isPastGrace,
+    reminderKindFor (exact before/after-due days, ≤1/day).
+  - `numbering.ts` (PURE, tested), `adapter.ts` (PaymentProviderAdapter seam; MANUAL
+    only; mock-Stripe test proves adding a gateway = new adapter + webhook, NO schema
+    change), `invoice-pdf.ts` (Latin one-page A4), `http.ts` (error envelope).
+  - `service.ts` — settings get/update; pricing list/effective/set (supersede-in-tx);
+    runPlatformBilling (per-ACTIVE-society, snapshot flatCount, idempotent, notify);
+    invoice reads (paid = CLEARED payments, balance); recordPlatformPayment (adapter
+    capture → reconcile invoice status → restore society if square, same request);
+    reversePlatformPayment (bounce/void = status flip, never edit); runGraceCheck
+    (mark OVERDUE, send reminders, flip READ_ONLY past grace with
+    `platform-billing:`-prefixed reason, restore when owing nothing); grantExtension
+    (audited: push due dates + restore). All audited to AuditLog(actorType PLATFORM).
+  - `dashboard.ts` — MRR/ARR (effective profile × current flats, cycle-normalised),
+    collection rate (cleared ÷ issued), overdue + about-to-read-only society counts,
+    revenue by plan.
+- Worker: `platform.grace-check` stub → real `runPlatformGraceCheck` (daily 0 4);
+  new `platform.billing-run` cron (monthly `0 3 1 * *`, platform scope) →
+  `runPlatformBillingRun`. Both non-mutating flag (platform-scoped, no read-only gate).
+- Notifications: added `platform_billing` category (NOTIFICATION_CATEGORIES → 8) +
+  5 template groups (invoice.issued, reminder, payment.received, readonly, restored),
+  en+ur per channel. Audience = SOCIETY_ADMIN roles + nominated recipients
+  (includeRecipientRules). Sent via notifySafe (never breaks a run).
+- Wired `lib/platform/dashboard.ts` MRR + overdueSocieties to real billing (were 0).
+- Feature `platform.billing` registered (deps platform.console, flats.registry,
+  core.worker); perms `platform.billing.read/.manage` (ungated, on PLATFORM_ADMIN +
+  read on PLATFORM_SUPPORT).
+
+### API (all apex-only, platform-gated)
+`/api/platform/billing/dashboard` GET; `/invoices` GET; `/invoices/[id]` GET;
+`/invoices/[id]/pdf` GET; `/payments` POST; `/payments/[id]/reverse` POST;
+`/settings` GET/PATCH; `/run` POST; `/societies/[id]/pricing` GET/POST;
+`/societies/[id]/extension` POST.
+
+### UI (platform console, Pro-only by nature)
+- `app/[locale]/platform/billing/page.tsx` — MRR/ARR/collection/overdue tiles,
+  animated revenue-by-plan bar chart, invoices table (filters, PDF, record-payment
+  dialog, run-now dialog). New shell nav item `billing`.
+- `components/platform/pricing-panel.tsx` embedded in society detail — effective
+  price + full history (never edited in place) + set-new-profile form.
+- i18n en+ur full parity (verified: 0 keys diverge; +67 platform.billing keys, plus
+  `category.platform_billing` label/simple + settings recipient-rule label).
+
+### Read-only semantics
+Society status READ_ONLY set on the Society row with a `platform-billing:` reason;
+the society data layer already returns 423 on writes and allows all reads, and the
+resident finance portal (step 20) is unaffected — residents always see their dues.
+Restore is immediate on a clearing payment (same request) or a manual extension.
+
+### Decisions
+- billableCountMode = ALL_REGISTERED_FLATS (non-deleted flats), per spec "decided".
+- graceDays configurable (default 14); dueDate anchored to day 14 of the period.
+- MANUAL payments land CLEARED immediately (money already in hand); the adapter seam
+  keeps the door open for STRIPE with no migration.
+- Reversal never edits the amount (mirrors step 19).
+
+### Gate results
+Did NOT run gates (controller runs them). Self-checks: `prisma validate` OK; client
+generated (all 5 delegates present); en/ur JSON valid + key-parity 0 diff. Updated
+`registry.test` (added platform.billing-run), `notifications-policy.test`
+(categories → 8), `templates.test` (platform_billing category covered).
+
+### Tests added
+- `lib/platform-billing/math.test.ts`, `numbering.test.ts`, `adapter.test.ts` (pure).
+- `lib/platform-billing/run.integration.test.ts` (DB-gated): effective-profile +
+  one snapshotted invoice; idempotent per (society, period) + snapshot immutability
+  on a mid-month flat change; grace → READ_ONLY, data stays readable, payment
+  restores ACTIVE + invoice PAID; bounce reverses (amount untouched) → re-owes;
+  manual extension restores; PlatformInvoice ≠ Invoice (table separation).
+- `e2e/platform-billing.spec.ts`: every route 401 on apex unauth + 404 on society
+  host; billing page renders without a 500.
+
+WORK TYPE: FEATURE (branch feature/22-platform-billing)

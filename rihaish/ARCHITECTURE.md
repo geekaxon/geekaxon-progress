@@ -87,6 +87,10 @@ Every UI module must ship: shadcn components only · light **and** dark · **RTL
 | 39 | `/specs/39-reports-dashboards.md` | Collection %, arrears aging, defaulters, expenses, animated charts, exports | [CHECKPOINT] |
 | 40 | `/specs/40-public-site.md` | `rihaish.pk` apex marketing + lead capture | [CHECKPOINT] |
 | 41 | `/specs/41-cctv.md` | Bring-your-own CCTV: LINK / EMBED / AGENT tiers, per-camera grants, signed view tokens, event snapshots | [CHECKPOINT] |
+| 42 | `/specs/42-permission-requests.md` | Tent/event/renovation permits + **funeral fast-track** (auto-approved, free, works when read-only) | [CHECKPOINT] |
+| 43 | `/specs/43-utility-schedules-notices.md` | Loadshedding/gas/water timetables, outages, shutdowns, govt & UC notices (manual entry — no fake auto-sync) | [CHECKPOINT] |
+| 44 | `/specs/44-seasonal-events-qurbani.md` | Qurbani permits (per-animal fees, per year), tie-up spaces, ballot, butcher rates, waste tasks | [CHECKPOINT] |
+| 45 | `/specs/45-islamic-calendar-prayer.md` | Hijri (moon-sighting offset), prayer times (madhab/method), masjid jamaat times, Ramadan, greetings | [CHECKPOINT] |
 
 **Checkpoints are progress markers, not approval gates.** The build is fully autonomous: every step ends `[CHECKPOINT]`, auto-approves, and continues. There is no `[FIXED_CHECKPOINT]` and no operator approval anywhere. The **only** stop is `[HUMAN_REQUIRED]` — a missing spec, or infra the agent cannot do in code (DNS, wildcard/custom-domain SSL, Oracle firewall ports, aaPanel site config, credentials).
 **Sellable at Rufi from step 21–22.** Steps 23–40 are additive.
