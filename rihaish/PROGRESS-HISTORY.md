@@ -1514,3 +1514,63 @@ Reassigned-away job → detail bar disabled with an explanation (`actionable=fal
 **Edge cases covered:** expired scan → clear EXPIRED screen + resident phone (never silent); walk-in no-response → guard manual entry with reason (audited); item-exit for a 3-resident flat → any one approves (default), OWNER_ONLY optional; offline guard → event queues (202) + Background-Sync replay; NO_LOG delivery → quick-log button hidden; a type's sub-feature off → its tile disappears, others unaffected; recurring staff pass stays APPROVED (many entries), one-shot passes flip to USED.
 
 WORK TYPE: FEATURE (branch feature/28-gate-pass)
+
+---
+
+## Step 29 — utility-bill-notices — DONE (2026-07-12)
+
+**Branch:** feature/29-utility-bill-notices · **Spec:** /specs/29-utility-bill-notices.md (AUTHORITATIVE)
+**Feature code:** `utility.notices` · deps `residents.registry`, `core.notifications`, `core.storage`, `core.worker`.
+
+### What it is
+"SSGC bills have arrived, due 25 July." A REMINDER with per-flat paid/unpaid state, targetable at a subset of flats. **NOT billing** — the society is not collecting this money.
+
+### HARD RULE (spec) & how it is enforced
+A utility amount NEVER enters the maintenance ledger: no `LedgerEntry`, no `Invoice`, no effect on a flat's balance. Enforced by `lib/utility/architecture.test.ts`, a static scan that fails if any `lib/utility/*.ts` source references `@/lib/billing/`, `@/lib/charges/`, `ledgerEntry`, or `invoice.create`. `amountMinor` is a reminder figure only. The notification copy explicitly says "not a maintenance charge", and the resident surface is a **separate nav page (`utility`, icon `zap`)** — structurally distinct from `finance`, never mixed into the maintenance balance.
+
+### Data model (migration `20260712310000_utility_bill_notices`)
+- Enums: `UtilityKind` (GAS/ELECTRICITY/WATER/INTERNET/TELEPHONE/OTHER), `UtilityTargetType` (ALL/BLOCK/CATEGORY/FLAT_LIST — DEDICATED, not the charge engine's `TargetType`, to keep utility decoupled from billing, mirroring the announcements precedent), `UtilityNoticeStatus` (DRAFT/PUBLISHED/CLOSED), `UtilityFlatStatus` (PENDING/PAID/DISMISSED).
+- `UtilityProvider` — per-society `code` unique, `kind`, optional `logoFileId`, `isActive`. Presets seedable: SSGC, SNGPL, K-Electric, LESCO, KW&SB, PTCL, StormFiber, Nayatel.
+- `UtilityBillNotice` — providerId, title, billMonth ("2026-07"), dueDate, targetType+targetIds[], `reminderDaysBefore Int[] @default([7,3,1])`, `remindAfterDue`, status, publishedAt.
+- `UtilityBillFlat` — the per-flat state (the whole point): optional `amountMinor BigInt?`, `consumerNumber?`, `billFileId?`; status; `paidAt`/`markedBy`/`paymentProofFileId`; `revertReason` (audited committee revert); `amountNotifiedAt` (amount-added notified once); `lastReminderOn` "YYYY-MM-DD" (one reminder per society-day dedupe). `@@unique([noticeId, flatId])`.
+- All three carry societyId+deletedAt → AUTO-SCOPED by `lib/db.ts` (reads auto-pinned, societyId stamped on create incl. publish `createMany`, deletes → soft delete + audit). Notice→provider (RESTRICT) and notice→flats (CASCADE) FKs.
+
+### lib/utility
+- `constants.ts` — enum tuples, NOTIF codes (posted/reminder/amount_added), provider presets, `REMINDER_STOPPING_STATUSES`.
+- `rules.ts` (pure, vitest `rules.test.ts`) — `zonedDayKey`, `daysUntilDue` (society-tz calendar diff), `reminderDue` (THE rule: only PUBLISHED notice + PENDING flat, ≤once/day via lastReminderOn, fires when days-until-due ∈ reminderDaysBefore, after due only if remindAfterDue — a passed due date otherwise stops reminders), `paidProgress`, `normalizeReminderDays`. `UtilityRuleError`.
+- `targeting.ts` — `flatWhereForTarget` + `resolveTargetFlats` (flats + current occupants; a flat with no resident still resolves → row created, nobody notified). Self-contained (not imported from announcements).
+- `actor.ts` — `UTILITY_READ`/`UTILITY_MANAGE`; `requireUtilityMember` (any member: view + mark own flat), `requireUtilityActor` (committee), `runReadScope`/`runWriteScope` (folds impersonation + READ_ONLY → 423), `isCommittee`/`canManage`.
+- `http.ts` — typed-error → status mapping (404/403/409/422) + `authErrorResponse` fallback; body/list-query parsers.
+- `columns.ts` — Pro notice-table `ColumnConfig` + flat-matrix export cells.
+- `service.ts` — providers (list/create/update/seed, P2002→duplicate_code), notices (create DRAFT → `publishNotice` fan-out one `UtilityBillFlat` per targeted flat + notify occupants → close), `updateNotice`, `listNotices` (decorated with per-status counts via groupBy), `getNotice` (flat matrix + progress), `patchFlat` (amount/consumer/photo; amount-added notifies once), `bulkFlats` (match by flatId or consumerNumber — CSV import), `markPaid` (resident-or-committee), `dismiss`, `revertToPending` (committee, audited, reason required), `myUtilityBills` (resident), `getOverview` (+committee target options: blocks/categories/flats), worker `sweepUtilityReminders`. `UtilityError`.
+
+### Permissions / roles / features / nav / ui-modes
+- rbac: `utility.read`→`utility.notices`, `utility.manage`→`utility.notices`. Seeded: COMMITTEE_MEMBER (+utility.read), MANAGER (+utility.read, +utility.manage), SOCIETY_ADMIN via `*`. Residents mark their own flat with NO permission (member tier).
+- features.ts: `utility.notices` registered (module 29-utility-bill-notices).
+- nav.ts: `utility` main-group item, feature-gated, hideOnSharedDevice; icon `zap` added to nav-icons. PWA bottom tabs left as-is (curated).
+- ui-modes/modules.ts: `utility` module, audience resident (Simple default).
+
+### API
+`GET/POST /api/utility/providers`, `POST /api/utility/providers/seed` (+GET presets), `PATCH /api/utility/providers/[id]`, `GET/POST /api/utility/notices` (default GET = page overview; `?scope=manage` = Pro table), `GET/PATCH /api/utility/notices/[id]`, `POST .../publish`, `.../close`, `.../bulk`, `PATCH /api/utility/flats/[id]`, `POST .../mark-paid`, `.../dismiss`, `.../revert`, `POST /api/utility/export` (per-notice flat matrix, audited, >1000 rows → 202 queued), `GET /api/me/utility-bills`.
+
+### Worker
+`utility.reminders` cron (`0 10 * * *`, society-scoped) — replaced the registered stub with `runUtilityReminders` → `sweepUtilityReminders`. Marked `mutating: true` (stamps lastReminderOn) so a READ_ONLY society is skipped. Reminders STOP on paid/dismissed or due-date pass (unless remindAfterDue).
+
+### Notifications
+Added `utility.notice.reminder` + `utility.notice.amount_added` templates (en+ur, IN_APP/SMS/PUSH); rewrote `utility.notice.posted` to use `{{title}}`/`{{dueDate}}` and state "not a maintenance charge". Category `utility` (already present).
+
+### UI (Simple + Pro, light/dark, EN/UR RTL, mobile+desktop)
+`app/[locale]/app/utility/page.tsx` (RSC feature-gate) + `components/utility/utility-client.tsx`:
+- Resident (Simple, always): bill cards — provider/title, due badge ("due in N days"/"today"/"overdue"), amount if known, consumer no, view-bill link, "Mark as paid" (optional slip modal upload) + "Not applicable" (dismiss); settled cards grey out and stop nagging.
+- Committee: "Notices" tab (Simple cards / Pro table with paid progress) → per-notice drawer with the flat matrix (progress bar, inline bulk amount entry on blur, per-flat mark-paid / audited revert-with-reason, close-notice), and "New notice" wizard (provider → month → due date → who: ALL/BLOCK/CATEGORY/FLAT_LIST picker → remind-after-due → Save draft / Publish). Empty-provider state offers a one-tap seed of common providers.
+
+### Decisions
+- Dedicated `UtilityTargetType` (not the shared `TargetType`) — decouples utility from the charge module and reinforces "never billing".
+- Auto-scoped all three tables (added deletedAt) — simplest correct fan-out (`createMany` gets societyId injected) and consistent soft-delete/audit.
+- Reminder dedupe via `lastReminderOn` day-string (idempotent within a day and across worker re-runs) rather than a separate sent-log table.
+- flatId kept as a plain string (no FK to Flat), matching the `Pass.flatId` precedent — no Society/Flat back-relations added.
+
+### Gates
+`pnpm prisma generate` ✓, `pnpm lint` ✓ (fixed jsx-no-literals in the client), `pnpm typecheck` ✓. Did NOT run test:unit/test:e2e/build per CLAUDE.md — controller runs full gates. Tests written: `lib/utility/rules.test.ts` (reminder cadence incl. stop-on-paid/dismiss/due-pass), `lib/utility/architecture.test.ts` (never-ledger), `e2e/utility-bill-notices.spec.ts` (401 on every endpoint).
+
+WORK TYPE: FEATURE (branch feature/29-utility-bill-notices)
