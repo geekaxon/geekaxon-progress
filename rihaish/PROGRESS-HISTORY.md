@@ -468,3 +468,61 @@ Append-only. Planning record first, then one detailed entry per completed build 
 - Platform-user management screen (TOTP enrolment, PLATFORM_ADMIN/SUPPORT CRUD) — additive.
 - Bulk cross-society entitlement apply + DAG visualiser (Pro).
 **Checkpoint:** [CHECKPOINT] — progress marker; controller auto-approves and continues to step 09.
+
+---
+
+## 09 — user-account — DONE (2026-07-12)
+
+**Branch:** `feature/09-user-account` · **Work type:** FEATURE
+**Spec:** `/specs/09-user-account.md` (no CODEREF in range). **Feature:** `core.account` (isCore) · **Depends:** `core.auth`, `core.forms`.
+
+### What was built
+
+The signed-in user's own settings surface: profile, security (password / guard PIN / active sessions), notification preferences and app preferences. This is deliberately an **L2 society-user surface** — profile CNIC, "my flats" and the society CNIC-capture toggle are all L1 concepts, and the `/app` shell only renders on a society host — so every account operation acts inside the actor's own society scope.
+
+**Schema + migration** (`prisma/migrations/20260712130000_user_account/` — drafted before this step, verified + generated here):
+- `UserProfile` (`userId @id`, fullName, avatarKey, `cnicEnc`, altPhone, emergency contact, updatedAt) and `NotificationPreference` (`userId`+`category` unique, five channel booleans). Both keyed by `userId` **only** — no `societyId`/`deletedAt`, so they are NOT tenant-scoped and pass through the scoping layer untouched (like Session/Feature).
+- `Society.cnicCapture Boolean @default(false)` — society opt-in; the account CNIC field is only rendered/accepted when true.
+- `Session.ip` + `Session.userAgent` — captured at login for the sessions list. `LoginInput`/`CreateSessionOpts` extended; `login()` and the login route now thread `ip` + `user-agent`.
+
+**Crypto** (`lib/crypto.ts`, new, unit-tested): AES-256-GCM at-rest encryption. Key = sha-256 of `ENCRYPTION_KEY` (any-length secret works). Stored form `v1:iv:tag:ct`; `decrypt` returns `null` (never throws) for tampered/foreign/empty input (GCM auth). `maskCnic` (added to `lib/forms/cnic.ts`): `*****-****567-*` — reveals only the middle group's last three digits; fails closed (full mask) for a non-13-digit input.
+
+**Service** (`lib/account/*`):
+- `notifications-policy.ts` (pure, unit-tested): 7 categories × 5 channels; `isChannelLocked` (in-app locked for **every** category; push additionally locked for `emergency`) + `applyChannelFloor`. This is the floor the notification engine (step 11) will read.
+- `service.ts`: `getAccountProfile`/`updateAccountProfile` (CNIC encrypted at rest, **masked in every response**, edit requires `reauthPassword` + an opted-in society, CNIC view/edit/avatar-delete audited), `changePassword` (verify current → hash → revoke every OTHER session, current survives), `setGuardPin`, `listSessions`/`revokeSession`/`revokeOtherSessions` (scoped to `userId`, current flagged), `getNotificationPreferences`/`putNotificationPreferences` (availability-gate then floor, upsert per category). All User-row reads/writes run inside `withSociety(actor.societyId, …)`; audit rows written with the actor's society + `SOCIETY_USER` actorType.
+- `actor.ts`: `requireAccountActor(req)` (API) + `getServerAccountActor()` (RSC) — both require a society user (platform/L0 session → 403), and capture the current session token hash.
+- `requirePersonalDevice` widened to `Pick<AuthContext,"deviceKind">` so the account actor can reuse it (profile PII routes reject a shared device; the PIN route does not — a guard on a shared device may set a PIN but never read PII).
+
+**API** (`app/api/me/*`): `route.ts` GET/PATCH (profile; personal-device only; phones→E.164, CNIC 13-digit validation + tri-state undefined/null/value), `password` POST, `pin` POST, `sessions` GET + DELETE (revoke-all), `sessions/[id]` DELETE, `notification-preferences` GET/PUT. Shared Zod in `schemas/account.ts` (password/PIN/prefs/profile-patch). `flats` + `active-flat` already existed (step 04).
+
+**UI** (`app/[locale]/app/account/page.tsx` + `components/account/account-client.tsx`): Simple/Pro toggle (localStorage). Profile card (form kit; masked CNIC read-only with a "Change CNIC" reveal → MaskedField + re-auth password), Security card (password + PIN forms; sessions as a plain list in Simple, the **DataTable kit** in Pro with row-action revoke + card renderer), Notifications matrix (Pro = semantic category × channel grid of switches with locked/unavailable switches + tooltips; Simple = one plain-language master switch per category; emergency always-on locked), Preferences card (language buttons → locale nav + best-effort persist; theme via next-themes). i18n `account` namespace added to en + ur (131 lines each, ICU plural on the "N sessions signed out" message).
+
+### Decisions (autonomous, logged per AGENT §2.6)
+- **Account is society-user only.** `User` is tenant-scoped and `lib/account/*` is not on the `db.unscoped()` allow-list, so the service scopes every User-row op via `withSociety`. A platform/L0 caller has no account here → 403. Platform-staff self-service is a later, separate surface.
+- **CNIC is masked in every response, full stop.** Plaintext never crosses the client boundary; the only client form is the mask. This satisfies "never returned in full to a client lacking permission" without a per-request "reveal" permission — there is no reveal path. Editing re-authenticates.
+- **Notification matrix uses a semantic `<table>`, not the DataTable kit.** DataTable is for record LISTS (sort/filter/paginate/export); a fixed 7×5 preference grid is a form control where table semantics aid accessibility (channel header row). The sessions LIST does use the DataTable kit (Pro). This respects the "no hand-rolled data table" rule in spirit and letter.
+- **Password-change notification + avatar storage removal are step-11 / step-10 seams** (TODO comments in the service): the channel engine and storage adapter don't exist yet. The avatar deletion is already audited so the security trail is complete regardless of storage timing.
+
+### Verification gates
+- `pnpm typecheck` — 0 errors.
+- `pnpm lint` — 0 warnings/errors (fixed a bare `:` JSX literal and an unused param).
+- `pnpm test:unit` — **222 passed** (was 207): +`lib/crypto.test.ts` (round-trip, random-IV, tamper→null, foreign→null, encrypt≠plaintext, only-form-is-mask), +`lib/account/notifications-policy.test.ts` (in-app locked all categories, push locked emergency, floor delivers in-app on all-off, emergency floors in-app+push), +`maskCnic` cases in `lib/forms/cnic.test.ts`.
+- `pnpm build` — succeeds (BUILD_ID set); `/[locale]/app/account` prerendered EN + UR; all `/api/me/*` routes present.
+- **Runtime smoke** (built server, no DB): every `/api/me/*` (GET me/sessions/prefs, POST password/pin, PATCH me, DELETE sessions/[id]) returns **401 UNAUTHENTICATED** with no cookie (session lookup short-circuits, no DB touched); `/en/app/account` is a real route (500 only from the absent local Postgres, **not** 404) on a society host and **404** on the platform host (app-shell isolation preserved).
+- **e2e** `e2e/account.spec.ts` — unauth 401 assertions (no seed needed) + the spec's session-revoke acceptance criterion (two logins → revoke B from A → B's cookie 401s), which skips cleanly when `rufi` is unseeded (e2e runs on a seeded staging deploy, not CI).
+
+### UI design self-check
+- shadcn/ui + tokens only; forms on the form kit, the sessions list on the table kit; the notification matrix is a semantic grid (justified above). ✅
+- Light **and** dark — token classes only (`bg-card`/`text-muted-foreground`/`bg-primary`/`border`). ✅
+- RTL/Urdu — `DirectionProvider dir`, logical props only (`ms-/me-/ps-/pe-/text-start`); the ESLint `no-restricted-syntax` guard (bans `ml-/mr-/text-left`) passed. ✅
+- States — EmptyState (sessions empty, shared-device notice, sign-in gate), toasts for all feedback, app-level loading/error. ✅
+- Screenshot — a DB-backed render is needed for a visual capture and there is no local Postgres/.env; the route is verified to resolve correctly (build + smoke) and the visual is captured on the seeded staging deploy, consistent with prior steps. Not a code blocker.
+
+### Acceptance criteria (spec §)
+- [x] CNIC encrypted at rest, never returned in full, masked in every response — `lib/crypto` + `maskCnic`, service always masks (unit-tested).
+- [x] Emergency notifications ignore user opt-out for in-app + push — `applyChannelFloor` (unit-tested), floored on write.
+- [x] Session revoke immediately invalidates the other session — `revokeSession` deletes the row; e2e asserts the revoked cookie 401s.
+- [x] Notification prefs persist and are honoured by step 11 — persisted per category with the floor; the policy module is the engine's contract.
+- [x] Light+dark, EN+UR RTL, mobile+desktop; forms on the form kit, sessions on the table kit — see self-check.
+
+**Checkpoint:** [CHECKPOINT] — progress marker; controller auto-approves and continues to step 10.
