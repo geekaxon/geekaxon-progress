@@ -118,10 +118,12 @@ These are the canonical defaults baked into `@mp/brand`/`@mp/ui`; a tenant may o
 
 ## 12. Verification gates (every step's definition of done — recorded in PROGRESS-HISTORY.md)
 
-1. `typecheck` green (all packages).
-2. `lint` clean.
-3. full `turbo build` green (web + api).
-4. API tests green (Jest), **new tests added** for the step; report `N/N (S suites; +X)`.
+> **The build is fully autonomous: every step ends with `[CHECKPOINT]` (a marker, not a gate — the controller auto-merges and continues). The ONLY stop is `[HUMAN_REQUIRED]`, reserved for a missing/empty spec or infra the agent physically cannot do.** Gates 1–4 are executed by the **controller** (Node, zero tokens) and block the staging merge on failure; the agent writes the code and the tests but never runs them. Gates 5–13 remain the agent's own self-checks, done by inspection.
+
+1. `lint` clean. *(controller-run)*
+2. `typecheck` green (all packages). *(controller-run)*
+3. `test:unit` green (Jest), **new tests added** for the step. *(controller-run)*
+4. full `build` green (web + api). *(controller-run)*
 5. **i18n parity:** new **UI** keys EN+UR (hard gate). **AI** steps: AI handling EN+UR+Roman, tested.
 6. **Isolation:** tenant scoping/RLS correct; no query widens beyond tenant; `➖` if N/A.
 7. **Feature-flag gate:** every gated capability checks the flag **server-side** AND hides in UI; **vertical smoke tests** pass — the module builds and behaves correctly under **Pharmacy / Lab / Clinic / Clinic+Pharmacy / Full** flag sets (no orphan routes, no broken nav, clean "off" state).
@@ -202,14 +204,14 @@ These are the canonical defaults baked into `@mp/brand`/`@mp/ui`; a tenant may o
 45. `45-design-system-v2` — **Inter + surface/elevation system** (light grey page, white sidebar/cards + shadows; teal becomes ACCENT, never wallpaper), three-mode theming (Light/Dark/System, default System→Light) with **per-tenant palette personalization** (aaPanel-style presets + custom, AA guard), skeleton loaders on every data surface, standard EmptyStates, Dashboard v2.
 46. `46-platform-identity` — **THE MOST SAFETY-CRITICAL STEP.** Platform accounts (patient/rider/phlebotomist; phone+OTP) above tenants; tenant links; **merged patient timeline assembled only via per-tenant scoped reads** (never cross-tenant joins); consented per-document sharing (audited, revocable); claim/migration for existing patients. Isolation proofs are hard gates: a tenant must NEVER see another tenant's records or relationships.
 47. `47-marketplace-discovery` — Foodpanda surface: tenant listing profiles (explicit publication), browse/search clinics/doctors/tests/medicines (preset-aware; public ≥90), cross-tenant booking/ordering via the tenants' OWN services (auto-link on first booking, `source: MARKETPLACE`), demo-seed extension adds a standalone pharmacy + lab.
-48. `48-platform-settlement` — **Money (provider-AGNOSTIC: mock adapter now, JazzCash/Easypaisa/card = future config):** online-collect (platform holds, tenant payable minus commission) + cash-at-facility (tenant owes commission); double-entry append-only platform ledger; per-tenant statements + settlement runs. **⚠️ Ends with a MANDATORY `[HUMAN_REQUIRED]` HALT — owner verifies the privacy wall, marketplace, money, and design before 49+ may build (pointer set to HOLD).**
+48. `48-platform-settlement` — **Money (provider-AGNOSTIC: mock adapter now, JazzCash/Easypaisa/card = future config):** online-collect (platform holds, tenant payable minus commission) + cash-at-facility (tenant owes commission); double-entry append-only platform ledger; per-tenant statements + settlement runs. Ends `[CHECKPOINT]` like every step (the former owner-verification halt is retired — the agent decides, logs its reasoning in PROGRESS-HISTORY.md, and continues).
 49. `49-field-pools` — Riders/phlebotomists both ways: tenant-employed (unchanged) AND shared platform pool with own-staff-first dispatch (offer/accept/expiry), job-scoped DTOs only, pool earnings → 48 ledger.
 50. `50-saas-console` — Vendor portal (VendorAdmin, mandatory 2FA): create-tenant wizard (preset, branding, commission, owner invite), suspend/archive (fail-closed), per-tenant flags/branding/commission, listing approval, cross-tenant oversight (operational/financial metadata ONLY — no medical data reachable), platform audit.
 51. `51-subscriptions-ai-modes` — Subscription packages (flag CEILING above presets + limits + grandfathering), tenant subscription enforcement, **AI two ways:** MANAGED (platform keys; metered per-use billing → 48 ledger at package rates) vs BYOK (tenant's own encrypted key; provider bills them) per package entitlement.
 52. `52-mobile-app-experience` — Native-app feel per audience (bottom tab bar from the ONE nav registry, view transitions, safe areas, pull-to-refresh, ≥44px targets) + **QR install** on every home/dashboard (local SVG QR to that entrance URL) + install prompts/iOS instructions (EN+UR).
 53. `53-tenant-addressing` — Domain-agnostic addressing: `PLATFORM_BASE_DOMAIN` + `HOSTNAME_MAP` config, precedence custom-domain → map → `<slug>.base` → shared fallback (current staging preserved byte-for-byte), tenant-host branded experience (no clinic field), custom domains with verification (package-gated), ops runbook. **No hostname is ever hardcoded — the real product domain drops in as pure config when purchased.**
 
-> **Launch scope = build-steps 1–39 (COMPLETE). Phase 4 (40–44) usability/polish (COMPLETE). Phase 5 (45–53) is the platform/marketplace scope; the specced build order currently ends at 53, with a MANDATORY owner-verification halt after 48.** Any further capability is added as a new, fully-authored `specs/NN-slug.md` (54+) only when its requirements are defined — never improvised. A missing spec is always a hard stop (`[HUMAN_REQUIRED]`), never a cue to guess.
+> **Launch scope = build-steps 1–39 (COMPLETE). Phase 4 (40–44) usability/polish (COMPLETE). Phase 5 (45–53) is the platform/marketplace scope; the specced build order currently ends at 53.** The build runs fully autonomously end-to-end — no approval gates, no sign-off halts; every step ends `[CHECKPOINT]`. Any further capability is added as a new, fully-authored `specs/NN-slug.md` (54+) only when its requirements are defined — never improvised. A missing spec is always a hard stop (`[HUMAN_REQUIRED]`), never a cue to guess.
 
 ## 15. Deployment (deploy.sh spec for THIS stack)
 

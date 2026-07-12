@@ -1048,3 +1048,43 @@ Money IN, reversed when a cheque bounces, and a printable receipt. **v1 is recor
 - **Deferred (documented, non-blocking):** the record modal always uses OLDEST_FIRST (SPECIFIC_INVOICE is wired through the service + API, but the per-flat invoice picker belongs with the resident finance screen); the receipt PDF renders society name + emerald branding but passes `logo:null` (adapter-byte logo loader deferred).
 
 **Checkpoint:** [CHECKPOINT] — progress marker; controller auto-approves and continues to step 20 (resident-finance).
+
+---
+
+## 20 — resident-finance — DONE (2026-07-12)
+
+**Work type:** FEATURE (branch feature/20-resident-finance)
+
+**Spec:** /specs/20-resident-finance.md — `billing.resident_portal` (depends on `billing.payments`). "The screen that sells the product": a resident sees, in plain language, exactly what they owe and what they've paid. Read-only over steps 18–19 plus payment submission.
+
+### Decisions
+- **No migration.** Everything reuses `Invoice`/`InvoiceLine`/`LedgerEntry`/`Payment`/`Receipt`/`FlatOccupancy` from steps 16/18/19. Step 20 is a resident-scoped READ layer + one write seam (the resident's own submitPayment). This is the single biggest scope/risk reduction — money invariants stay owned by steps 18–19 and are not re-implemented.
+- **Authorization is occupancy, not RBAC.** A plain RESIDENT role holds `permissions: []` (confirmed in lib/rbac.ts). So the portal does NOT gate on a billing permission. `requireMeFinanceActor` gates on: (1) an authenticated society session, (2) the `billing.resident_portal` feature entitled (`isEnabled`), and (3) — per read — the caller actually HOLDING the flat. The nav item is likewise feature-gated with NO `permission` (so residents see it), `hideOnSharedDevice: true`.
+- **THE security gate = `assertHoldsFlat(userId, flatId)`** in lib/billing/me-finance.ts, called before every flat-scoped read (and inside `assertHoldsInvoice`/`assertHoldsPayment`). It reads the caller's current `FlatOccupancy` and throws `ForbiddenError` (→ 403) for any flat that is not theirs — so a resident can never reach another flat's invoice/ledger/receipt even by guessing an id (the explicit acceptance test). Proven by the DB-gated integration test.
+- **Balance parity:** `getFinanceSummary` derives every headline through `balanceOf` (= step-18 `balance(flatId) = Σdebit − Σcredit`), so the "You owe ₨X" the resident sees equals `balance(flatId)` to the minor unit. Asserted in the integration test (headline == `flatBalanceMinor`).
+- **Multi-flat:** `getUserFlats` (residents seam) yields every held flat (OWNER or OCCUPANT). Summary returns a per-flat headline + a combined total; the client has an in-page pill switcher that also POSTs `/api/me/active-flat` to persist the choice. An owner of a rented flat holds it as OWNER → sees its ledger; invoices carry the occupant's `billedToName` snapshot (naturally satisfies "invoices addressed to occupant, owner can view").
+- **Submission status transparency (spec 19/20):** a PENDING submission writes no ledger + no receipt, so it would be invisible. `getMyStatement` therefore also returns `submissions[]` (PENDING_VERIFICATION + any rejected, with reason) so the resident sees "Pending verification / Rejected (reason)". Rejected → the Pay button allows a corrected re-submission.
+- **READ_ONLY society:** reads use `runReadScope` (never read-only) so dues stay visible; `POST /api/me/payments` uses `runWriteScope`, which folds a READ_ONLY society status → the scoping layer rejects the write (423, `ReadOnlyError`). The client proactively disables the Pay button and shows an explanatory banner from `summary.readOnly`.
+- **Invoice PDF is synchronous, no worker:** unlike receipts (rendered async at payment time and stored), an invoice PDF is rendered on demand by `lib/billing/invoice-pdf.ts` (pdf-lib, Latin + embedded Noto Naskh for Urdu, one A4 page, CANCELLED watermark) and streamed straight back. Simpler than a worker+storage round-trip and gives instant download. Receipts reuse step-19's stored PDF via `getReceiptRef` + `getFileAccess` (signed URL, or 202 while the worker renders).
+- **Statement export** reuses the generic export engine (`generateExport` + `loadUrduFont`) for PDF/Excel/CSV — the resident's own single flat is bounded, so no worker/queue (unlike the committee table export). Runs the same date-filtered running-balance rows the Pro view shows.
+- **Utilities (step 29) / amenities (step 35)** render as separate, clearly-labelled dashed sections (data pending those modules) — structurally and visually never mixed into the maintenance balance (acceptance).
+
+### Files
+- lib/features.ts — added `billing.resident_portal` (dependsOn `billing.payments`).
+- lib/nav.ts — `finance` item (main group, `wallet` icon, feature-gated, hideOnSharedDevice). components/shell/nav-icons.ts — `wallet` → Wallet.
+- lib/billing/me-actor.ts (NEW) — `requireMeFinanceActor` / `getMeFinanceServerActor` (feature + auth, no RBAC), reuses `runReadScope`/`runWriteScope`.
+- lib/billing/me-finance.ts (NEW) — `assertHoldsFlat` (the 403 gate), `heldFlats`, `getFinanceSummary`, `getMyStatement` (running balance + invoices-with-lines + receipts + aging + submissions + date range), `assertHoldsInvoice`/`assertHoldsPayment`, `submitMyPayment` (= step-19 submitPayment).
+- lib/billing/invoice-pdf.ts (NEW) + lib/billing/invoice-pdf.test.ts (unit — valid PDF en/ur/cancelled).
+- API (7): app/api/me/finance/summary, app/api/me/invoices, app/api/me/invoices/[id]/pdf, app/api/me/ledger, app/api/me/ledger/export, app/api/me/receipts/[id]/pdf, app/api/me/payments.
+- UI: app/[locale]/app/finance/page.tsx, components/finance/finance-client.tsx (Simple + Pro via `useUiModule("finance")`), components/finance/submit-payment-modal.tsx (FileUpload slip + camera).
+- schemas: reused `submitPaymentSchema`.
+- i18n: `finance` namespace + `nav.finance` in messages/en.json + messages/ur.json (parity, JSON validated).
+- lib/billing/me-finance.integration.test.ts (DB-gated) — cross-flat 403, headline == balance(flatId), submit off-ledger reaches queue + visible pending.
+- e2e/resident-finance.spec.ts — 7 unauth 401s + finance page renders < 500.
+
+### Gate results
+- Per CLAUDE.md the controller runs typecheck/lint/test/build after this session; not run here. Self-check by inspection: all imports/signatures verified against live files (isEnabled, getInvoiceDetail, ageArrears, getFileAccess, getUserFlats, export barrel, formatMoney, error→status mapping ReadOnlyError→423 / Forbidden→403 / Unauthenticated→401); both message files JSON-validated; every `t(...)` key cross-checked against the added namespace; nav/features tests inspected (no hardcoded counts broken; new feature dep exists).
+
+### Notes / deferred
+- Society toggle "may an owner see the occupant's invoices" — spec default **yes**, implemented as default-yes (owner holds the flat → sees it). The configurable-per-society flag is deferred (would need a societySettings column / migration); recorded here as an autonomous decision.
+- Utilities/amenities sections are placeholders until steps 29/35 provide data.
