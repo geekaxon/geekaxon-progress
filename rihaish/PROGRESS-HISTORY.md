@@ -996,3 +996,55 @@ The branch already carried a nearly-complete implementation from a prior session
 - Cancelled invoice keeps its number and its sequence slot is never reused (the sequence only ever increments); a cancel writes a REVERSAL, matching the acceptance criterion.
 
 **Checkpoint:** [CHECKPOINT] — progress marker; controller auto-approves and continues to step 19 (payments-receipts).
+
+---
+
+## Step 19 — Payments & receipts (`billing.payments`) — DONE (2026-07-12)
+
+Money IN, reversed when a cheque bounces, and a printable receipt. **v1 is record-keeping; a gateway drops into the same seam later** (`PaymentProvider.MANUAL|STRIPE`). Continues the architecture-#4 invariant from step 18: **money is the ledger, not a mutable column** — a `Payment` row carries the request/verification snapshot but no balance; a CLEARED payment writes `LedgerEntry(PAYMENT, CREDIT)` and a bounce/void writes a matching `REVERSAL, DEBIT` that never edits the original.
+
+### Feature / perms / nav
+- `lib/features.ts`: `billing.payments` (isCore false, dependsOn `billing.ledger`, `core.storage`). DAG assert passes at load.
+- `lib/rbac.ts`: added `billing.payment.read` (gated `billing.payments`); `billing.payment.record` already existed. COMMITTEE_MEMBER → read; ACCOUNTANT → read + record. Verify/bounce/void all require `record`.
+- `lib/nav.ts`: `payments` entry (icon `banknote`, group manage, perm `billing.payment.read`, feature `billing.payments`, hideOnSharedDevice). Registered `Banknote` in `components/shell/nav-icons.ts`. `payments` UI module was already forward-declared in `lib/ui-modes/modules.ts` (audience committee → default PRO).
+
+### Schema + migration (`20260712230000_payments_receipts`)
+- Enums `PaymentMethod`, `PaymentProvider`, `PaymentStatus`, `AllocationMode`.
+- `Payment` (societyId+deletedAt scoped): flatId, paidByUserId?, method, provider, amountMinor(BigInt), reference?, bankName?, paidAt, status, allocationMode, targetInvoiceId?, proofFileId?, submittedBy, verifiedBy?, verifiedAt?, rejectedReason?, bouncedAt?, bounceReason?, bounceFeeApplied, voidedAt?, voidReason?, notes?. FK `Payment_flatId_fkey` → Flat CASCADE (per the step-18 FK-convention lesson, declared in the migration, not just the schema). Indexes `(societyId,flatId,status)`, `(societyId,status)`, `(societyId)`.
+- `Receipt` (scoped): paymentId @unique, number, issuedAt, pdfFileId?, voidedAt?, voidReason?. FK → Payment CASCADE. `@@unique([societyId, number])`.
+- `PaymentSettings` (infra, keyed by societyId): bounceFeeEnabled, bounceFeeMinor?, requireProofForResidentSubmission, allocationMode, receiptPrefix, receiptFormat. FK → Society CASCADE. Society back-relation `payments`.
+- `ReceiptSequence` (infra, `@@id([societyId, prefix, year])`): gapless per-(society, year) counter, allocated with the same atomic `INSERT … ON CONFLICT DO UPDATE` as invoices, inside the payment transaction (rolls back with it → no holes).
+
+### Pure logic (no DB / no clock, unit-tested)
+- `lib/billing/allocation.ts` (10 tests): `allocatePayment({amountMinor, invoices, allowPartial, allowAdvance})` → `{applications[], excessMinor}`. Fully settles each invoice in order; with `allowPartial` off it will not half-settle (skips one it can't fully cover → money flows to a later smaller invoice or the advance pool); excess with `allowAdvance` off is rejected (typed `AllocationError`). `SPECIFIC_INVOICE` = a single-element list.
+- `lib/billing/money-words.ts` (6 tests): `integerToWords` uses the **South-Asian scale** (thousand → lakh → crore, recursing for arab+), `amountInWords` splits minor→major+subunit on the integer (no float) and appends "Only"; `currencyWords(currency)` maps PKR→Rupees/Paisa etc.
+
+### Service (`lib/billing/payments.ts`)
+- Settings CRUD; `recordPayment` (committee → CLEARED): resolves the billed user (primary current occupant), then `clearCore` in a fresh txn. `clearCore(ctx, args, tx)` = allocate (against `loadOutstandingInvoices` via the tx, oldest-first or the target) → one `PAYMENT CREDIT` per settled invoice (carrying invoiceId) + one advance CREDIT for the excess → gapless receipt (`allocateReceiptSequence`, prefix `"{invoicePrefix}-{receiptPrefix}"`) → recompute each touched invoice's money-derived status. `afterCleared` enqueues `billing.receipt-pdf` (dedupeKey `receipt-pdf:{paymentId}`) and notifies the payer (`billing.payment.received`) — after the money commits.
+- `submitPayment` (resident/committee-on-behalf → PENDING_VERIFICATION): proof-gated by `requireProofForResidentSubmission`, writes NO ledger.
+- `verifyPayment(id, approve|reject)`: `SELECT … FOR UPDATE` locks the row AND the state transition (clear) runs in the **same** transaction, so a second concurrent verifier finds it non-pending → `already_verified` (spec edge case). Approve may edit the amount (audited); reject → VOID + `rejectedReason` + notify `billing.payment.rejected`.
+- `bouncePayment`/`voidPayment` share `reverseCleared`: for each original `PAYMENT CREDIT` a matching `REVERSAL DEBIT` (same invoiceId, `reversesEntryId` set) — originals untouched; optional one-time bounce fee (`LATE_FEE DEBIT`, `bounceFeeApplied` guard); receipt voided (keeps number); every touched invoice recomputed; notify `billing.payment.reverted`. A PENDING void just marks VOID (no ledger); a PENDING bounce is refused (`payment_not_cleared`).
+- Reads: `listPayments`/`listPaymentsForExport` (DataTable kit + `payment-columns.ts`), `listVerificationQueue`, `getPaymentDetail`, `getPaymentsOverview` (cleared/pending counts + collected-today), `getReceiptRef`.
+- `http.ts` maps new codes: `already_verified`/`payment_not_cleared` → 409, `unknown_payment` → 404, `read_only` → 423.
+
+### Worker (`lib/worker/handlers.ts` + `registry.ts`)
+- `runReceiptPdf`: builds the receipt from the ledger (invoices settled from linked PAYMENT credits, remaining balance from `flatBalanceMinor`), renders a branded, Urdu-capable single-page A4 PDF (`receipt-pdf.ts`, `pdf-lib` + embedded Noto Naskh via `loadUrduFont` — same glyph-without-shaping limitation as the export engine, documented), amount in figures AND words, VOID watermark when voided; stores it via `storeFile` (PDF is an allowed upload mime) and links `Receipt.pdfFileId`. Idempotent (dedupeKey + `pdfFileId` short-circuit). Registered `billing.receipt-pdf` (mutating:false — non-financial, runs even in READ_ONLY, like delivery). No cron (enqueued on demand).
+
+### API (8 routes) + UI
+- `/api/payments` (GET overview / POST record → 201), `/list`, `/queue`, `/settings` (GET/PATCH), `/submit` (POST → 201), `/[id]` (GET detail / PATCH `approve|reject|bounce|void`), `/[id]/receipt` (GET → signed URL, or 202 while rendering), `/export` (POST, current view, >1000 → 202). Read routes require `billing.payment.read` (`requirePaymentActor`), mutations require `billing.payment.record` (`{manage:true}`); `runWriteScope` folds impersonation-read-only + READ_ONLY society → 423. Shared Zod in `schemas/billing.ts` (`recordPaymentSchema`, `submitPaymentSchema`, `paymentActionSchema` discriminated union, `paymentSettingsSchema`).
+- UI page `/[locale]/app/payments` via `useUiModule("payments")`: Simple = record modal (flat combobox → amount → method → date → save, cheque/bank surface reference/bank) + verification queue (card list with slip thumbnail via `/api/files/{id}`, Approve with optional amount edit / Reject with reason); Pro = payment DataTable (status/method/date filters, CSV/Excel/PDF export, receipt download, bounce/void through a reason-required confirm dialog). i18n `payments` ns en+ur, exact parity (101 keys each), plus `nav.payments`.
+
+### Gates
+- `pnpm typecheck` clean · `pnpm lint` 0 warnings on the new surfaces · `pnpm test:unit` **489 passed** / 7 skipped · `pnpm build` exit 0 (8 `/api/payments/*` routes + `/[locale]/app/payments` page, both locales).
+- Ledger-immutability architecture test still green (payments.ts / handlers.ts write no `.ledgerEntry.(update|delete|upsert)` — reversals are new `create`s; only Invoice/Receipt/Payment rows are updated).
+- `payments.integration.test.ts` (DB-gated, skips without `DATABASE_URL`, same pattern as `run.integration`): cleared credits+settles+issues receipt; partial → PARTIALLY_PAID; excess → −advance; bounce writes a reversal, never mutates the originals, applies the fee once, re-opens the invoice, voids the receipt keeping its number; submission stays off-ledger until approved + second verify → `already_verified`; **receipt numbering gapless under concurrency** (5 parallel `recordPayment`); void reverses.
+- e2e `e2e/payments-receipts.spec.ts` = 11 unauth-401 route checks + payments page no-500 (not a CI gate).
+
+### Decisions / notes
+- **A payment maps to N ledger rows, not one.** OLDEST_FIRST splits the credit into one `PAYMENT CREDIT` per settled invoice (each carrying its `invoiceId`, so the existing step-18 `paidByInvoice` derivation marks invoices PAID/PARTIALLY_PAID) plus one unattributed CREDIT for the advance. A reversal mirrors them 1:1 (same invoiceIds + `reversesEntryId`), so the invoices re-open exactly. No `paidAmount` anywhere.
+- **Verification concurrency** is a real row lock: `FOR UPDATE` + the clear run in ONE interactive transaction (Prisma can't nest `$transaction`, so `clearCore` takes the caller's tx). This is the atomic version of the spec's "second sees already verified".
+- **Receipt numbering** reuses the invoice `formatInvoiceNumber` token engine with a composite prefix (`RUFI-RCP`) and a yearly `ReceiptSequence`; gaplessness comes from the atomic upsert inside the payment txn, identical to invoices.
+- **Resident submission path**: `submitPayment` is fully built and the `/submit` route works, but in v1 it's guarded by `billing.payment.record` (committee logs a pending on a resident's behalf). The resident-initiated upload UI + occupancy-scoped auth is step 20 (resident finance), which reuses this exact service function.
+- **Deferred (documented, non-blocking):** the record modal always uses OLDEST_FIRST (SPECIFIC_INVOICE is wired through the service + API, but the per-flat invoice picker belongs with the resident finance screen); the receipt PDF renders society name + emerald branding but passes `logo:null` (adapter-byte logo loader deferred).
+
+**Checkpoint:** [CHECKPOINT] — progress marker; controller auto-approves and continues to step 20 (resident-finance).
