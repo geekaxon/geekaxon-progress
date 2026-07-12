@@ -889,3 +889,58 @@ The branch already carried a nearly-complete implementation from a prior session
 - `lib/residents.ts` (a pre-existing stub) removed in favour of the `lib/residents/` module directory.
 
 **Checkpoint:** [CHECKPOINT] — progress marker; controller auto-approves and continues to step 17 (charge-engine).
+
+---
+
+## 17 — charge-engine — DONE (2026-07-12)
+
+**Branch:** `feature/17-charge-engine` · **Spec:** `/specs/17-charge-engine.md` (no CODEREF in range) · **Feature:** `billing.charges` (entitled; deps `flats.registry`, `residents.registry`).
+
+**Goal:** decide what each flat owes, and why. Effective-dated rates that are never edited in place, so a past invoice is always reproducible.
+
+### Registrations
+- `lib/features.ts`: `billing.charges` (isCore=false, module `17-charge-engine`, deps `flats.registry`+`residents.registry`). DAG validates.
+- `lib/rbac.ts`: perms `billing.charges.read`/`billing.charges.manage` (gated by `billing.charges`). ACCOUNTANT → read+manage; MANAGER → read; COMMITTEE_MEMBER → read; SOCIETY_ADMIN via `*`.
+- `lib/nav.ts`: `charges` item (icon `coins`, perm `billing.charges.read`, feature `billing.charges`, hideOnSharedDevice) between structure/residents-block and billing. `components/shell/nav-icons.ts`: added `coins → Coins`.
+- `lib/ui-modes/modules.ts`: `{ code: "charges", ownerStep: "17-charge-engine", audience: "committee", supportsModes: true }` → built-in default PRO.
+
+### Schema + migration (`20260712210000_charge_engine`)
+- Enums `ChargeKind{RECURRING,ONE_OFF,METERED}`, `TargetType{ALL,BLOCK,CATEGORY,FLAT_LIST,SINGLE_FLAT}`, `SplitMode{PER_FLAT,SPLIT_EQUALLY}`, `SpecialChargeStatus{DRAFT,SCHEDULED,APPLIED,CANCELLED}`.
+- `ChargeHead` (code/name/kind/isActive/sortOrder), `RateRule` (occupancy?/categoryId?/blockId?/flatId? conditions, amountMinor BigInt, effectiveFrom, effectiveTo?, supersededBy?, createdBy), `SpecialCharge` (title/description?, amountMinor BigInt, targetType, targetIds String[], splitMode, dueDate, billingPeriod?, status, appliedAt?, createdBy). EVERY table carries `societyId` + `deletedAt` → the `lib/db.ts` scoping layer auto-pins reads and rewrites deletes into soft-delete+audit. FK RateRule/SpecialCharge → ChargeHead (onDelete Cascade). `blockId/categoryId/flatId/targetIds` are plain ids (validated in-society by the service), NOT FKs — so a flat soft-delete never cascades a rule (history preserved).
+
+### Pure logic (unit-tested — 29 tests across resolve/split/period)
+- `resolve.ts` `resolveCharges(flat, periodStart, heads, rules, specials)`: per RECURRING head, candidate = effectiveFrom≤start ∧ (effectiveTo null ∨ ≥start) ∧ every non-null condition matches; winner = highest `specificity` score `flatId(1000)>categoryId+occupancy(110)>categoryId(100)>occupancy(10)>blockId(1)>default(0)` (reproduces the spec ordering exactly), tie-break latest effectiveFrom → newest createdAt → greatest id (fully deterministic). No candidate → `no_rule` warning (never a silent zero). METERED head → `metered_unavailable` warning (step-37 source not shipped). Special charges appended; SPLIT_EQUALLY uses `shareForIndex` on the ordered target list.
+- `split.ts` `splitEqually(total,count)` / `shareForIndex`: BigInt-only; base=total/count, first `remainder` parts get +1 → sum reconciles EXACTLY. **Decision:** followed the spec's authoritative RULE ("first N flats take the extra minor unit", N=remainder → e.g. 100000/7 = 14286×5 + 14285×2) rather than the spec edge-case example's looser arithmetic (14286×6 + 14284×1); both reconcile, the RULE version is the standard largest-remainder method and is what the tests assert.
+- `period.ts`: `"YYYY-MM"` → UTC month start/end; resolution keys off PERIOD START, so a mid-month rate change never touches the current invoice.
+
+### Service (`lib/charges/service.ts`) — all under active tenant scope
+- Head CRUD (`duplicate_head_code` on P2002). Rate rules: `createRateRule` validates head + in-society conditions, then in one txn creates the new rule AND supersedes the open rule with the identical condition signature (sets its `effectiveTo`=new.effectiveFrom + `supersededBy`) — **never mutates the old amount**, so a 2024 invoice stays reproducible. This single path serves both "set a rate" and "change a rate". `listRateRules` (data-table kit), `listRuleHistory` (per-head, newest first), `deleteRateRule` (soft, for a mistaken rule).
+- Special charges: `createSpecialCharge` (DRAFT/SCHEDULED; `empty_target` if a non-ALL target resolves to zero live flats), `updateSpecialCharge`/`cancelSpecialCharge` (APPLIED → `applied_immutable` 409). `resolveTargetFlats(type, ids)` → ordered live flat ids by displayCode (soft-deleted excluded → a demolished flat is silently skipped; non-billable INCLUDED so a construction levy can target under-construction flats). Same function backs the preview AND the eventual apply → counts match.
+- `simulate(flatId, period)`: loads flat + active heads + live rules + SCHEDULED specials for the period, resolves the target flats for each special, calls the SAME pure `resolveCharges` the step-18 run will use → simulator output is guaranteed to match the produced invoice.
+- `getOverview(money)`: heads (+open rules +rule count), all special charges, selector context (blocks/categories/flats), currency/minorUnitDigits.
+- Money is BigInt end-to-end; serialised to strings at the module edge (JSON has no BigInt). `parseAmountMinor` parses a major-unit string via `parseMoneyInput` (rejects negatives).
+- `actor.ts` mirrors structure/residents (`requireChargesActor`, `getChargesServerActor`, `runReadScope`/`runWriteScope` folding impersonation-RO + READ_ONLY society status → 423). `http.ts` maps typed `ChargesError` (duplicate/`applied_immutable` → 409, `unknown_*` → 404, else 400). `columns.ts` rate-rule + special-charge data-table whitelists. `schemas/charges.ts` (client+server Zod).
+
+### API (6 route files)
+- `/api/charges` GET overview · `/api/charges/simulate` POST · `/api/charge-heads` GET/POST/PATCH/DELETE · `/api/rate-rules` GET(list `?q` OR history `?chargeHeadId`)/POST(supersede)/DELETE · `/api/special-charges` GET(list `?q` OR all)/POST/PATCH/DELETE(cancel) · `/api/special-charges/preview` POST (live flat count + sample codes).
+
+### UI (`components/charges/*`, `useUiModule("charges")`)
+- **Simple** (`simple-charges.tsx`): per active RECURRING head, a card with a per-occupancy amount row (OCCUPIED_BY_OWNER/RENTED/VACANT/UNDER_CONSTRUCTION) showing the current occupancy-only rule amount + a set/change button that opens `RateRuleModal` locked to that head+occupancy (behind it writes a proper effective-dated occupancy rule that supersedes the old). "One-time charge" button → `SpecialChargeModal`.
+- **Pro**: `HeadManager` (head list w/ edit), `RateRuleTable` (data-table: specificity columns, effective-from, current-vs-superseded, delete row action, "New rate" toolbar → full-condition `RateRuleModal`), `RateSimulator` (flat+month pickers → lines with source + total + no-rule/metered warnings).
+- Shared `SpecialChargeModal`: head/title/amount/split/target-type/targets/due/billing-period, a **live target preview** (debounced POST to `/preview`) showing "This will bill N flats" + computed total (per-flat × N, or the split total). `SpecialChargeList` (both modes; cancel non-applied).
+- Money rendered via `formatMoney` with the society currency/minorUnitDigits.
+
+### i18n
+- `charges` namespace en+ur, **110 keys each, full parity** (verified by key-diff). `nav.charges` added both locales.
+
+### Gates
+- `pnpm typecheck` clean · `pnpm lint` 0 warnings · `pnpm test:unit` **437 passed** / 3 skipped (+29 new) · `pnpm build` exit 0 (6 new API routes + `/[locale]/app/charges` page, both locales). e2e `e2e/charge-engine.spec.ts` (12 unauth-401 route checks + charges page no-500; not a CI gate).
+- `prisma format` normalised the new block; `prisma generate` OK. `prisma validate` reported only a `getConfig` env error (no `DATABASE_URL` locally) — not a schema error.
+
+### Decisions / notes
+- Split-equally follows the stated RULE, not the spec's looser example arithmetic (see split.ts note); both reconcile exactly.
+- `resolveTargetFlats` includes non-billable flats on purpose (construction-levy case); billability is a recurring-charge concern decided at invoice time (step 18).
+- Simulate & preview reuse the exact functions the step-18 invoice run will call → the two acceptance criteria "simulator matches the run" and "preview count matches applied" are structurally guaranteed.
+- RateRule/SpecialCharge given `deletedAt` (spec snippet omitted it) so they are first-class tenant-scoped models like every other domain row (architecture #1/#7); rules are superseded, not deleted, in normal flow.
+
+**Checkpoint:** [CHECKPOINT] — progress marker; controller auto-approves and continues to step 18 (ledger-invoicing).
