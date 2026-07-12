@@ -331,3 +331,49 @@ Append-only. Planning record first, then one detailed entry per completed build 
 - Lighthouse a11y ≥95 + full light/dark/RTL screenshots → captured on the seeded staging deploy (no Postgres in the agent env).
 
 **Checkpoint:** [CHECKPOINT] — progress marker; controller auto-approves and continues to step 06.
+
+---
+
+## 06 — form-input-kit — DONE (2026-07-12)
+
+**Branch:** `feature/06-form-input-kit` · **Feature:** `core.forms` (isCore, dependsOn `core.shell`) · **Spec:** `/specs/06-form-input-kit.md` (no CODEREF).
+
+### What shipped
+- **Feature registry:** `core.forms` added to `lib/features.ts` (isCore, deps `["core.shell"]`); `lib/features.test.ts` extended (registration + edge). DAG validates at load; registry seeder picks it up automatically.
+- **Deps added (exact-pinned):** react-hook-form 7.54.2, @hookform/resolvers 3.10.0, libphonenumber-js 1.11.17, @tanstack/react-virtual 3.11.2, react-day-picker 9.5.0, date-fns 4.1.0, @radix-ui/react-{select 2.1.4, popover 1.1.4, checkbox 1.1.3, radio-group 1.2.2, switch 1.1.2, label 2.1.1}.
+- **Pure layer (unit-tested, no React):** `lib/forms/phone.ts` (normalize→E.164, PK default; `0300…`→`+92300…`), `lib/forms/cnic.ts` (`#####-#######-#`, pasted-13-digit format, clean-13 stored), `lib/forms/mask.ts` (token pattern `#`/`A`/`*`, presets cnic/vehicle/account, formatted+clean), `lib/forms/money-input.ts` (sanitize/parse → **bigint only**, 0-digit currency rejects decimals) — reuses `lib/money.ts`.
+- **Shared Zod (one schema, client+server):** `schemas/common.ts` (requiredString, email lower-case, `phoneSchema`→E.164, `cnicSchema`→clean digits, `moneySchema`→bigint minor units w/ optional min, iso date, HH:mm time, `mustBeChecked`), `schemas/demo.ts` (demo form). `schemas/demo.test.ts` proves server rejects what client rejects (bad phone/short CNIC/decimal-in-PKR/empty-blocks/unchecked-terms/bad-time). Added `schemas/**/*.test.ts` to `vitest.config.ts` include.
+- **shadcn primitives (subagent, RTL-logical, light+dark):** `components/ui/{label,input,textarea,select,popover,checkbox,radio-group,switch,calendar}.tsx`. Calendar wraps react-day-picker v9 (v9 classNames keys, custom `Chevron`, `dir` passthrough).
+- **Form kit `components/form/`:** unified `<FieldShell>` anatomy (label/required/hint/error/aria wiring in ONE file); `<Form>` (RHF provider, noValidate, gap layout) + `useUnsavedChangesGuard` (beforeunload while dirty) + `useZodForm`; controls `TextField` (prefix/suffix), `TextArea` (auto-grow+counter), `NumberField`, `MoneyField`, `SelectField` (≤10, warns over), `Combobox` (Popover+@tanstack/react-virtual, debounce 250ms, async `onSearch` or static filter, keyboard nav), `MultiSelect` (chips, search, select-all, virtualised), `DatePicker`/`DateRangePicker`/`TimePicker` (ISO/HH:mm storage, Intl formatters → Urdu names, `dir`), `PhoneField` (country Select PK-default, format-as-you-type, E.164 on blur), `MaskedField`, `CheckboxField`/`RadioGroupField`/`SwitchField`, `FileDropzone` (drag-drop, preview, size/MIME guard, camera capture seam for step 10), `Modal`/`Drawer`/`ConfirmDialog` (focus-trapped, ESC, RTL; ConfirmDialog names object + async no-double-submit + error toast), `FormActions` (sticky, disabled-while-submitting). Barrel `components/form/index.ts`.
+- **Dev-only route:** `app/[locale]/design-system/page.tsx` (`notFound()` in production) → `components/design-system/design-system-client.tsx`: DirectionProvider + Toaster, Simple/Pro toggle (Simple = one-column + "More options" disclosure; Pro = two-column all-fields), demo form exercising every control + a gallery form (Number/Select/DateRange/Switch/FileDropzone) + overlay showcase. 500-flat combobox proves virtualisation. Submits via `fetch` (client-nav, no reload) to `app/api/design-system/demo/route.ts` which re-validates with the SAME `demoFormSchema` (dev-only, 404 in prod). i18n `designSystem` namespace added to `messages/en.json` + `messages/ur.json`.
+- **Lint rule:** `.eslintrc.json` `no-restricted-globals` now bans `alert`/`confirm`/`prompt` (spec 06: no `alert()`/`confirm()` anywhere) alongside the existing `parseFloat` ban.
+
+### Decisions
+- **Money never floats:** `MoneyField` holds a STRING in the form; `moneySchema` transforms to `bigint` at parse. Used `zodResolver(schema, undefined, { raw: true })` in the demo so the RHF submit payload stays raw strings (JSON-serialisable) — the server re-parses to typed output (bigint). `parseMoneyInput` returns `bigint | null`, 0-digit currency rejects any decimal.
+- **`mustBeChecked` modelled as `z.boolean().refine(v=>v===true)`** (not `z.literal(true)`) so the form INPUT type stays `boolean` and the checkbox can default to unchecked.
+- **Combobox/MultiSelect built custom** (Popover + `@tanstack/react-virtual`) rather than on cmdk, because cmdk renders all items and fights manual virtualisation; custom list gives reliable 500+ perf + own keyboard handling.
+- **Dates stored as timezone-free `YYYY-MM-DD`** (parse at local noon to dodge DST/UTC day-shift); society timezone applied at render/report time, not at capture. Calendar month/weekday labels via `Intl.DateTimeFormat(locale)` so Urdu renders correctly and `dir` mirrors the grid.
+- **Kit components carry no visible hardcoded strings** — all user text arrives via props (labels/placeholders/hints); only sr-only/aria + punctuation literals remain, keeping i18n at the call site.
+
+### Gate results
+- `pnpm typecheck` — clean (TS strict, `noUncheckedIndexedAccess`; fixed index access in `mask.ts`).
+- `pnpm lint` — clean, `--max-warnings 0` (fixed unused import + `aria-invalid` on `role="button"`).
+- `pnpm test:unit` — **164 passed** (22 files; +39 over step 05: phone 8, cnic 6, mask 7, money-input 10, demo-schema 7, features +1).
+- `pnpm build` — success; `/[locale]/design-system` compiles for en/ur; `/api/design-system/demo` dynamic.
+- **Runtime smoke:** `next dev` → `GET /en/design-system` 200 (renders "Development only" / "Form & input kit" / "Full name"); `GET /ur/design-system` 200 with `dir="rtl"` + Urdu title. No DB needed (standalone dev route).
+
+### Acceptance criteria (spec 06)
+- [x] Every control exists, used by a demo form, documented in dev-only `/design-system`.
+- [x] Vitest: Zod schema shared client+server; server rejects what client rejects (`schemas/demo.test.ts` + demo API on same schema).
+- [x] Phone→E.164; CNIC mask accepts paste; money never a float (bigint).
+- [x] Combobox virtualised + searchable at 500+.
+- [x] Light+dark, EN+UR (RTL) — tokens + `dir` + Intl formatters; UR route smoke-tested RTL.
+- [x] Unsaved-changes guard fires; no `alert()`/`confirm()` (ESLint rule added).
+- [x] Simple and Pro variants both render.
+
+### Deferred (by design)
+- Real upload transport / signed URLs / sharp for `FileDropzone` → step 10 (storage-media); here it collects `File[]` + client-side size/MIME guard only.
+- Async server-backed combobox search wired to real resident/vendor lists → their owning modules (15/16/17); the `onSearch` seam is in place.
+- Full Lighthouse a11y + light/dark/RTL visual screenshots → captured on seeded staging deploy (no Postgres in agent env; the dev route needs none but shell-embedded forms do).
+
+**Checkpoint:** [CHECKPOINT] — progress marker; controller auto-approves and continues to step 07.
