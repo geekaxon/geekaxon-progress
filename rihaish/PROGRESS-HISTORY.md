@@ -526,3 +526,102 @@ The signed-in user's own settings surface: profile, security (password / guard P
 - [x] Light+dark, EN+UR RTL, mobile+desktop; forms on the form kit, sessions on the table kit — see self-check.
 
 **Checkpoint:** [CHECKPOINT] — progress marker; controller auto-approves and continues to step 10.
+
+---
+
+## 10 — storage-media — DONE (2026-07-12)
+**Feature code:** `core.storage` (isCore) · **Depends on:** `core.tenancy`, `core.forms`
+**Built:**
+- **Data model** — `StoredFile` (`id`, `societyId?`, unique `key`, `driver`, `mimeType`, `sizeBytes`, `width?`/`height?`, `thumbKey?`, `checksum`, `visibility`, `uploadedBy`, `entityType?`/`entityId?`, `createdAt`, `deletedAt?`). It carries BOTH `societyId` and `deletedAt`, so the step-02 scoping layer auto-enforces it: society-scoped reads, cross-society id = "not found", `delete`→soft-delete+audit — no bespoke isolation code. `Visibility` enum (PRIVATE default / SOCIETY / PUBLIC). `Society.maxStorageMb` (default 1024) for the per-society quota. Indexes on `societyId`, `(societyId,entityType,entityId)`, `(societyId,checksum)`, `deletedAt`.
+- **`lib/storage/` (adapter + pipeline, all pure cores unit-tested):**
+  - `adapter.ts` — `StorageAdapter` contract (`put/get/exists/signedUrl/delete`), `DEFAULT_SIGN_TTL_SECONDS=300`.
+  - `local.ts` — filesystem driver under `STORAGE_LOCAL_PATH`; `signedUrl` mints the HMAC `/api/files/blob` URL; every key `isSafeKey`-checked + resolved-path-inside-root before touching disk.
+  - `s3-sigv4.ts` — dependency-free SigV4 query presigner (GET/PUT/DELETE/HEAD); path-style (R2/MinIO) + virtual-hosted (AWS); **anchored by AWS's official GET example vector**. `s3.ts` — driver over presign+fetch (injectable transport/clock).
+  - `gdrive.ts` — Drive REST driver (name=key in a folder; bytes proxied through the signed blob route). Implemented, never default.
+  - `factory.ts` — `getAdapter()` from `STORAGE_DRIVER` (memoised); s3/gdrive misconfig fails loudly.
+  - `image.ts` — sharp pipeline: `.rotate()` auto-orient then metadata dropped (**EXIF/GPS stripped**), resize max-edge 1600 `fit:inside/withoutEnlargement`, WebP q82, 320px thumb; HEIC/HEIF decoded (arm64 prebuilt has libheif) → WebP. `fitInside` pure helper.
+  - `mime.ts` — magic-byte sniff (jpeg/png/webp/gif/pdf/heic-heif) + `looksExecutable` (ELF/PE/shebang/Mach-O); the real type is the sniffed type, a renamed exe is rejected.
+  - `keys.ts` — `buildFileKey` (`societies/<id>/<bucket>/<uuid>.<ext>` | `platform/…`), `thumbKeyFor`, `isSafeKey` (traversal-proof), `mimeForKey`.
+  - `signing.ts` — HMAC-SHA256 blob tokens (`key\nexp`, constant-time verify, expiry) + upload tickets (signed JSON payload); secret = `STORAGE_SIGNING_KEY` ?? `NEXTAUTH_SECRET`.
+  - `limits.ts` — 10 MB cap, allow-list (jpeg/png/webp/heic/heif/pdf), `checkStorageQuota`. `retention.ts` — `RETENTION_DAYS` (delivery-log 90 / visitor 180), `PURGE_GRACE_DAYS=7`, `isRetentionExpired`/`isPurgeReady`.
+  - `service.ts` — `storeFile` (empty/size/executable/sniff → quota (audits `storage.quota.exceeded` on reject) → sharp → checksum → per-entity dedup → adapter.put(+thumb) → `StoredFile` row + `storage.file.uploaded` audit), `getFileAccess` (scoped read → fresh signed URLs), `softDeleteFile`/`…ByKey`/`…EntityFiles`, `societyUsageBytes`, `sweepRetentionForSociety`, `purgeSoftDeletedRows` (worker step-12 hook; pure timing).
+- **API** — `POST /api/files/sign` (validate MIME/size/entity/permission/quota → 10-min signed ticket), `POST /api/files` (multipart: verify ticket bound to user+society, re-validate size, `storeFile`), `GET /api/files/[id]` (society-scoped DTO w/ signed url+thumbUrl; other-society id → 404), `DELETE /api/files/[id]` (soft-delete), `GET /api/files/blob` (the ONLY byte path — HMAC signature IS the capability; unsigned/tampered/expired/guessed/traversal → 403; content-type from key ext, `no-transform`+`nosniff`, no auth needed). `lib/storage/http.ts` uniform error envelope (415/413).
+- **Client** — `<FileUpload>` (`components/form`): sign→XHR upload with real progress bar, object-URL preview then stored thumbnail, camera capture, remove, per-file failure toast. Dev-only `/design-system/files` gallery (avatar/complaint/gate-pass), i18n `designSystem.files` en+ur.
+- **Cross-cut** — account service's avatar-removal TODO now soft-deletes the `StoredFile` by key (already in society scope → scoping layer soft-deletes + audits). `sharp@0.35.3` added (native arm64 verified) + `serverExternalPackages:["@prisma/client","sharp"]`. Env: `STORAGE_SIGNING_KEY`, `S3_*`, `GDRIVE_*` (+ `.env.example`).
+**Migrations:** `20260712140000_storage_media`
+**Tests:** +43 unit (265 total) — `mime`, `keys`, `signing` (blob+ticket expiry/tamper/key-swap), `limits`, `retention`, `s3-sigv4` (AWS vector + host/path), `image` (sharp WebP/resize/thumb/EXIF-strip + reject non-image), `adapter-contract` (**same suite passes identically for local over a temp dir and s3 over an in-memory object store**). e2e `files.spec` (sign/upload 401 unauth; blob 403 unsigned/forged/traversal; skips seeded).
+**Verification:** typecheck ✔ · lint ✔ (0) · unit ✔ (265) · build ✔ (all `/api/files/*` + `/design-system/files`) · sharp native load + HEIF input + WebP output confirmed. Runtime/e2e against a seeded staging deploy (no local .env/DB here; not a CI gate) — matches prior steps.
+**Decisions made:**
+- **StoredFile is auto tenant-scoped** (societyId+deletedAt) rather than a bespoke isolation path — reuses the enforced data layer; platform assets (societyId null) are a platform/worker concern via the unscoped client.
+- **Signed blob route is the single egress**; s3 driver hands the browser a direct presigned GET, local/gdrive proxy through `/api/files/blob`. The HMAC signature (not a session) is the capability, so a leaked URL is time-boxed and key-bound.
+- **Dedup scoped to (checksum, entityType, entityId)** — an identical re-submission for the same entity returns the existing row (no double storage / no duplicate row); identical bytes for a *different* entity get their own key, avoiding the unique-key collision a shared object would cause.
+- **S3 without an SDK** — a hand-rolled SigV4 presigner keeps the dependency surface tiny and is anchored to AWS's published vector; R2/MinIO use path-style.
+- **sharp pinned + kept external** so the arm64 prebuilt resolves at runtime and is never bundled by Next.
+**Deviations from spec:** Presigned direct-to-S3 upload is scaffolded (sign returns `strategy:"server"`) but the default/only path is server-receive — required because images MUST pass through sharp server-side to strip EXIF/GPS; a direct-to-S3 image would bypass that. Physical object purge of soft-deleted rows is a pure hook (`purgeSoftDeletedRows`) invoked by the worker in step 12 (it needs the unscoped client to see soft-deleted rows), mirroring how step 09 deferred delivery to step 11.
+**Follow-ups:** worker (step 12) wires `sweepRetentionForSociety` + `purgeSoftDeletedRows` into the cron/queue and warns L0 on quota breach; notifications (step 11) can attach `StoredFile`s; entity modules (gate-pass, complaints, payments, expenses, documents) consume `<FileUpload>` + `softDeleteEntityFiles`; per-entity PRIVATE read permission (beyond society membership) is enforced by each owning module.
+
+**Checkpoint:** [CHECKPOINT] — progress marker; controller auto-approves and continues to step 11.
+
+---
+
+## 11 — notifications-core — DONE (2026-07-12)
+
+**Branch:** `feature/11-notifications-core` · **Spec:** `/specs/11-notifications-core.md` (no CODEREF) · **Feature:** `core.notifications` (isCore, deps `core.account`, `core.storage`)
+
+**Goal:** one engine every module sends through — resolve audience → resolve channels (preference ∩ society config ∩ template availability; emergency ignores opt-out) → render per-locale template → ENQUEUE (never send in a request); society-supplied encrypted SMS/WhatsApp/SMTP credentials; in-app notification centre; template editor; recipient rules.
+
+### Schema — migration `20260712150000_notifications_core`
+- Enums `IntegrationKind` (SMS|WHATSAPP|SMTP), `Channel` (IN_APP|EMAIL|SMS|WHATSAPP|PUSH), `NotifStatus` (QUEUED|SENT|DELIVERED|FAILED|SUPPRESSED).
+- `SocietyIntegration` (`@@unique[societyId,kind]`) — `configEnc` AES-256-GCM, `isActive`, `verifiedAt`. `NotificationTemplate` (`@@unique[societyId,code,channel,locale]`, societyId null = platform default). `Notification` (per user×channel row; `payload` Json holds rendered subject/body/to/data; `attempts`, `readAt`, `sentAt`; idx `[societyId,userId,readAt]`,`[societyId,status]`). `NotificationRecipientRule` (`@@unique[societyId,category,userId]`).
+- **Decision — pass-through models, explicit scoping:** none carries BOTH `societyId`+`deletedAt`, so the `lib/db.ts` auto-scoper treats them as pass-through (like Feature/Session/AuditLog). Tenant isolation is enforced by every `lib/notifications/*` query filtering on `societyId` (same as entitlements/audit). Notifications are a delivery ledger — never soft-deleted; a user "clears" by marking read. Added non-spec fields `attempts`/`sentAt` (retry/backoff + delivery time) and `SocietyIntegration.createdAt/updatedAt`.
+
+### Feature registry (`lib/features.ts`)
+Registered `core.notifications` + `integrations.email`/`integrations.sms`/`integrations.whatsapp` (non-core, dep `core.notifications`) and the **deferred `auth.otp`** (non-core, deps `core.auth`+`integrations.sms`) — the DAG edge that was impossible until `integrations.sms` existed. OTP endpoint still 403s until a society enables SMS (feature not entitled by default) — unchanged behaviour, now with a valid DAG.
+
+### `lib/notifications/*`
+- `channels.ts` (pure) — `resolveChannels` = pref ∩ society ∩ template; applies `applyChannelFloor` so in-app is always on and emergency floors push; deterministic order.
+- `templates.ts` (pure) — 8-code catalogue (one per category: billing.invoice.created/payment.received, announcement.posted, complaint.updated, gatepass.approved, utility.notice.posted, chat.message.received, emergency.alert.raised), **every (code,channel) in EN + UR**; `renderTemplate` (`{{var}}`, unknown → empty, whitespace-tolerant); `DEFAULT_TEMPLATES`/`categoryForCode`/`TEMPLATE_CODES`.
+- `config.ts` — per-provider `ProviderSpec` (twilio, pk-sms-gw, wa-cloud, smtp) with Zod + field descriptors (secret flag); `encryptConfig`/`decryptConfig` (reuses `lib/crypto`); `redactStatus` (the ONLY client-facing shape — masks secrets to `••••`, echoes non-secret fields); `clientProvidersForKind` (drops the Zod schema so provider specs are serialisable to RSC/JSON).
+- `adapters.ts` — `sendViaAdapter` per channel; in-app trivially ok (the row is the delivery); email via injectable `emailTransport` (SMTP wired at deploy; suppressed until then), push via injectable `pushTransport` (step 23), SMS/WhatsApp via pure `buildHttpRequest` (Twilio basic-auth, pk-sms-gw bearer, wa-cloud graph) + injectable `httpTransport` (real fetch default). NEVER throws, NEVER logs credentials. `set*Transport`/`__resetTransportsForTests`.
+- `integrations.ts` — `getIntegrationStatuses` (redacted), `configureIntegration` (validate→encrypt→store INACTIVE), `testIntegration` (**live send; `isActive`+`verifiedAt` set only on ok**; audit `integration.verified`/`test_failed`), `clearIntegration` (admin may clear, never read), `getActiveConfig` (dispatcher), `availableChannels` (IN_APP+EMAIL always; SMS/WHATSAPP when active; **PUSH excluded until step 23**).
+- `templates-db.ts` — `syncNotificationTemplates` (seed platform defaults; findFirst+create/update because Prisma upsert can't target a null in a compound unique), `resolveTemplate`/`templateChannelsFor` (society→default→EN fallback, **in-code fallback for an unseeded DB**), `listTemplates`, `upsertSocietyTemplate`/`resetSocietyTemplate`.
+- `audience.ts` — `resolveAudience` (users | roles | allMembers | residents | recipientRuleOnly; block/flat = step 15-16 stubs) via `withSociety` (User is tenant-scoped); `recipientRuleUserIds`.
+- `service.ts` — `notify` (derive category → audience (+recipient nominees) → bulk-load users/prefs/society/channels → per-locale template availability + resolved bodies → build `Notification` rows: IN_APP=DELIVERED+sentAt, external with address=QUEUED, external w/o phone/email=SUPPRESSED → `createMany`; **no provider call, no inline send**); `notifySafe` (swallows errors — a notification can't break its originating flow); notification centre `listNotifications`/`unreadCount`/`markRead`/`markAllRead` (scoped user+society, channel IN_APP).
+- `dispatch.ts` — `dispatchQueued` (WORKER entry, step 12): drain QUEUED external rows → build outbound from stored payload+active config → send → SENT / retry(attempts++, ≤3) / FAILED / SUPPRESSED(no active integration); `recentDeliveries` (Pro delivery log). `actor.ts` — `requireNotificationActor` (any society user) / `requireSettingsActor` (+`society.settings.update`) / `getServerNotificationActor`.
+- `recipient-rules.ts` — list/add/remove (+`listSocietyMembers` picker, `withSociety`-scoped).
+
+### API
+- `/api/notifications` GET (centre page + unread), `/api/notifications/[id]/read` POST, `/api/notifications/read-all` POST.
+- `/api/society/integrations` GET (redacted statuses + client provider specs), `/api/society/integrations/[kind]` PUT (configure)/DELETE (clear), `/api/society/integrations/[kind]/test` POST (RECIPIENT_REQUIRED 400 for SMS/WA without `to`). `/api/society/templates` GET/PUT/DELETE. `/api/society/recipient-rules` GET/POST/DELETE. Zod in `schemas/notifications.ts`; ZodError from per-provider validation → 400.
+
+### UI
+- `components/shell/notification-bell.tsx` — live bell: unread badge (poll 60s), lazy list on open, mark-one/mark-all, skeleton/empty; 401/403 → graceful empty (no 500).
+- `app/[locale]/app/settings/page.tsx` + `components/notifications/settings-client.tsx` — society settings (nav `settings` item already gated `society.settings.read`). Simple = integration cards (status chip active/needs-test/not-configured, provider form, mandatory **Send test**, Clear; secrets write-only, shown `••••`). Pro adds template editor (variable chips extracted from body + live EN/UR preview with RTL `dir`) and recipient rules (category × member picker). Read-only when lacking `society.settings.update`.
+- i18n `settings.*` + `shell.notifications.{markAll,unread}` in en + ur (RTL Urdu bodies).
+
+### Gates
+- `pnpm typecheck` ✔ · `pnpm lint` ✔ (0 warnings) · `pnpm test:unit` ✔ **294** (+29: `channels` intersection/floor/emergency, `config` encrypt round-trip + never-leak + redact-masks-secret, `templates` EN+UR completeness + render, `adapters` builders + inject-transport + never-throws + email-suppressed-until-wired) · `pnpm build` ✔ (all `/api/notifications/*`, `/api/society/*`, `/app/settings`) · `prisma validate` ✔.
+- No local `.env`/DB (as prior steps) → `prisma migrate deploy` + e2e run on the seeded staging deploy. e2e `notifications.spec` asserts unauth 401 across the centre + settings routes and that a test-send is refused without a session.
+
+### Acceptance criteria
+- [x] Vitest: channel resolution = pref ∩ society ∩ template; emergency overrides opt-out (`channels.test.ts`).
+- [x] Vitest: credentials encrypted at rest, never in a response/log (`config.test.ts` — ciphertext excludes plaintext; `redactStatus`/JSON exclude the secret).
+- [x] "Send test" verifies before `isActive` (adapters return ok/fail via transport; `testIntegration` flips active only on ok — `adapters.test.ts` covers the ok/fail branch).
+- [x] All templates EN + UR; missing Urdu fails the seed test (`templates.test.ts` completeness).
+- [x] Sending is queued, never inline; a provider failure never breaks the originating request (`notify` only persists rows; `notifySafe`; adapters never throw).
+- [x] Notification centre in light/dark, EN/UR, mobile + desktop (bell + centre on shadcn primitives, logical props, RTL `dir`, skeleton/empty).
+
+### Decisions
+- **Explicit societyId scoping** for all four pass-through models (spec schema has no `deletedAt`) — matches audit/entitlements; keeps notifications as an immutable delivery ledger.
+- **In-code template fallback** so `notify`/`listTemplates` work on an unseeded DB; `syncNotificationTemplates` is the deploy/bootstrap seed (companion to `syncFeatureRegistry`/`syncPlatformRoles`, which also have no in-repo caller yet).
+- **Transports injected**, not hard-wired — the request path only writes rows; the worker (12) wires the SMTP/HTTP drain, push (23) wires VAPID. Keeps step 11 self-contained and network-free in tests.
+- **PUSH excluded from `availableChannels`** until step 23 (no VAPID transport) so no push row is created that would churn to FAILED; emergency still delivers in-app.
+- **Secrets never round-trip** — v1 requires re-entering a secret to re-save (masked `••••` ≠ a value); the client blocks saving an unchanged mask.
+
+### Deviations / follow-ups
+- Real SMTP + web-push transports and the queue **drain schedule** land in step 12 (`dispatchQueued`) / step 23 (push) — the functions + adapter seams exist and are tested now.
+- Block/flat audiences resolve empty until society-structure (15) + occupancy (16); documented, not a crash.
+- Account module's `availableChannels` stub (step 09) still reports SMS/WhatsApp unavailable in the prefs matrix; wiring it to real integration status would invert the module dependency (account←notifications) so left as a follow-up — the engine already floors unconfigured channels off.
+- The step-09 password-change notification TODO is intentionally left: it needs a security category/template code outside the fixed 7-category matrix; consumers adopt `notify()` as they ship.
+
+**Checkpoint:** [CHECKPOINT] — progress marker; controller auto-approves and continues to step 12.
