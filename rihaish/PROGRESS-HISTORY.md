@@ -1250,3 +1250,53 @@ generated (all 5 delegates present); en/ur JSON valid + key-parity 0 diff. Updat
   host; billing page renders without a 500.
 
 WORK TYPE: FEATURE (branch feature/22-platform-billing)
+
+---
+
+## Step 23 — pwa-mobile-shell — DONE (2026-07-12)
+
+**Branch:** feature/23-pwa-mobile-shell · **Feature codes:** `pwa.core`, `pwa.push` · Spec: /specs/23-pwa-mobile-shell.md
+
+### Goal
+Make the PWA feel like a real, installable, per-society branded mobile app (no native builds / stores): white-label manifest + icons + splash, standalone app-feel (bottom tabs, More drawer, safe areas, offline shell), install flow (Android + iOS), and VAPID web push plugged into the step-11 engine.
+
+### Data model (migration 20260712260000_pwa_mobile_shell)
+- **PushSubscription** — one row per user per device; `endpoint` globally unique (upsert), `p256dh`/`auth` (RFC 8291 keys), `userAgent`, `lastSeenAt`. Pass-through (societyId, NO deletedAt) → tenant-scoping layer ignores it; worker reads cross-society via scoped `db` (pass-through), request path filters `(societyId,userId)`; a dead endpoint is physically pruned (never retried forever).
+- **PwaInstall** — install adoption per society; `@@unique(userId, platform)` (android|ios|desktop), `lastInstalledAt`. Pass-through.
+
+### Manifest & branded images
+- `app/manifest.webmanifest/route.ts` rewritten: `id/start_url=/app`, `display:standalone`, `orientation`, theme/background from branding, icons → **stable** `/api/branding/icon-192.png` + `icon-512.png` (`any maskable`). Host-scoped, `no-store`, apex/unknown → 404.
+- New public (dotted-path, middleware-skipped) generator routes: `icon-192.png`, `icon-512.png`, `apple-touch-icon.png` (180, opaque), `splash?w=&h=` (device-sized). `lib/pwa/images.ts` (sharp, lazy import): maskable inner-80% composite on brand bg, opaque apple icon, centered splash on `splashBgColor`, and an SVG **fallback initial** on the brand colour when a society has no `iconFileId`. `lib/pwa/branding-assets.ts` shared resolver (host → society → branding → icon bytes via new `storage/service.readFileBytes`).
+- App head (`app/[locale]/app/layout.tsx`): `theme-color`, `apple-touch-icon`, apple-mobile-web-app meta, and the full `apple-touch-startup-image` set (`lib/pwa/apple-splash.ts`, ~14 device geometries → per-society splash route). Root layout adds `viewport-fit=cover` (`export const viewport`).
+
+### Service worker (app/sw.js/route.ts, generated per host+BUILD_ID)
+- Served `text/javascript` + `Service-Worker-Allowed: /`; cache name `rihaish-shell-<host>::<BUILD_ID>` → **host-scoped** (already per-origin; host also baked in) and **BUILD_ID-versioned** (old caches dropped on activate; page shows "Update available — reload" and posts `SKIP_WAITING`, then `controllerchange` reloads — never yanks a session).
+- Strategies: navigations network-first w/ cached-shell offline fallback; static (`/_next/static`, `/api/branding`, assets) stale-while-revalidate; **every other `/api/*` GET is network-only (never cache another user's data)**.
+- Offline write queue: **opt-in** via `X-Offline-Queue` header — failed writes stored in IndexedDB + replayed via Background Sync `rihaish-outbox` (conservative: only explicitly-marked requests, no blind double-submits).
+- `push` → showNotification(payload); `notificationclick` → focus/navigate the exact deep-link URL.
+
+### Web push (VAPID) — dependency-free
+- `lib/pwa/web-push.ts`: RFC 8291 aes128gcm (ECDH P-256 + HKDF ladder, 0x02 last-record, RFC 8188 header) and RFC 8292 ES256 VAPID JWT (JWK private key, `dsaEncoding: ieee-p1363`) on `node:crypto`. `buildPushRequest` assembles `Authorization: vapid t=…, k=…` + encrypted body.
+- `lib/pwa/push.ts`: subscription CRUD (save/delete/revoke-all/prune), `deepLinkUrl` (same-origin `/…` only, else `/app`), and `buildPushTransport(sender, now)` → loads recipient's subs, encrypts+signs per device, sends, prunes 404/410; ok if any device accepts or the user has no device (nothing to retry); `push_not_configured` when VAPID unset.
+- Engine wiring: `OutboundMessage` extended with `code/userId/societyId/data`; `dispatch.toOutbound` carries them for PUSH; `availableChannels` now includes `PUSH`; worker boot calls `setPushTransport(buildPushTransport())` when VAPID configured. Added a PUSH template to `billing.invoice.created` (complaint/gatepass/chat/emergency already had one). Emergency still ignores opt-out via the existing channel floor.
+- Env: optional `VAPID_PUBLIC_KEY`/`VAPID_PRIVATE_KEY`/`VAPID_SUBJECT` (unset ⇒ push simply disabled, never crashes).
+
+### Mobile shell UI
+- `lib/pwa/tabs.ts`: pure `roleBucket` (management→committee, else guard, else resident) + `resolveBottomTabs` (candidates gated by `can(perm)&&hasFeature(feat)`, first 4 + always **More**; never empty, never >5). Resolved server-side in `shell-data.ts` into `ShellData.pwa.{bottomTabs, vapidPublicKey}`.
+- `components/pwa/`: `bottom-tabs` (fixed, `lg:hidden`, safe-area pb), `more-drawer` (end Sheet: full nav + flat switcher + locale/theme + account + sign out — sign out unsubscribes push first), `offline-banner` (online/offline + sync nudge), `sw-register`, `push-manager` (re-affirm if granted; ask ≤2× only when standalone; respect denial), `install-prompt` (Android beforeinstallprompt sheet + iOS Share→Add-to-Home instructions, 7-day reminder, reports install + subscribes push), `pwa-runtime` wrapper. Mounted in `app-shell-client.tsx` (offline banner top, bottom tabs + runtime bottom, main gets mobile bottom padding). Desktop sidebar/top-bar untouched.
+- `globals.css`: standalone tap-highlight/select suppression, momentum scroll, safe-area utilities. `nav-icons.ts` +idCard/listChecks/bell/menu.
+
+### API
+- `/api/pwa/push/public-key` (GET, auth) → `{publicKey|null}`; `/api/pwa/push/subscribe` (POST) upsert device sub (society-scoped, 401/403 guarded); `/api/pwa/push/unsubscribe` (POST) idempotent delete; `/api/pwa/installed` (POST) adoption upsert. Client round-trips in `lib/pwa/client.ts` (subscribe/unsubscribe/reportInstall/platform+standalone detection).
+
+### Tests
+- Unit: `web-push.test` (encrypt→decrypt round-trip from the UA side + VAPID JWT ES256 verify + request assembly), `tabs.test` (bucketing, ≤5, More-last, entitlement gating for all three roles), `push.test` (deepLinkUrl, getVapidKeys, transport not-configured/no-user guards — no DB), `images.test` (hexToRgb), `install.test` (normalizePlatform). Extended templates catalogue keeps the en/ur parity test green.
+- e2e `pwa.spec`: manifest standalone+icon shape & apex 404; `/sw.js` headers + handlers + **host-scoped** bodies differ; branded icon PNG magic bytes; icon apex 404; push subscribe 401 unauthenticated.
+
+### Decisions / notes
+- Offline action replay is **opt-in** (`X-Offline-Queue`) to avoid double-submitting non-idempotent writes — a safe seam rather than blindly queuing every failed POST.
+- Deep links rely on callers passing `data.url`; default is `/app`. Mechanism (transport + SW notificationclick) is complete; per-event URLs are each owning module's to add.
+- Custom pull-to-refresh/haptics: left to the browser's native standalone behaviour (momentum + native PTR) rather than a bespoke JS gesture layer this step.
+- Gates (typecheck/lint/test/build/prisma generate) run by the controller.
+
+WORK TYPE: FEATURE (branch feature/23-pwa-mobile-shell)
