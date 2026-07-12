@@ -689,3 +689,103 @@ The second pm2 process is now real: a Postgres-backed job queue + a timezone-awa
 - Per-society schedules are materialised for currently-active societies on worker boot/sync; step 21 onboarding can call `syncSchedules` (or add its own `ensureSocietySchedules`) so a brand-new society is scheduled immediately rather than at the next 5-minute sync.
 
 **Checkpoint:** [CHECKPOINT] — progress marker; controller auto-approves and continues to step 13.
+
+## 13 — branding-domains — DONE (2026-07-12)
+
+**Spec:** `/specs/13-branding-domains.md` (no CODEREF companion). **Branch:** `feature/13-branding-domains`. **Work type:** FEATURE.
+
+### Feature registry
+- `branding.core` — **isCore: true**, deps `core.tenancy`, `core.storage`, `core.shell`. Non-disableable: it owns the settings shell, per-host token injection and the mandatory "Powered by Rihaish" footer, and the always-on subdomain — turning it off would strip a tenant's identity.
+- `branding.custom_domain` — non-core, deps `branding.core`. Gates binding a custom domain; the DAG blocks a society without it and the routes 403.
+- `branding.pwa` — non-core, deps `branding.core`. Contract-only here (the manifest); the installable shell + push land in step 23.
+
+### Data model (migration `20260712170000_branding_domains`)
+- **`SocietyBranding`** — PK = `societyId` (1:1 with Society; a `findUnique` is inherently tenant-safe). Infra model (has `societyId`, NO `deletedAt`) → the scoping layer passes it through, so the service scopes every access on `societyId` explicitly. Fields per spec: `displayName`, `shortName` (≤12), `logoFileId`/`logoDarkFileId`/`faviconFileId`/`iconFileId`/`loginBgFileId`, `splashBgColor`, `primaryColor`, `emailSenderName`/`emailReplyTo`, `supportPhone`/`supportEmail`, `updatedAt`. FK → Society ON DELETE CASCADE.
+- **`SocietyDomain`** (declared step 02) — added `verifyToken`, `lastCheckedAt`, `verifyError` for the DNS challenge flow. `verifiedAt` (existing) gates custom-host resolution in `lib/tenant.ts` (already implemented there).
+
+### `lib/branding/*`
+- **`contrast.ts`** (pure) — `parseHex`/`normalizeHex`/`isValidHex` (#rgb + #rrggbb), `rgbToHsl`/`hslToRgb`/`hslToken` (space-separated to match globals.css), WCAG `relativeLuminance`/`contrastRatio`, `deriveForeground` (white by default; on AA failure → hue-tinted near-black, else pure black — the better of white/black is provably ≥4.58:1, so AA is always met), `brandTokens(hex)` → light + dark `{primary, primaryForeground, ring}` triples. Dark mode lifts the primary lightness into a legible 45–70 band so a dark brand colour stays visible on the near-black surface. `adjusted`/`contrastRatio` track the **light** surface (the mode the admin edits in) — a dark-mode dark-foreground is the theme's normal treatment, not a warning.
+- **`tokens.ts`** (pure) — `brandCss(hex)` → `<style>` inner text overriding **ONLY** `--primary`, `--primary-foreground`, `--ring`, in a `:root{}` + scoped `.dark{}` pair. Empty/missing → no override (shipped emerald stays); invalid hex → no override + `invalid` flag.
+- **`domains.ts`** — `subdomainHost(slug, apex)`, `normalizeCustomHost` (strips scheme/path/port/trailing-dot, validates DNS labels, rejects a rihaish-managed apex/wildcard host), `newVerifyToken` (16-byte hex), `dnsInstructions` (CNAME host→`<slug>.<apex>`, TXT `_rihaish-challenge.<host>` = `rihaish-verify=<token>`), pure `evaluateTxt` (verified | txt-missing | txt-mismatch), `resolveTxt` (node:dns/promises, empty on error), `verifyHost` (injectable resolver so worker + tests share one path), `diagnosticFor`.
+- **`service.ts`** — infra DB glue via unscoped `prisma` with explicit `societyId`. `getBranding` (row or name-derived default), `upsertBranding` (validates hex + short-name, checks each asset id belongs to the society **through the scoped storage service** so a foreign file id is "not found", busts the CSS cache), `resolveBrandCss` (per-process TTL cache, reads only `primaryColor`, never throws — a bad stored colour degrades to default), `listDomains`/`bindDomain`/`unbindDomain`/`verifyDomain` (ownership-checked, `P2002`→`host_taken`), `verifyPendingDomains` (worker sweep across all societies), `resolveAssetUrls` (signed preview URLs for the settings UI). Typed `BrandingError` (`invalid_color`, `short_name_too_long`, `unknown_asset`, `invalid_host`, `host_taken`).
+
+### Worker
+- `CRON_REGISTRY` += `domains.verify` (platform scope, `*/15 * * * *`). `JOB_REGISTRY` += `domains.verify` — **mutating: false** (SocietyDomain is infra, not tenant domain data, so it runs even for a READ_ONLY society), concurrency 1, handler `runDomainsVerify` → `verifyPendingDomains`. Registry coverage test updated to include the new code.
+
+### API
+- `GET/PUT /api/society/branding` — read needs `society.settings.read`, write needs `society.settings.update`; returns row + signed asset URLs + live contrast diagnostic; `BrandingError`→400.
+- `GET/POST /api/society/domains`, `DELETE`/`POST(verify) /api/society/domains/[id]` — list needs settings-read; all mutations need settings-update **and** `requireFeature(branding.custom_domain)`.
+- `GET /manifest.webmanifest` — per-host, generated from the resolving society's branding (name/short_name/theme_color/background_color/icons/lang/dir). Unknown/non-society host → generic 404 (no enumeration). Middleware never runs on this path (dotted), so the handler resolves the host itself.
+
+### UI
+- **Token injection** — `app/[locale]/app/layout.tsx` injects the scoped brand `<style id="rihaish-brand">` (hoisted to `<head>`) + `<link rel="manifest">`. Two hosts → two brands from one deploy.
+- **Powered by Rihaish** — `components/branding/powered-by.tsx` rendered in `app/[locale]/layout.tsx` (root) on every page of every host; body is now a `min-h-dvh` flex column so the footer sits at the bottom. No entitlement, no off switch. Deliberately unbranded (does not adopt `--primary`).
+- **Settings → Branding & Domains** (`components/branding/branding-client.tsx`) — own Simple/Pro toggle. Simple = logo + colour + support phone. Pro = all assets (dark logo, favicon, app icon, login bg), email sender identity, splash bg, support email, and the custom-domain wizard. Colour picker runs the **same** contrast maths client-side (imports pure `contrast`/`tokens`) for a live badge (OK / auto-corrected / invalid) and a **scoped** preview swatch (`.brand-preview` + `.dark .brand-preview` — never leaks vars to the page). Domains: read-only subdomain chip; per-domain card with copyable CNAME+TXT rows, "Check now", pending diagnostic, and on verify an **SSL manual-step notice**. i18n `branding` namespace en + ur.
+
+### Gates
+- `pnpm typecheck` ✓ · `pnpm lint` ✓ (0 warnings) · `pnpm test:unit` ✓ **344 passed / 3 skipped** (+30: `contrast.test`, `tokens.test`, `domains.test`; registry coverage test updated) · `pnpm build` ✓ (all new routes + `/manifest.webmanifest`) · worker registry loads `domains.verify` handler under tsx.
+- e2e `e2e/branding-domains.spec.ts` — unauth 401s on branding/domains routes, manifest per-host + unknown-host 404, "Powered by Rihaish" present on `/en`. (e2e is not a CI gate; runs against seeded staging.)
+
+### Decisions & notes
+- **`adjusted`/warning keys off the light surface** — dark mode always gets a contrast-correct (often dark) foreground, matching the shipped emerald default (`--primary-foreground: 168 40% 8%`); surfacing that as a "warning" would false-alarm on every dark brand, so the admin warning tracks the light-mode button only.
+- **SSL is `[HUMAN_REQUIRED]` infra, not a build stop** — per-domain SSL issuance on aaPanel is exactly the infra the agent may not script. It is a **runtime** operational handoff (no custom domain exists in this build), surfaced to admins via the domain-card SSL notice and documented here; the code module is fully complete, so this step ends `[CHECKPOINT]`, not `[HUMAN_REQUIRED]`. The agent never touches the panel. Wildcard SSL/DNS remains the one-time `[HUMAN_REQUIRED]` from ARCHITECTURE §7.
+- **Custom-domain resolution** already lived in `lib/tenant.ts` (`resolveByCustomDomain` requires `verifiedAt != null`), so an unverified host 404s while the subdomain keeps working — no change needed there.
+- **Manifest icons** are best-effort (signed for 1h via a `system-manifest` actor) and minimal; the full icon set + installable behaviour ship in step 23 (`branding.pwa`).
+- **Email sender identity** (`emailSenderName`/`emailReplyTo`) is captured here; wiring it into the notifications SMTP send path is the notifications module's concern and can read `SocietyBranding` when it next touches sender headers.
+
+**Checkpoint:** [CHECKPOINT] — progress marker; controller auto-approves and continues to step 14 (ui-modes).
+
+---
+
+## Step 14 — UI modes (Simple / Pro) — DONE (2026-07-12)
+
+**Branch:** `feature/14-ui-modes` · **Spec:** `/specs/14-ui-modes.md` (no CODEREF)
+
+**Goal.** Per-module Simple vs Pro interfaces. Simple = easy for a non-technical user (fewer columns, plain language, guided flows, bigger targets), Pro = dense/keyboard-first/raw-codes. Resolved per module, not per app: user-pref (only when the society is entitled to `ui.modes` AND the module policy allows override) → society default → the module's built-in default (SIMPLE resident-facing, PRO committee/accounting). Losing the entitlement retains prefs and re-applies them on re-enable.
+
+### Feature registry
+- Added `ui.modes` (entitled, `isCore:false`, module `14-ui-modes`, dependsOn `core.shell`, `core.account`) to `lib/features.ts`. DAG validates at load; `getFeature("ui.modes")` confirmed.
+
+### Data model — migration `20260712180000_ui_modes`
+- `enum UiMode { SIMPLE PRO }`.
+- `SocietyModuleUiPolicy` (`id`, `societyId`, `module`, `defaultMode UiMode`, `userCanOverride Boolean @default(false)`, timestamps; `@@unique([societyId,module])`, `@@index([societyId])`). Infra config model — has `societyId` but **no** `deletedAt`, so the tenant-scoping layer (`lib/db.ts`: scoped iff BOTH fields) passes it through; the service filters on `societyId` explicitly. FK → Society `onDelete: Cascade`, back-relation `Society.uiPolicies`.
+- `UserModuleUiPref` (`id`, `userId`, `module`, `mode UiMode`, timestamps; `@@unique([userId,module])`, `@@index([userId])`). Keyed by user; FK → User `onDelete: Cascade`, back-relation `User.uiModePrefs`. **Never deleted on an entitlement change** — the resolver simply stops consulting it.
+- `prisma generate` OK (ARM64 + native targets).
+
+### lib/ui-modes/*
+- `modules.ts` — `type UiMode`, `ModuleAudience`, `UiModuleDef`, `defaultForAudience` (resident→SIMPLE, committee→PRO). `UI_MODULES` = forward-declared registry of 12 mode-supporting modules (dashboard[reference], residents, billing, payments, finance, announcements, complaints, gatepass, expenses, documents, amenities, reports) each with `ownerStep`+`audience`. `getUiModule`, `builtInDefault` (SIMPLE for unknown), `MODE_MODULES`. Registry is forward-declared so settings/account have real rows before later steps build the module UIs — a module absent here simply never shows a toggle.
+- `resolve.ts` — **pure** (no I/O). `canUserChoose(hasEntitlement, policy)` = entitled ∧ `policy.userCanOverride`. `resolveMode({hasEntitlement, policy, userPref, moduleDefault})` = exact spec order: (1) canChoose ∧ userPref → pref; (2) policy → policy.defaultMode (applies **even when not entitled** — the "defaults only" case); (3) → moduleDefault. `resolveModule` returns `{mode, canChoose}`.
+- `resolve.test.ts` — 12 tests: the 3-way order, override-disallowed-with-pref, no-policy fallback, entitlement-off ignores pref → society default, re-apply pref on re-enable, `canUserChoose` truth table, `resolveModule`, registry defaults.
+- `service.ts` — DB glue over `prisma` (context-independent). `getPolicyMap`, `getInterfaceConfig` (backfills built-in default + `configured` flag over all `MODE_MODULES`), `setPolicy` (upsert + manual `AuditLog` row `ui_mode.policy_set`, `actorType SOCIETY_USER`; validates module + mode). `getUserPrefMap`, `setUserPref` (**defense-in-depth**: re-checks `isEnabled(ui.modes)` ∧ policy override, throws `UiModeError('not_allowed')` → 403 so a hand-crafted request cannot store a disallowed pref). `resolveUserModes` (one entitlement + policy + pref read, then pure resolution per module → `{module, mode, canChoose, defaultMode, userPref}`), `resolveModeMap` (serialisable `module→{mode,canChoose}` for the client shell). `UI_MODES_FEATURE`, `UiModeError`.
+
+### Shell wiring (module-aware top-bar toggle)
+- `ShellData` gains `uiModes: Record<string,{mode,canChoose}>` (replaces the placeholder `showModeToggle` bool). `buildShellData` resolves it via `resolveModeMap` only for a user who belongs to the host (guest/cross-society → `{}`, so the toggle never appears).
+- `components/ui-modes/ui-mode-context.tsx` — client `UiModeProvider` holds the modes map + `activeModule`. `useUiModule(module)` registers the module as active on mount / clears on unmount and returns `{mode, canChoose, setMode}`; `useUiModes()` (non-registering) for multi-module surfaces; `useActiveMode()` for the top bar. `setMode` is optimistic (instant, no reload → in-flight form state survives) + background `PATCH /api/me/ui-modes`, reverting + toasting on failure.
+- `AppShellClient` wraps the frame in `<UiModeProvider initialModes={data.uiModes}>`. `TopBar` always renders `<ModeToggle/>`; the toggle **self-hides** (returns null) unless there is an active module with `canChoose` — hidden, never shown-but-disabled — and drives that module's mode via context.
+
+### API
+- `PATCH /api/me/ui-modes` (+ `GET` = resolved modules for the account surface) — `requireAccountActor` (society user), Zod `{module, mode}`, `setUserPref`; `UiModeError` → 403 `not_allowed` / 400 else.
+- `GET/PUT /api/society/ui-modes` — `GET` (`society.settings.read`) returns config + `entitled`; `PUT` (`requireSettingsActor` = `society.settings.update`) Zod `{module, defaultMode?, userCanOverride?}` → `setPolicy` with the acting user as audit actor.
+
+### UI (both modes fully designed; tokens, light/dark, RTL via `dir`, responsive, states)
+- Settings → **Interface** (`components/ui-modes/interface-panel.tsx` in `settings/page.tsx`): per-module rows — segmented default (Simple/Pro) + "let users choose" `Switch` (disabled with `notEntitledNote` when the society lacks `ui.modes`, since override is inert without it). Collapsible **side-by-side preview** (`mode-preview.tsx`: guided cards vs dense table sketch). Optimistic per-row `PUT`, revert+toast on fail; read-only without `society.settings.update`.
+- Account → **Interface** prefs (`components/ui-modes/user-modes-panel.tsx` on the account page, personal device only): lists **only** override-allowed modules (`canChoose`), each a Simple/Pro segmented control wired through the shared `useUiModes` context so it and the top-bar toggle stay in lockstep with no reload; empty state when nothing is customisable.
+- Reference module **dashboard** (`components/dashboard/dashboard-client.tsx`, `/app/page.tsx` now a thin server wrapper): declares itself the `dashboard` module via `useUiModule("dashboard")` and renders a fully-designed **Simple** (few big guided metric cards, plain language, no deltas) and **Pro** (dense 4-col metric grid, raw values + deltas). Switching from the top bar is instant.
+- i18n en+ur: new `uiModes` namespace (module labels ×12, interface/prefs copy, `notEntitledNote`, `defaultIs`) + `dashboard` additions (`subtitlePro`, `metric.*.simple|pro`).
+
+### Gates
+- `pnpm typecheck` ✓ · `pnpm lint` ✓ 0 warnings (renamed a `const module` to satisfy `no-assign-module-variable`) · `pnpm test:unit` ✓ **356 passed / 3 skipped** (+12) · `pnpm build` ✓ (both `/api/me/ui-modes` and `/api/society/ui-modes` present). e2e `e2e/ui-modes.spec.ts` (unauth 401s on both routes, dashboard never 500) — not a CI gate.
+
+### Acceptance criteria
+- [x] Vitest pins the resolution order incl. the entitlement-off fallback.
+- [x] Toggle renders only when the user may choose; hidden otherwise (self-hiding `ModeToggle` + empty `uiModes` for guests).
+- [x] Switching does not reload and does not lose form state (client context re-render; optimistic + background persist).
+- [x] Losing the entitlement retains, not deletes, user prefs (`UserModuleUiPref` untouched; resolver stops consulting it; re-applies on re-enable — unit-tested).
+- [x] Both modes designed for a reference module (dashboard) in light/dark, EN/UR (RTL via `dir`), mobile + desktop (responsive grids).
+
+### Notes / decisions
+- Module registry is intentionally forward-declared: later feature steps (billing, complaints, gatepass, …) just implement both variants and call `useUiModule(code)`; their policy/pref rows and settings surfaces already exist.
+- `resolveModeMap` adds two small indexed reads to every society shell render (entitlement is cached). Acceptable per the scale principle; can be folded into a single shell query later if needed.
+- The account screen's own local Simple/Pro toggle (spec 09, `localStorage`) is unrelated to `ui.modes` and left as-is — the account module is not in `UI_MODULES`.
+
+**Checkpoint:** [CHECKPOINT] — progress marker; controller auto-approves and continues to step 15 (society-structure).
