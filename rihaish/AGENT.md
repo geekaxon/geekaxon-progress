@@ -27,12 +27,14 @@ Build-loop mechanics live in `CLAUDE.md` (controller-managed). This file is **wh
 6. **Never stop for approval.** There is no approval gate in this project. Record the decision in `PROGRESS-HISTORY.md` and keep building.
 
 ## 3. Verification gates (every module)
-- `pnpm typecheck` — zero errors
-- `pnpm build` — succeeds with a fresh `BUILD_ID`
-- `pnpm test:unit` — **mandatory Vitest coverage** on: tenant-scoping layer, entitlement resolver + DAG, charge engine, ledger, payment reversal, invoice numbering
-- `pnpm test:e2e` (Playwright smoke) on: auth, invoice generation, gate-pass verification
-- `pnpm lint` — zero errors
-- **UI design self-check** (UI modules — all must be true, else the module is not done):
+
+**The agent does NOT run these. The controller runs them after the step, in Node, for free.** Running a growing test suite inside the agent's session costs tokens on every later turn and re-sends the whole reporter output. Your job is to **write the code and the tests**; the controller executes them and, if one fails, hands you a targeted repair task carrying only the failure output. A gate failure blocks the merge to staging.
+
+Gates the controller runs, in order — `pnpm lint` → `pnpm typecheck` → `pnpm test:unit` → `pnpm build`:
+
+- **Mandatory Vitest coverage** (write these; they will be run for you) on: tenant-scoping layer, entitlement resolver + DAG, charge engine, ledger, payment reversal, invoice numbering.
+- **Playwright smoke** (`pnpm test:e2e`) — write these only where the spec's acceptance criteria demand them: auth, invoice generation, gate-pass verification.
+- **UI design self-check** — this one IS yours, done by inspection, before you finish (UI modules — all must be true, else the module is not done):
   - [ ] shadcn/ui + design tokens only — no raw HTML, no hand-rolled table, no hand-rolled input
   - [ ] Light **and** dark verified
   - [ ] **RTL/Urdu** verified — logical properties (`ms-/me-/ps-/pe-`), never `ml-/mr-`
