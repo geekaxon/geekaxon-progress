@@ -1300,3 +1300,46 @@ Make the PWA feel like a real, installable, per-society branded mobile app (no n
 - Gates (typecheck/lint/test/build/prisma generate) run by the controller.
 
 WORK TYPE: FEATURE (branch feature/23-pwa-mobile-shell)
+
+## 24 — announcements — DONE (2026-07-12)
+
+**Feature code:** `announcements.core` (deps `residents.registry`, `core.notifications`, `core.storage`). Branch `feature/24-announcements`. WORK TYPE: FEATURE.
+
+### Data model (migration `20260712270000_announcements`)
+- **Announcement** — SCOPED (societyId + deletedAt → auto tenant-pin + soft-delete). Fields per spec + additions: `sourceAuthority` (EXTERNAL_AUTHORITY attribution), `recipientFlatIds[]`/`recipientUserIds[]` (recipient SNAPSHOT captured at publish = the read-receipt denominator), `publishedAt`, `updatedAt`. `@@index([societyId, status, publishAt])`.
+- **BereavementDetail** — pass-through (announcementId @id, no societyId). Family opt-in gate.
+- **AnnouncementRead** — pass-through (societyId set explicitly), `@@unique([announcementId, userId])`.
+- **AnnouncementComment** — pass-through; soft-delete via **`removedAt`/`removedBy`**, NOT `deletedAt`, so the auto `deletedAt IS NULL` scope filter can't hide a moderated comment (spec: shown as "removed").
+- **AnnouncementReaction** — pass-through, `@@unique([announcementId, userId, kind])`; un-react physically deletes.
+- New enums `AnnouncementType`, `AnnouncementTargetType` (dedicated — NOT the charge engine's `TargetType`, to avoid ALTER-TYPE-in-txn and cross-module switch breakage; adds `ROLE`), `Priority`, `AnnouncementStatus`.
+
+### Decisions
+- **Reactions are computed, not stored.** `reactionsAllowed(type) = type !== BEREAVEMENT`; the reaction endpoint calls `assertReactable` → 403 for bereavement. There is no toggle/field to enable it, satisfying "never a reaction control, by any role, any path".
+- **Bereavement comments default OFF**, others ON (`defaultAllowComments`).
+- **URGENT → `emergency` notification category** so the engine floors in-app+push; SMS still respects the user's mute (channel floor only covers in-app/push) — matches "URGENT may override channel prefs, but not the ability to mute non-emergency SMS".
+- **Per-announcement channels** honoured via a new optional `restrictChannels` on `notify()`/`NotifyInput` (intersected with prefs ∩ society config ∩ template; IN_APP always retained). Extended the `announcement.posted` catalogue template with SMS + WhatsApp bodies (en+ur) so those channels can actually render (templates.test requires en+ur per channel — provided).
+- **Feed is LIVE-targeted** (`feedTargetWhere` over the viewer's flats/blocks/categories/roles via `hasSome`), while the receipt denominator uses the publish-time snapshot → a resident added after publication sees the item but isn't counted (spec edge case).
+- **Publish = create-now or schedule:** POST creates DRAFT; if `publishAt` is future → SCHEDULED (worker publishes); else publishes immediately in the same request. `publishAnnouncement` is idempotent, snapshots recipients, runs `assertPublishable` (family opt-in + non-empty audience), fires `notifySafe`.
+- **Rich text** stored sanitised (`sanitizeRichText`: strips script/style + all tags, decodes basic entities, preserves newlines). No WYSIWYG in the repo yet; composer uses the kit `TextArea` + EN/UR preview-by-inspection.
+- **Attachments**: schema stores StoredFile ids; feed surfaces a count (signed-URL thumbnail wiring deferred — no announcement-attachment access endpoint this step).
+- Nav item is **feature-gated, permission-ungated** (every member sees the feed; committee compose/moderation gated inside the page by `society.announcements.*`). `hideOnSharedDevice`.
+- Roles: read+publish → COMMITTEE_MEMBER & MANAGER; +moderate → MANAGER; read+moderate → MODERATOR; ADMIN via `*`.
+
+### Files
+- Schema/migration: `prisma/schema.prisma`, `prisma/migrations/20260712270000_announcements/migration.sql`.
+- Registry: `lib/features.ts` (announcements.core), `lib/rbac.ts` (perms + role grants), `lib/nav.ts` + `components/shell/nav-icons.ts` (megaphone).
+- lib/announcements: `constants.ts`, `rules.ts`(+test), `sanitize.ts`(+test), `targeting.ts`(+test), `columns.ts`, `actor.ts`, `service.ts`, `http.ts`.
+- schemas: `schemas/announcements.ts`.
+- Notifications: `lib/notifications/service.ts` (`restrictChannels`), `lib/notifications/templates.ts` (SMS+WhatsApp on announcement.posted).
+- Worker: `lib/worker/handlers.ts` (`runAnnouncementsTick`), `lib/worker/registry.ts` (cron+job), `lib/worker/registry.test.ts` (expected-codes list +announcements.tick).
+- API: `app/api/announcements/route.ts`, `[id]/route.ts`, `[id]/{publish,read,read-report,comments,reactions}/route.ts`, `comments/[id]/route.ts`, `recipients/route.ts`.
+- UI: `app/[locale]/app/announcements/page.tsx`; `components/announcements/{types,announcements-client,announcement-feed,announcement-table,compose-modal,read-report-dialog}.tsx`.
+- i18n: `messages/en.json` + `messages/ur.json` (`announcements.*` namespace + `nav.announcements`).
+
+### Tests
+- Unit (vitest, co-located): `rules.test.ts` (bereavement never reactable by any type/path; publish rejects missing family opt-in + empty audience; channel normalize incl. forced IN_APP; URGENT→emergency), `targeting.test.ts` (flatWhere for all 5 target types, ROLE→null, no accidental everyone), `sanitize.test.ts`.
+- e2e: `e2e/announcements.spec.ts` (feed/compose/preview/read/read-report all require auth — 401).
+- Note: type-driven invariants proven by pure unit tests (no DB); DB-backed receipt counting exercised via the service at runtime (no integration test added this step).
+
+### Gates
+- NOT run in-session per CLAUDE.md rule 6 (controller runs lint/typecheck/test/build/prisma generate). Self-checked by inspection: import/export names against residents/billing precedents; pass-through vs scoped model semantics in `lib/db.ts`; registry/templates/nav/rbac test brittleness (updated the one exact-list assertion in registry.test.ts). Prisma client types (Announcement*, Priority, Channel[]) require the controller's `prisma generate` before typecheck.
