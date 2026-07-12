@@ -1435,3 +1435,44 @@ flat-not-held → 403; assignee-leaves → `reassignNeeded` flag + notify (worke
 
 ### Gates
 `pnpm prisma generate` ✓, `pnpm typecheck` ✓ (clean), `pnpm lint` ✓ (0 warnings), targeted `vitest run lib/complaints` ✓ (27/27). Did not run test:unit/e2e/build (controller runs full gates). Screenshot not attached — no runnable dev server/DB in the agent env (same as step 25); UI verified by inspection against the AGENT.md design self-check.
+
+---
+
+## Step 27 — Staff operations console ("My jobs") — DONE (2026-07-12)
+
+**Work type:** FEATURE (branch `feature/26-complaints-service-requests` — see note below)
+**Spec:** `/specs/27-staff-operations-console.md` (authoritative). No CODEREF.
+
+### What it is
+The worker's screen. A plumber/electrician opens the app on his phone and sees exactly the jobs assigned to him — Today, Assigned, Upcoming, and a Completed history with the resident's rating — and drives each job (Start → note+photo → resolve) one-handed. A pure, HARD-SCOPED surface over the step-26 ticket model: **no new tables, no new status machine.**
+
+### Decisions (autonomous, no approval gate)
+- **Feature deps mapping.** Spec names deps `complaints.core`, `staff.directory`, `pwa.core`. The registry has no `complaints.core`/`pwa.core` codes — they map 1:1 to the registered `complaints` and `branding.pwa` (the PWA/offline shell). Registered `staff.console` with `dependsOn: ["complaints", "staff.directory", "branding.pwa"]` (DAG validates; `assertValidDag` + features.test require every edge to resolve).
+- **Access model.** New permission `staff.console.read` gated by the `staff.console` feature, **seeded to the STAFF role** (previously permission-less). Because effective permissions are role ∩ entitlements, the console vanishes when the feature is off (graceful degradation) with no extra plumbing. A caller must ALSO resolve to an active `StaffMember` linked to their user account — a user with no staff record simply has no console (spec: the committee updates their tickets on their behalf) → `not_a_staff_member` (403) at the API, graceful NoConsole state on the page.
+- **Hard scope = server-side, not hidden links.** Every read filters `assignedStaffId = me`; every action calls `requireMyJob`, which loads the ticket and throws `not_your_job` (→ 403) unless `assignedStaffId` equals the caller's own `StaffMember.id`. This is the acceptance-criteria guarantee ("another staff member's job is 403 even by direct id"). `transitionTicket`/`addNote` themselves don't check assignee, so the ownership gate lives entirely in the console service and is applied before every delegate call.
+- **Simple only.** Spec: "a worker does not need a Pro mode." No ui-module registered; the console is a single, fixed, mobile-first experience.
+- **Bucketing.** Pure `rules.ts`: `classifyActiveJob(dueDay, todayDay)` → TODAY when due today / overdue / **no SLA due date at all** (so SLA-off societies still see work), UPCOMING when future-dated (society-local day compare via `lib/staff/dates.societyDayString`). `compareJobs` orders priority (URGENT→NORMAL) → nearest SLA due (dated before undated) → oldest-created (FIFO). Active buckets classify+sort in memory (a worker holds tens, capped 500); completed is a direct DB-paginated `status ∈ {RESOLVED,CLOSED}` filter with rating. 11 vitest cases.
+- **Actions delegate to complaints service** so the status machine, append-only `TicketEvent` thread and resident notification stay in one place: start = ASSIGNED/REOPENED/ON_HOLD → IN_PROGRESS; hold → ON_HOLD (reason mandatory); resolve → RESOLVED (resolution note mandatory — it is what the resident sees — triggers the rating request); note + before/after photos (no status change). `requestReassign` is console-owned: sets `reassignNeeded`, writes a `REASSIGN_FLAGGED` event + audit, notifies MANAGER/COMMITTEE ("→ back to the committee"), status untouched.
+- **Offline (step 23).** All POST writes send `X-Offline-Queue: 1`; the service worker returns the real response when online, or queues to the IndexedDB outbox + Background-Sync replay (202) when offline. The client treats 202 as "saved offline — will sync". **Conflict, not silent overwrite:** an offline resolve replayed onto an already-CLOSED ticket fails `assertTransition` (illegal_transition) — surfaced as 409 to the client (and the outbox drops it since <500), never re-resolving a closed ticket.
+- **Global bottom bar suppressed on the console route.** The console ships its OWN bottom tabs (Today·Assigned·Upcoming·Done·More); `components/pwa/bottom-tabs.tsx` now returns null on `/app/my-jobs*` so a worker never sees two stacked bottom bars.
+- **Branch.** The controller handed this step on the step-26 branch `feature/26-complaints-service-requests`; built here per that instruction. Per CLAUDE.md the natural branch would be `feature/27-staff-operations-console`.
+
+### Files
+- **lib/staff-console/**: `constants.ts` (JOB_BUCKETS, ACTIVE/COMPLETED status sets, PRIORITY_RANK), `rules.ts` + `rules.test.ts` (pure classify/compare), `actor.ts` (requireStaffConsoleActor / getStaffConsoleServerActor / hasConsoleAccess / runRead+WriteScope / staffConsoleCtx — mirrors complaints/staff actors), `http.ts` (error→status map + parseBody), `service.ts` (getMyStaffMember, listJobs, getJobDetail, startJob, noteJob, holdJob, resolveJob, requestReassign; `StaffConsoleError`).
+- **schemas/staff-console.ts**: jobNote / jobHold / jobResolve / jobReassign (mandatory reason/note is the product rule).
+- **app/api/staff/me/jobs/**: `route.ts` (GET ?bucket=&page=), `[id]/route.ts` (GET detail), `[id]/{start,note,hold,resolve,reassign-request}/route.ts` (POST).
+- **app/[locale]/app/my-jobs/page.tsx**: feature+staff-record gated; graceful NoConsole.
+- **components/staff-console/**: `my-jobs-client.tsx` (bottom tabs, per-bucket fetch, skeleton/empty/error, More panel), `job-card.tsx` (big flat card, call/WhatsApp, SLA countdown, photo hint, rating), `job-detail-drawer.tsx` (photos, resident contact, thread, sticky action bar, offline-aware `act()`, disabled-with-explanation when not actionable), `types.ts`.
+- **Registration**: `lib/features.ts` (+`staff.console`), `lib/rbac.ts` (+perm, STAFF role seed), `lib/nav.ts` (+`myJobs`), `components/pwa/bottom-tabs.tsx` (route suppression).
+- **i18n**: `messages/en.json` + `messages/ur.json` (`staffConsole.*` 37 keys incl. tabs/empty/actions/form/toasts/events, + `nav.myJobs`), RTL logical props throughout.
+- **e2e/staff-operations-console.spec.ts**: 401 on every endpoint × every bucket/action (mirrors the complaints spec; the 403 hard scope is enforced in the service and documented in the spec header).
+
+### Gates
+- `pnpm typecheck` — pass. `pnpm lint` — pass (0 warnings). Prisma generate not needed (no schema change).
+- NOT run by the agent per CLAUDE.md: `pnpm test:unit`, `pnpm test:e2e`, `pnpm build` (controller runs these).
+
+### UI self-check
+Design tokens + shadcn kit (Button/Skeleton/Textarea/Drawer/FileUpload/EmptyState); card list is the correct pattern for a phone job feed (not a Data Table); light+dark tonal chips reused from complaints badges; RTL via `ms-/me-/ps-/pe-/start-/end-` only (no `ml-/mr-/left-/right-`); mobile-first `max-w-lg`; skeleton/empty/error states present; camera capture one-tap via FileUpload `camera`; toasts (no alert); client-side nav; Simple-only by spec; graceful degradation when the feature is disabled.
+
+### Edge cases covered
+Reassigned-away job → detail bar disabled with an explanation (`actionable=false`). Offline resolve after committee close → 409 conflict surfaced, not overwritten. 40 open jobs → paginated. Resolve without a note → blocked by the Zod schema (mandatory). SLA off → jobs still show (TODAY bucket). Feature off → complaints unaffected, NoConsole page.
