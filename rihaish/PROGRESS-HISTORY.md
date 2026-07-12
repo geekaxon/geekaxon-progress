@@ -944,3 +944,55 @@ The branch already carried a nearly-complete implementation from a prior session
 - RateRule/SpecialCharge given `deletedAt` (spec snippet omitted it) so they are first-class tenant-scoped models like every other domain row (architecture #1/#7); rules are superseded, not deleted, in normal flow.
 
 **Checkpoint:** [CHECKPOINT] — progress marker; controller auto-approves and continues to step 18 (ledger-invoicing).
+
+## 18 — ledger-invoicing — DONE (2026-07-12)
+
+**Spec:** `/specs/18-ledger-invoicing.md` (authoritative; no CODEREF for 18). Branch `feature/18-ledger-invoicing`. This step was resumed from a substantially-complete uncommitted WIP: I reviewed every file against the spec, fixed one real defect (below), and ran the full gate set.
+
+### Feature / RBAC / nav
+- `billing.ledger` feature registered in `lib/features.ts` — `dependsOn: ["billing.charges","core.worker","core.notifications"]`, `isCore:false`, module `18-ledger-invoicing`.
+- Permissions `billing.invoice.read` / `billing.invoice.create` in `lib/rbac.ts`, both gated by the `billing.ledger` feature (the ∩ rule: a role can only exercise them once the society is entitled). Roles already carry them (ACCOUNTANT read+create; MANAGER/COMMITTEE read).
+- Nav `billing` entry (`lib/nav.ts`) gated by `permission: billing.invoice.read` + `feature: billing.ledger` — covered by existing `nav.test.ts` cases.
+
+### Data model (migration `20260712220000_ledger_invoicing`)
+- Enums `InvoiceStatus{DRAFT,ISSUED,PARTIALLY_PAID,PAID,OVERDUE,CANCELLED}`, `LedgerType{INVOICE,PAYMENT,REVERSAL,LATE_FEE,ADJUSTMENT,OPENING_BALANCE,WRITE_OFF}`, `Direction{DEBIT,CREDIT}`, `LateFeeMode{FLAT,PERCENT}`.
+- `Invoice` / `InvoiceLine` / `LedgerEntry` — all carry `societyId` + `deletedAt` → auto-scoped by `lib/db.ts`. Infra `InvoiceSequence` (PK `(societyId,prefix,year,month)`) and `BillingSettings` (PK `societyId`), no `deletedAt`, scoped explicitly.
+- **No `paidAmount` column** (architecture #4): money is the ledger. `Invoice.status` is stored as the money-derived state at write time; OVERDUE is a time overlay applied on read (`overlayOverdue`), never persisted by a read.
+- Idempotency: partial unique index `Invoice_societyId_flatId_period_key ... WHERE period IS NOT NULL` — a racing second insert for the same (flat, period) fails P2002 and that flat is skipped, so a re-run only fills gaps. Standalone (period NULL) special-charge invoices are exempt.
+
+### The one defect fixed
+- The migration declared FKs for `InvoiceLine→Invoice` and `BillingSettings→Society` but **omitted `Invoice_flatId_fkey`**, even though `schema.prisma` declares `flat Flat @relation(fields:[flatId], references:[id], onDelete: Cascade)` and `Flat.invoices Invoice[]`. Every prior migration creates an FK for each declared relation (e.g. `Vehicle_flatId_fkey → Flat ON DELETE CASCADE`), so this was genuine schema↔migration drift a fresh `prisma migrate dev` would flag. Added `ALTER TABLE "Invoice" ADD CONSTRAINT "Invoice_flatId_fkey" FOREIGN KEY ("flatId") REFERENCES "Flat"("id") ON DELETE CASCADE ON UPDATE CASCADE;`. (Cascade never fires in practice — flats are soft-deleted, arch #7 — but the SQL must match the schema.)
+
+### Pure logic (unit-tested, clock-injected, BigInt-only)
+- `balance.ts` — `balanceOf = Σdebit−Σcredit` (the ONE balance function), `totals`, `paymentStatus`, `overlayOverdue`, `advanceToApply`. 15 tests.
+- `numbering.ts` — `formatInvoiceNumber` (tokens `{prefix}{YYYY}{YY}{MM}{M}{seq}{seq:N}`), `normalisePrefix`. 9 tests. Gaplessness itself is the service's atomic upsert, not this pure half.
+- `aging.ts` — `daysOverdue`/`bucketForDays`/`ageArrears` → 0–30 / 31–60 / 61–90 / 90+, only positive outstanding ages. 5 tests.
+- `late-fee.ts` — `lateFeeAmount` (FLAT minor units / PERCENT basis-points floored), `graceDeadline`/`isPastGrace`, `feePeriod`. 6 tests.
+
+### Service (`lib/billing/service.ts`)
+- `getBillingSettings`/`updateBillingSettings` (upsert + audit; prefix normalised, days clamped 1–28).
+- `previewRun` — resolves every flat via the SAME pure `resolveCharges` the step-17 simulator uses; writes NOTHING; returns per-flat lines/total/warnings + skips (no_billable_person / no_charges) + alreadyInvoiced + summary. Non-billable flats keep only explicitly-targeted special-charge lines (construction-levy case).
+- `commitRun` — idempotent per (society, period). Each invoice in its OWN transaction: allocate seq via `INSERT … ON CONFLICT DO UPDATE … RETURNING` (gapless, rolls back with the txn) → `Invoice` + `InvoiceLine[]` snapshot + `LedgerEntry(INVOICE, DEBIT)`. **Advance auto-application:** if the flat has a credit balance (and advances allowed), applies `min(total, advance)` as a matched CREDIT (attributed to the invoice, so the invoice reads PAID/PARTIALLY_PAID) + DEBIT (drawn from the advance pool) that net zero on the running balance. P2002 race → count as alreadyInvoiced, continue. After all writes: mark the period's SCHEDULED specials APPLIED, audit, then `notifySafe` per invoice (never blocks the run).
+- Reads: `listInvoices`/`listInvoicesForExport` (data-table kit; paid amount derived from linked non-INVOICE ledger entries), `getInvoiceDetail` (with snapshot lines). `cancelInvoice` — writes a REVERSAL credit for the outstanding debit, flips status CANCELLED + reason + audit, **keeps the number, never deletes**; a second cancel is a typed 409.
+- `getFlatStatement` (balance + invoices + raw ledger + aging), `getAgingReport` (society-wide). `addOpeningBalance` (OPENING_BALANCE debit/credit, blocked once `openingBalanceLocked`) + `lockOpeningBalances` — the step-21 onboarding seam.
+- Ledger is APPEND-ONLY: the service only ever calls `.ledgerEntry.create`; corrections are new REVERSAL/ADJUSTMENT rows.
+
+### Worker (`lib/worker/handlers.ts` + `registry.ts`)
+- `runBillingMonthly` replaced the step-18 stub: manual run carries `payload.period` and runs unconditionally; a cron fire (no period) runs only when `autoGenerate` is on and bills the occurrence month. READ_ONLY society → the scoped mutating job is skipped by the runtime. Idempotent via `commitRun`.
+- `runBillingLateFee` replaced the step-19 stub: one `LATE_FEE` debit per overdue ISSUED/PARTIALLY_PAID invoice per month (never compounding daily), idempotent by looking up an existing LATE_FEE entry in the current month window; disabling stops future fees and removes none.
+
+### API (9 routes) + UI
+- `/api/billing`(overview), `/settings`(GET/PATCH), `/runs/preview`(POST), `/runs/commit`(POST → 202, enqueues `billing.monthly-run`), `/invoices`(GET list) + `/invoices/[id]`(GET detail / PATCH cancel) + `/invoices/export`(POST), `/ledger`(GET flat statement), `/opening-balance`(POST add / PATCH lock). Read routes require `billing.invoice.read`; run/cancel/settings/opening-balance require `billing.invoice.create` (`requireBillingActor({manage:true})`). `runWriteScope` folds impersonation-read-only + READ_ONLY society status into the scope (writes → 423).
+- UI page `/[locale]/app/billing` via `useUiModule("billing")`: Simple generate→preview→confirm + plain flat statement; Pro invoice DataTable (filters/bulk/export) + flat-ledger drawer (running balance) + arrears aging card + settings modal. i18n `billing` ns en+ur, exact parity (104 keys each).
+
+### Gates
+- `pnpm typecheck` clean · `pnpm lint` 0 warnings · `pnpm test:unit` **473 passed** / 7 skipped · `pnpm build` exit 0 (9 `/api/billing/*` routes + `/[locale]/app/billing` page, both locales).
+- Ledger immutability acceptance criterion is a real architecture test (`ledger-immutability.test.ts`): walks `lib/app/worker/components` and fails on any `.ledgerEntry.(update|updateMany|upsert|delete|deleteMany)`.
+- `run.integration.test.ts` (gapless numbering under concurrency, idempotent re-run, advance auto-application, cancel-keeps-number) is DB-gated and skips without `DATABASE_URL`, same pattern as the pre-existing `queue.integration.test.ts`. e2e `e2e/ledger-invoicing.spec.ts` = 12 unauth-401 route checks + billing page no-500 (not a CI gate).
+
+### Decisions / notes
+- Resumed a near-complete WIP rather than rebuilding; the design already matched the spec (balance-only money, snapshot lines, gapless-via-upsert, advance auto-apply, reversal-not-delete). The substantive change was the missing FK.
+- Advance auto-application is modelled as a zero-net CREDIT+DEBIT pair so the running balance still reflects the advance being consumed while the invoice's own paid-amount (linked CREDIT − linked reversal) reads it as settled — no separate "applied advance" table needed.
+- Cancelled invoice keeps its number and its sequence slot is never reused (the sequence only ever increments); a cancel writes a REVERSAL, matching the acceptance criterion.
+
+**Checkpoint:** [CHECKPOINT] — progress marker; controller auto-approves and continues to step 19 (payments-receipts).
