@@ -1623,3 +1623,52 @@ Page `app/[locale]/app/expenses/page.tsx` (feature-gated; branches committee vs 
 `pnpm prisma generate`, `pnpm lint`, `pnpm typecheck` all clean. Did NOT run test:unit/e2e/build (controller runs full gates). Acceptance-criteria unit tests written (`rules.test.ts` for numbering/threshold/summary/variance/receipt-flag; `architecture.test.ts` for the no-ledger rule). e2e `e2e/expenses-accounts.spec.ts` (401 on every endpoint).
 
 WORK TYPE: FEATURE (branch feature/30-expenses-accounts)
+
+---
+
+## Step 31 — document-vault — DONE (2026-07-12)
+
+**Feature:** `documents.core` (non-core). Deps `core.storage`, `residents.registry` (both registered; DAG validated at load). Spec `/specs/31-document-vault.md` — AUTHORITATIVE. No CODEREF. WORK TYPE: FEATURE (branch feature/30-expenses-accounts — controller manages branch/merge).
+
+**Purpose:** Bylaws, meeting minutes, notices, NOCs, floor plans in one place, with the right people able to see them. Private by default; versioned; every read logged.
+
+### Decisions
+- **Private by default (spec):** downloads never hit a public path. `getDownload` resolves the document's `StoredFile.key` (within the society scope) and returns a fresh short-lived signed URL from the step-10 adapter (`getAdapter().signedUrl(key, 300s)`). The actual bytes still leave only via the existing `/api/files/blob` HMAC route, so a guessed/tampered signed URL is 403 by the storage layer. The document `download` endpoint itself requires auth and runs the visibility gate, so a resident guessing another flat's FLAT_SCOPED document id gets 403 there.
+- **Visibility resolution (pure, `rules.ts`):** `resolveVisibility(doc, folder)` = document override → folder → default `COMMITTEE_ONLY`. When the document overrides, ITS `allowedRoles` apply; when it falls through, the FOLDER's do. `flatId` only ever comes from the document. `canViewDocument`: committee sees all; resident sees ALL_RESIDENTS, a role match for ROLE_SCOPED, and FLAT_SCOPED only if the flat is in `currentFlatIds`.
+- **The privacy trap (acceptance criteria):** `buildViewer` derives `currentFlatIds` from OPEN `FlatOccupancy` holdings (`endDate == null`) for the user. A previous occupant's holding is closed (endDate set) → absent from `currentFlatIds` → refused immediately; the new occupant only ever gets their OWN current flat, never the old occupant's personal NOC. Proven exhaustively in `rules.test.ts` with no DB.
+- **Committee vs resident tier:** the pure `canViewDocument` treats committee (`isCommittee`) as seeing everything (they administer the vault — NOCs are committee-issued). The FLAT_SCOPED restriction is the RESIDENT-tier decision, which is exactly where the trap is tested.
+- **Versioning never overwrites (spec):** `newVersion` creates a NEW `Document` with `supersedesDocumentId = old.id`, `version = old.version + 1`; the old row is retained. A document is the "head" iff no live row supersedes it (`supersededIds`/`isHeadVersion`). Only a head can be versioned (`not_head` otherwise — a fork would corrupt history). Feed/tiles/table show head versions only; the version-history drawer walks the chain both directions.
+- **Expiry hides, never deletes:** `isVisibleInFeed` = published (`publishedAt <= now`, non-null) AND not expired (`expiresAt` unset or in the future). Residents see feed-visible head docs only; committee sees drafts/expired too, flagged. Soft-delete (folder delete cascades to its documents via scoped `deleteMany`) retains rows until the retention window.
+- **Access log:** `DocumentAccessLog` has `societyId` but NO `deletedAt` → pass-through infra (like AuditLog/Notification), filtered on `societyId` explicitly, never soft-deleted. `getDownload` writes one row per open (`?mode=view` → VIEW, else DOWNLOAD). `getAccessLog` (committee, documents.read) joins UserProfile for names.
+- **50 MB PDF edge case:** handled by the storage layer's existing 10 MB `MAX_UPLOAD_BYTES` cap — the upload flow throws `FileTooLargeError` before a document row is ever created; the add-document form surfaces the "compress and re-upload" guidance. The document module adds no new size logic.
+- **Committee Pro table paginated in memory:** visibility resolution + head detection are app-level (not a simple `where`), and the console is committee-only over a bounded per-society document set, so `listDocumentsTable` decorates all rows then filters/sorts/pages in memory. The resident feed is a non-paginated array of head, feed-visible docs.
+- **No cron, no notifications:** the spec requires neither. (A document upload could notify targeted residents, but that is out of scope for this spec.)
+
+### Data model (migration `20260712330000_document_vault`)
+- `DocVisibility` enum: COMMITTEE_ONLY | ALL_RESIDENTS | ROLE_SCOPED | FLAT_SCOPED.
+- `DocumentFolder` (auto-scoped societyId+deletedAt): self-ref `parentId` tree, `visibility` (default COMMITTEE_ONLY) + `allowedRoles[]`, `sortOrder`, `createdBy`.
+- `Document` (auto-scoped): `folderId`, `title`/`description`, `fileId` (StoredFile), `version`, self-ref `supersedesDocumentId`, `flatId` (FLAT_SCOPED), `tags[]`, per-doc `visibility?` override + `allowedRoles[]`, `publishedAt`/`expiresAt`, `uploadedBy`. Indexes `[societyId, folderId]`, `[societyId, supersedesDocumentId]`.
+- `DocumentAccessLog` (pass-through, no deletedAt): `documentId`, `userId`, `action`, `at`. Indexes `[societyId, documentId]`, `[societyId, at]`.
+- Schema appended cleanly (96-line add; did NOT run `prisma format` to avoid whitespace churn across unrelated models). `prisma generate` OK.
+
+### Code
+- `lib/documents/`: `constants.ts` (DocVisibility tuple, access actions, folder presets, `docKindForMime` icon classifier), `rules.ts` (all pure decisions) + `rules.test.ts` (vitest: resolution, canView/canViewFolder incl. the privacy trap, publish/expiry, versioning, search), `actor.ts` (member/committee actors, read/write scopes, `documentCtx` carrying isCommittee+roleCodes), `http.ts` (typed error → status; forbidden→403, unknown→404), `columns.ts` (Pro column contract + `DocumentDto`), `service.ts` (folders, documents, versions, download, access log, overview).
+- Registration: `lib/features.ts` (`documents.core`), `lib/rbac.ts` (`documents.read` → COMMITTEE_MEMBER+MANAGER; `documents.manage` → MANAGER; PERMISSION_REGISTRY gated by documents.core), `lib/nav.ts` (`documents` item, icon `folderArchive`, main group, feature-gated, hideOnSharedDevice, no permission → member-visible), `components/shell/nav-icons.ts` (FolderArchive glyph). `ui-modes/modules.ts` already had `documents` (resident/SIMPLE).
+- `schemas/documents.ts`: folder create/update/seed, document create/update, new-version, bulk-visibility (shared client+server).
+- API (`app/api/documents/`): `route.ts` (GET feed / `?scope=list` / `?scope=overview`; POST create), `folders/route.ts` (GET/POST), `folders/[id]/route.ts` (PATCH/DELETE), `folders/seed/route.ts` (POST), `[id]/route.ts` (GET/PATCH/DELETE), `[id]/download/route.ts` (GET signed+logged), `[id]/new-version/route.ts` (POST), `[id]/versions/route.ts` (GET), `[id]/access-log/route.ts` (GET), `bulk-visibility/route.ts` (POST).
+- UI: `app/[locale]/app/documents/page.tsx` (feature-gated RSC → overview) + `components/documents/documents-client.tsx` (Browse: folder tiles → doc cards → mobile PDF/image viewer modal + download; Manage/committee: folder bar seed/create, Pro table with per-doc version-history + access-log drawers, add-document + new-version modals, delete; RTL logical props, semantic tokens for light/dark).
+- i18n: `messages/en.json` + `ur.json` `documents.*` namespace + `nav.documents` (en/ur key parity verified by script).
+- e2e: `e2e/documents-vault.spec.ts` (401 on every GET/POST/PATCH/DELETE endpoint).
+
+### Gates
+- `pnpm prisma generate` — OK.
+- `pnpm typecheck` — clean.
+- `pnpm lint` — clean (fixed two `react/jsx-no-literals` on a "·" separator, added `cancelLabel` to ConfirmDialog).
+- Did NOT run test:unit / test:e2e / build per CLAUDE.md — controller runs full gates.
+
+### Acceptance criteria mapping
+- [x] Vitest visibility resolution (document → folder → default) + FLAT_SCOPED current-occupant limit — `rules.test.ts`.
+- [x] Previous occupant cannot access after endDate (explicit test) — `rules.test.ts` "FLAT_SCOPED is limited to the flat's CURRENT occupants".
+- [x] Downloads use signed URLs and are logged; a guessed URL returns 403 — `getDownload` (signed adapter URL + DocumentAccessLog) + storage blob-route HMAC 403 + visibility gate 403.
+- [x] Versioning retains old versions; nothing overwritten — `newVersion` + `supersededIds`/`isHeadVersion`.
+- [x] PDF viewer works on mobile; light/dark, EN/UR (RTL) — iframe viewer (native pinch-zoom), logical props, semantic tokens (design self-check by inspection).
