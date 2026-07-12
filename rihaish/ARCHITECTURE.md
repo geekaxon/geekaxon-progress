@@ -20,6 +20,7 @@ Guards/staff are roles inside L1, not a separate tenancy layer.
 8. **UI is part of done** (see §5). No raw HTML, no hand-rolled tables, no hand-rolled inputs.
 9. **Scalable by default**: stateless web (pm2 cluster), separate worker, server-side pagination, indexed on `societyId`, heavy work queued.
 10. **Secrets never in repo.** Society-supplied credentials encrypted at rest.
+11. **Rihaish never carries video.** CCTV (step 41) is registry + permissions + signed view tokens only; the stream always flows society-edge → resident device, never through our servers or bandwidth.
 
 ## 3. Stack
 Next.js 15 (App Router, RSC) · React 19 · TypeScript strict · **pnpm** · Node 22 LTS
@@ -85,6 +86,7 @@ Every UI module must ship: shadcn components only · light **and** dark · **RTL
 | 38 | `/specs/38-emergency-alert.md` | Panic alert → guard + committee | [CHECKPOINT] |
 | 39 | `/specs/39-reports-dashboards.md` | Collection %, arrears aging, defaulters, expenses, animated charts, exports | [CHECKPOINT] |
 | 40 | `/specs/40-public-site.md` | `rihaish.pk` apex marketing + lead capture | [CHECKPOINT] |
+| 41 | `/specs/41-cctv.md` | Bring-your-own CCTV: LINK / EMBED / AGENT tiers, per-camera grants, signed view tokens, event snapshots | [CHECKPOINT] |
 
 **Checkpoints are progress markers, not approval gates.** The build is fully autonomous: every step ends `[CHECKPOINT]`, auto-approves, and continues. There is no `[FIXED_CHECKPOINT]` and no operator approval anywhere. The **only** stop is `[HUMAN_REQUIRED]` — a missing spec, or infra the agent cannot do in code (DNS, wildcard/custom-domain SSL, Oracle firewall ports, aaPanel site config, credentials).
 **Sellable at Rufi from step 21–22.** Steps 23–40 are additive.

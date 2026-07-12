@@ -1088,3 +1088,57 @@ Money IN, reversed when a cheque bounces, and a printable receipt. **v1 is recor
 ### Notes / deferred
 - Society toggle "may an owner see the occupant's invoices" — spec default **yes**, implemented as default-yes (owner holds the flat → sees it). The configurable-per-society flag is deferred (would need a societySettings column / migration); recorded here as an autonomous decision.
 - Utilities/amenities sections are placeholders until steps 29/35 provide data.
+
+---
+
+## 21 — society-onboarding-wizard — DONE (2026-07-12)
+
+**Branch:** feature/21-society-onboarding-wizard · **Feature:** `platform.onboarding` (non-core; deps `flats.registry`, `residents.registry`, `billing.ledger`, `branding.core`)
+
+### What it is
+The guided path that takes a brand-new society from empty to live — the module that makes Rihaish *sellable*. 10 resumable steps (profile, branding, structure, categories & occupancy, charge heads & rates, billing settings, opening balances, people, integrations, review & launch). Available to a `SOCIETY_ADMIN` on their own host and to L0 via impersonation (both hold `platform.onboarding.*`).
+
+### Key architectural decisions (logged, autonomous)
+- **No DRAFT society status.** The `SocietyStatus` enum is only `ACTIVE|READ_ONLY|SUSPENDED` and a society is `ACTIVE` from `createSociety`. So onboarding is an **orchestration layer over an already-ACTIVE tenant**, not a status flip. "Launch" = stamp `SocietyOnboarding.completedAt`/`launchedBy`, LOCK opening balances, audit `onboarding.launched`. Recorded here rather than adding a new enum value that would ripple through tenant resolution.
+- **Non-core feature.** Depends on `billing.ledger` (itself non-core), so it cannot be a core feature (a core feature may not depend on a non-core one). It is therefore plan/L0-gated — appropriate for a "sellable" feature. New societies get it when their plan/L0 enables it.
+- **Reuse-first.** The wizard's own API adds only the composites no module provides: draft state, society profile, a MULTI-block structure generator, the plain-language rate screen, readiness + launch. Branding, categories, billing settings, opening balances, resident invites and integrations reuse their existing endpoints from the wizard UI.
+- **`Society` profile written via raw `prisma`.** The scoped `db` client forbids `Society` mutations (throws `CrossTenantError`), so the profile step updates the society by its own id via raw `prisma.society.update` (tenant-safe — the id is the actor's society) + a `SOCIETY_USER` audit. Only `db.unscoped()` is lint-restricted; raw `prisma` reads/writes are the established pattern (billing actor reads society the same way).
+- **Full-screen inside the shell.** Next.js layouts compose, so a route under `/app` cannot bypass the app-shell layout via a nested `layout.tsx`. The wizard renders as an immersive full-width page (progress rail + summary panel) inside the shell — consistent with every other module — rather than fighting the layout system.
+- **Occupancy/CSV scope.** Occupancy is set at structure generation (default per-block) and is adjustable later; the CSV imports called out for steps 3/4/7/8 reuse the existing atomic dry-run import modals rather than being re-embedded in the wizard. Integrations *configuration* (per-provider creds + test send) stays in Settings → Integrations; the wizard shows connection status and links there.
+
+### Data model / migration
+`20260712240000_society_onboarding`: `SocietyOnboarding` (societyId PK/FK cascade, currentStep Int=1, completedSteps Int[]=[], data Jsonb='{}', completedAt?, launchedBy?, createdAt, updatedAt). Infra (no `deletedAt`) → NOT auto-scoped; every access filters `societyId` explicitly (like `BillingSettings`). Relation added to `Society`.
+
+### Server (`lib/onboarding/`)
+- `constants.ts` — 10-step catalogue (key, optional, estimateMinutes) + feature/permission codes. Framework-free (client-safe).
+- `structure-plan.ts` (pure) — `parseBlockCodes` ("A-F" range / "A,B,C" list / mix, dedup, case-normalise, reversed-range flip) + `planStructure` (plans every block against combined existing codes + `maxFlats`; refuses the ENTIRE run before any write on any duplicate / existing collision / limit breach — the "blocked before any write / upgrade prompt" edge case).
+- `readiness.ts` (pure) — `computeReadiness(input)`: rates=0 → **block** ("cannot bill"), flats=0 → block, empty name → block, residents=0 → **warn** ("nobody can log in"), categories/opening-balances/branding empty → warn. `canLaunch = blockers.length === 0`.
+- `service.ts` — `getState`/`saveState` (draft upsert: advance pointer, union completed steps, shallow-merge data), `saveProfile`, `generateStructure` (pre-flight `planStructure` → per-block idempotent `createBlock` + structure module's atomic `bulkGenerate`), `saveRates` (ensure charge head → one effective-dated `createRateRule` per line; supersedes open rules, history intact), `getSnapshot` (counts + reference lists + billing settings + branding flags; `SocietyIntegration` count filtered by societyId since it is infra/non-auto-scoped), `readinessFromSnapshot`/`getReadiness`, `listFlatsForPicker`, `launch` (re-check readiness → 409 if blocked; stamp completion; `billing.lockOpeningBalances`; audit).
+- `actor.ts` — `OnboardingActor` (+ society money/locale meta), `requireOnboardingActor`/`getOnboardingServerActor`, `runReadScope`/`runWriteScope` (fold impersonation-RO + READ_ONLY status → 423), mirrors billing/structure actors exactly.
+- `http.ts` — `onboardingErrorResponse` (LOCKED→423, NOT_FOUND→404, CONFLICT/structure_blocked/launch_blocked→409, Zod→400 validation, else `authErrorResponse`), `parseBody`, `requestOrigin`.
+
+### API (`app/api/onboarding/`)
+`route.ts` GET (bootstrap: state + snapshot + pure readiness) / PATCH (save draft); `profile` POST; `structure` POST (`?preview=1` = read-scoped dry-run plan, else write-scoped generate → 201); `rates` POST → 201; `launch` GET (live checklist) / POST (launch); `flats` GET (`?q=` picker). All `runtime=nodejs`, `dynamic=force-dynamic`, try/catch → `onboardingErrorResponse`, actor + scope enforced.
+
+### UI (`components/onboarding/`, `app/[locale]/app/setup/`)
+Full-screen wizard: `PageHeader` + "Save & continue later" (PATCH pointer → route to `/app`), left progress rail (per-step status tick / current / estimate / lock glyph on opening-balances after launch), center active step card, right sticky live "your society so far" summary + launch checklist. `setup-wizard.tsx` orchestrates step routing, `refresh()` re-fetches bootstrap, `advance()` marks current step complete + advances in one PATCH. 10 step components using the form kit only (Simple is the only mode — no `useUiModule`): profile (RHF+zod), branding (fields + `FileUpload` logo → PUT branding), structure (bulk form + server Preview + limit/conflict callout), occupancy (category add + occupancy note), rates (plain-language occupied/rented/vacant `MoneyField`s → effective-dated rules), billing (reuses `billingSettingsSchema`), opening-balances (async flat `Combobox` + amount + arrears/credit; locked banner post-launch), people (async flat combobox + `PhoneField` invite), integrations (status list + link to Settings), review (live checklist + Launch, disabled until `canLaunch`; live-state screen after launch). Logical CSS props throughout (RTL-safe); all copy via i18n.
+
+### i18n
+`onboarding` namespace + `nav.setup` added to `messages/en.json` + `messages/ur.json` — **160/160 key parity** verified by script. Urdu translations for every string; RTL via existing `dir` plumbing.
+
+### Tests
+- Unit (no DB): `structure-plan.test.ts` (block-spec parser incl. reversed range/dedup; combined plan totals; whole-run block on maxFlats breach incl. existing-count; existing-code collision; empty-blocks not-ok), `readiness.test.ts` (launch blocked without rates / no flats / no name; warned without residents/opening-balances/branding; 8 checklist items).
+- DB-gated integration `launch.integration.test.ts` (`describe.skipIf(!DATABASE_URL)`): launch blocked with no rates; draft saved & reloaded (survives reload); opening balance accepted before launch then society launches, `openingBalanceLocked=true`, state `launched`/`launchedBy` set; opening balance after launch rejected `opening_balance_locked` (locked, cannot re-open).
+- e2e `society-onboarding.spec.ts`: 9 onboarding endpoints 401 without a session; `/en/app/setup` renders < 500. (Full Rufi launch flow proven by the integration test, which needs seeded auth — matches the repo's lightweight e2e convention.)
+
+### Registry
+`lib/features.ts` (+`platform.onboarding` entry, DAG validated at load), `lib/rbac.ts` (+`platform.onboarding.read/.manage` gated by the feature; `SOCIETY_ADMIN` receives them via `*`), `lib/nav.ts` (+`setup` item, manage group, hideOnSharedDevice), `components/shell/nav-icons.ts` (+rocket).
+
+### Gates
+Not run in-session (controller runs lint → typecheck → test:unit → build, then `prisma generate` before typecheck/build so `db.societyOnboarding` resolves). UI design self-check done by inspection: form kit only, logical props, i18n en+ur, Simple-only (the wizard is the simple mode), skeleton/empty/error via shell states + no-access `EmptyState`, toasts (no alert), client-side nav, graceful when optional features disabled (reuse endpoints 403 → toast, never 500).
+
+### Not done / deferred
+- Playwright full 184-flat Rufi launch (needs seeded society + admin session; covered instead by the DB-backed integration test per repo convention).
+- CSV imports embedded in steps 3/4/7/8 (reuse existing atomic dry-run import modals).
+- Integrations credential configuration + test send (lives in Settings → Integrations; wizard shows status + deep link).
+- First-invoice preview run at launch (launch returns readiness; the preview run is the billing module's existing generate-in-preview surface).
