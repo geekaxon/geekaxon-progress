@@ -789,3 +789,56 @@ The second pm2 process is now real: a Postgres-backed job queue + a timezone-awa
 - The account screen's own local Simple/Pro toggle (spec 09, `localStorage`) is unrelated to `ui.modes` and left as-is — the account module is not in `UI_MODULES`.
 
 **Checkpoint:** [CHECKPOINT] — progress marker; controller auto-approves and continues to step 15 (society-structure).
+
+---
+
+## Step 15 — society-structure — DONE (2026-07-12)
+
+**Branch:** `feature/15-society-structure` · **Work type:** FEATURE
+**Spec:** `/specs/15-society-structure.md` (authoritative; no CODEREF present). A substantial partial (schema, migration, pure logic, service, one route, unit tests) existed uncommitted in the working tree from a prior run; this step completed it (API routes, full UI, i18n, e2e, wiring verification) and hardened it (typecheck was never run on the partial — fixed the create-typing and null-acceptance defects below).
+
+### Feature / DAG / RBAC / nav / ui-modes
+- `flats.registry` — **isCore** (never disableable; a society cannot exist without its flat registry), `dependsOn: [core.tenancy, core.tables, core.forms]` (all present; `features.test` green).
+- Permissions: `society.structure.read` / `society.structure.manage`, both gated by `flats.registry`. Seeded onto roles: committee/admin get manage, others read (see `lib/rbac.ts`).
+- Nav item `structure` (icon `building`, group manage, `hideOnSharedDevice`), `nav.structure` label en+ur.
+- UI module `structure` registered in `lib/ui-modes/modules.ts` (audience committee → built-in default PRO).
+
+### Data model — migration `20260712190000_society_structure`
+- Enums `OccupancyStatus {OCCUPIED_BY_OWNER,RENTED,VACANT,UNDER_CONSTRUCTION}`, `BillTo {OWNER,OCCUPANT}`, `ParkingMode {ASSIGNED,OPEN,NONE}`, `VehicleType {CAR,BIKE,OTHER}`.
+- `Block`, `Floor`, `FlatCategory`, `Flat`, `ParkingSlot`, `Vehicle` — **every domain row carries BOTH `societyId` AND `deletedAt`** (architecture #1/#7 override the spec's illustrative schema which showed `deletedAt` only on Block/Flat), so the enforced scoping layer auto-pins reads, stamps societyId, and rewrites deletes into soft-delete + audit. `SocietySettings` (PK `societyId`, no `deletedAt`) is the pass-through infra exception, scoped explicitly.
+- Uniqueness (`Flat @@unique[societyId,displayCode]`, `Block @@unique[societyId,code]`, …) **excludes `deletedAt`**: a soft-deleted/merged flat keeps its `displayCode` reserved so a demolished number is never silently reused (spec edge case) and its financial history stays attributable.
+- FKs: Floor/Flat/Vehicle → parent `ON DELETE CASCADE`; Flat.floor/category and ParkingSlot.flat → `SET NULL`. `prisma validate` + `prisma generate` clean; 34 DDL statements verified.
+
+### Pure logic (no DB — exhaustively unit-tested, carried from the partial)
+- `flat-code.ts`: `{block}/{number}/{floor}` template → society-unique `displayCode`; must contain `{number}`; tolerant `effectiveFormat` fallback. (`flat-code.test`)
+- `bulk.ts`: `generateFlats` (floorPrefixed = floor·10^digits+pos, or sequential from startAt) + `planBulkGenerate` — refuses the ENTIRE batch on any in-batch dup, existing-code conflict, or `maxFlats` breach ("blocked before creating anything"). (`bulk.test`)
+- `csv.ts`: RFC-4180-ish parser + per-row validation against known blocks/categories/existing codes; structural errors as `line:0`; caller commits only when `errors` is empty → **no partial import**. (`csv.test`)
+
+### Service (`lib/society-structure/service.ts`)
+- Scoped CRUD for blocks/floors/categories/flats/parking/vehicles + settings upsert. **First tenant-scoped domain module**, so established the create pattern: the scoping layer injects `societyId` at runtime but Prisma's types require it → added a documented `tenantCreate<T>(Omit<T,"societyId">)` cast (no placeholder societyId that could mask a scoping regression; DB NOT NULL is the final guard). Applied to all `db.*.create`/`createMany`.
+- `getGridData` (blocks+floors+light flats for the Simple lattice), `listFlats/ParkingSlots/VehiclesQuery` (data-table kit via `runList`), `listFlatsForExport` (all rows matching the view, capped at inline limit+1), `getCsvContext`, `importFlats` (one transaction), `bulkGenerate` (plan → one txn backfilling floors then `createMany`).
+
+### API routes (all `nodejs`/`force-dynamic`, actor = `requireStructureActor`, read/write scope via `runReadScope`/`runWriteScope`; typed errors → stable statuses in `http.ts`)
+`/api/structure` (GET settings+summary+grid+categories, PATCH settings) · `/api/blocks|floors|flat-categories|parking-slots|vehicles` (list/CRUD; parking+vehicles also serve a `?q=` ListResult for the Pro tabs) · `/api/flats` (GET `?id=` detail else `?q=` list, POST/PATCH/DELETE) · `/api/flats/bulk` · `/api/flats/import` (2-phase: dry-run preview → commit, 422 on any error) · `/api/flats/export` (**first real `buildInlineExport` caller** — inherits PII gate + audit + >1000 queued).
+
+### UI (`components/structure/*`, `app/[locale]/app/structure/page.tsx`)
+- `StructureClient` owns shared data + overlays, switches Simple/Pro via `useUiModule("structure")`, reloads on every mutation. Shared summary strip (block/floor/flat counts + occupancy legend).
+- **Simple** `FlatGrid`: block→floor→flat lattice colour-coded by occupancy, click → drawer, empty→"Set up my building".
+- **Pro** `FlatTable`: flats DataTable (every column, server filters block/floor/category/occupancy/billable, CSV import + export) + **Parking**/**Vehicles** tabs (data-table kit); Parking tab hidden entirely unless `parkingMode=ASSIGNED` (spec: not merely disabled).
+- Shared `FlatDrawer` (create + edit, vehicles add/remove, parking shown, soft-delete), `BulkGenerateModal` (atomic, live count preview), `CsvImportModal` (file → dry-run per-row error report → commit), `SetupModal` (blocks/floors/categories/settings). Form kit + toasts throughout; skeleton in drawer, EmptyState for empty grid.
+
+### Defects found & fixed while completing the partial
+- **Create typing:** the partial's `db.*.create({data:{…}})` omitted `societyId` and had never been typechecked (TS2322 ×8). Fixed with `tenantCreate` (see Service).
+- **Null-acceptance mismatch:** client forms send `field || null` for empty optionals, but several Zod fields were `.optional().or(z.literal(""))` (reject `null`) → POST/PATCH would 400. Added `.nullable()` to `block.name`, `floor.label`, `flat.{floorId,categoryId,billTo,notes}`, `parkingSlot.{flatId,location}`, `vehicle.{make,model,color,stickerNo}`.
+
+### Gates
+- `pnpm typecheck` ✓ · `pnpm lint` ✓ (0 warnings, incl. `react/jsx-no-literals`) · `pnpm test:unit` ✓ 383 passed / 3 skipped · `pnpm build` ✓ (11 new API routes + `/app/structure` prerendered en+ur).
+- UI design self-check: kits only (DataTable for every list incl. parking/vehicles; form kit for every input), logical properties only (`ms-auto`; no `ml-/mr-/pl-/pr-/text-left/right`) → RTL-safe, token-based colours (light+dark), Simple **and** Pro, skeleton/empty states, toasts.
+- e2e `society-structure.spec` (13 unauth-401 assertions + page-no-500) — not a CI gate per house rule.
+
+### Decisions / notes (no approval gate — recorded per CLAUDE.md)
+- **No Rufi seed written.** Spec lists an illustrative "Rufi seed (blocks A–F, categories)" but the repo has no seed infrastructure (prior modules reference seeders that don't exist as files), and populating a society's flats is the onboarding wizard's job (step 21). Deferred there rather than inventing a seed harness.
+- **Occupancy-change-doesn't-rewrite-invoices** acceptance criterion is structurally guaranteed (`updateFlat` only mutates the flat row; no invoice tables exist until step 18) — no test possible yet; will be covered when the ledger lands.
+- Parking/vehicles Pro tabs use the data-table kit (added `?q=` ListResult support) to honour the "Data-Table kit for every list" contract rather than hand-rolling.
+
+**Checkpoint:** [CHECKPOINT] — progress marker; controller auto-approves and continues to step 16 (residents-occupancy).
