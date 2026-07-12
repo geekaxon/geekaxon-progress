@@ -10,6 +10,49 @@
 
 ---
 
+## Build-step 48 — Platform Settlement & Commission (`feature/48-platform-settlement`) ✅ DONE (2026-07-11)
+
+**WORK TYPE:** FEATURE. **Phase 5 / item 4** (the money layer of the marketplace foundation tranche 45→48). **Depends on** 47 (marketplace transactions exist), 46 (platform-scope RLS + `runWithPlatformScope`), 23/21 (tenant accounting + cashier — untouched underneath). **Spec:** `specs/48-platform-settlement.md` (+ `specs/45-53-CODEREF.md` §B.48/§C.4). **⚠️ Ends with the MANDATORY owner-verification HALT (§6) — `[HUMAN_REQUIRED]`, NOT `[CHECKPOINT]`.**
+
+### Problem
+Marketplace bookings (47) move money two ways, foodpanda-style — (a) patient pays ONLINE → the platform collects, keeps commission, owes the tenant the rest; (b) patient pays CASH at the facility → the tenant collects and owes the platform its commission. Neither a platform-level ledger nor a payment abstraction existed, and the real gateway (JazzCash/Easypaisa/card) is undecided, so the design had to be provider-agnostic. This is the PLATFORM's books, ABOVE and SEPARATE from tenant accounting (23).
+
+### What changed
+**New package `@mp/payments` (provider-agnostic port).** `PaymentProvider` interface (`initiate`/`confirm`/`sign`/`verifyWebhook`/`refund`) + a deterministic `MockProvider` (no network, no randomness: HMAC-signed webhooks, success unless the ref contains `fail`). `getPaymentProvider({provider,mockSecret})` is the ONLY construction seam — two named variants (`mock`, `mock-alt`) prove config swaps the adapter with zero code change. No concrete gateway/SDK anywhere (do-not-break #5). Config: `PAYMENT_PROVIDER` (`mock|mock-alt`) + `PAYMENT_MOCK_SECRET` (zod, defaults; `.env.example`).
+
+**Schema — new PLATFORM-LEVEL settlement section** (migration `20260711120000_platform_settlement`):
+- `PayMethod += PLATFORM_ONLINE` (additive; tenant records the online remittance in its OWN books as income like `ONLINE` — commission never touches tenant GL). Mirrored in `@mp/shared` `PayMethodLit`/`PAY_METHODS` + `billMethod_PLATFORM_ONLINE` i18n label.
+- `PlatformLedgerEntry` (append-only header; `@@unique([sourceType, sourceRefId])` = the idempotency key) + balanced `PlatformLedgerPosting` lines (accounts `PLATFORM_CASH`/`TENANT_PAYABLE`/`TENANT_RECEIVABLE`/`COMMISSION_REVENUE`).
+- `PlatformCommissionConfig` (tenant/per-capability/default; NULL tenant_id = platform-wide default). `PaymentIntent` (online-collect lifecycle; unique `providerRef`). `SettlementRun` (+ `SettlementLine` snapshot).
+- **RLS** reuses the 46 `apply_platform_link_rls` on every table: a tenant reads ONLY its own tenant_id rows; the platform scope (`runWithPlatformScope`) reads/writes all and is the SOLE writer; a tenant can never forge a posting (WITH CHECK platform-scope-only). **APPEND-ONLY** enforced by a DB trigger `platform_ledger_append_only()` that raises on UPDATE/DELETE of the ledger tables. New `@mp/db` enum exports.
+
+**API — `apps/api/src/platform-settlement/`:**
+- `PlatformLedgerService` — the ONLY writer of `PlatformLedgerEntry`; posts are balanced (`isBalanced`) + idempotent (skip if `(sourceType,sourceRefId)` exists). Balances are always computed FROM the entries (`balanceFromEntries`), never stored mutably.
+- `CommissionService` — resolves the rate with precedence tenant+capability → tenant default → platform default → hard `DEFAULT_COMMISSION_PCT` floor.
+- `PlatformSettlementService` — the orchestrator: **online** `initiateOnlineCheckout` (derive commission, `provider.initiate`, store PENDING intent) → `confirmOnlinePayment`/`handleWebhook` (verify signature; on confirm records the tenant payment via the tenant's OWN `BillingService` — OTHER-source invoice + `pay(PLATFORM_ONLINE)` — then posts `PLATFORM_CASH↑/COMMISSION↑/TENANT_PAYABLE↑`; idempotent on intent status + ledger key + billing offline seam); `refundOnlinePayment` reverses the postings. **cash** `accrueCashCommission` posts `TENANT_RECEIVABLE↑` (tenant cashier flow untouched). **settlement** `createRun` freezes the outstanding statement, `markSettled` posts the balancing SETTLEMENT entry (payable+receivable → 0) with a reference. Pure money math isolated in `settlement.math.ts`.
+- Controllers: tenant `SettlementController` (`/settlement/statement|runs`, flag `platform.marketplace` + new `settlement.view` permission, RLS-own reads); `PlatformSettlementAdminController` (`/platform/settlement/*`, SUPER_ADMIN cross-tenant balances/statement/runs/commission/refund — the API 50's console consumes); `CheckoutController` (platform-auth `POST /platform/marketplace/checkout/:providerRef/confirm` + `@Public` signature-verified `POST /platform/marketplace/checkout/webhook`). Every money mutation audited (06).
+
+**47 booking seam.** `paymentMode` (`PAY_AT_FACILITY`|`PLATFORM_ONLINE`, default cash) added to the three booking DTOs + `BookingResult` (`checkout?`). The booking orchestrator computes gross (doctor fee / Σ test prices / Σ item price×qty from the published projections — `publishedDoctor/Tests/Products` selects extended to carry price) and, AFTER creating the tenant order, either starts an online checkout or accrues cash commission via the settlement service. Forks nothing.
+
+**Web.** Tenant Settings→Settlement island (`SettlementClient`) — read-only statement (payable/receivable/net + itemised entries + settlement runs), degrades to a clean no-access state; wired into `(app)/settings`. New `settlement.*` i18n keys EN+UR (parity) + `billMethod_PLATFORM_ONLINE`.
+
+### Permissions / flags
+New TENANT permission `settlement.view` (granted ADMIN + FINANCE; TENANT_OWNER via full-tenant default). Commission applies to `platform.marketplace`-sourced transactions only. No new feature flag (rides the 47 marketplace flag).
+
+### Verification gates
+- **typecheck:** 29/29 packages green.
+- **lint:** clean (0 errors; design-drift check passes; 1 pre-existing unrelated warning in doctor-portal).
+- **test:** api **920/920 (79 suites; +16** new `platform-settlement.spec`: balanced postings, per-tenant balance, commission precedence, online confirm + webhook-replay idempotency, forged-signature reject, failed-confirm, cash accrual + idempotency, run freeze + mark-settled + idempotency, refund reversal, provider swap**)**; db **231/231 (39 suites; +10** new `platform-settlement-isolation.spec` against the REAL 01→48 migrations in pglite: tenant reads OWN ledger/postings/runs/intents only, NULL-tenant default commission invisible to a tenant, platform scope reads all, tenant cannot forge a posting even for itself, platform-scope append works, ledger APPEND-ONLY (UPDATE+DELETE denied), fail-closed, `PLATFORM_ONLINE` enum present**)** — EXTENDS the 46/47 Ganatra floor to money. i18n parity EN+UR green (settlement keys + billMethod).
+- **build:** `turbo build` web + api green; public `/discover` unchanged (202 KB), `/settings` 204 KB — both < 250 KB budget (perf budget holds; no public surface added).
+- **isolation:** the Ganatra test holds for the platform ledger — a tenant never sees a sibling's balance/relationship; the platform never writes tenant GL beyond the tenant's own billing recording; tenant accounting (23) + shift math (21) untouched.
+- **audit:** every money mutation (checkout, confirm, refund, cash accrual, run created/settled, commission set) writes an audit row.
+- **provider-agnostic:** no gateway SDK/strings outside `@mp/payments`; provider is env config; swap proven with two mock variants.
+
+### Notes / owner-verification HALT (§6)
+This ends the 45→48 marketplace-foundation tranche. The next-step pointer is set to **HOLD** — 49+ build ONLY after the owner re-points PROGRESS.md to `specs/49-field-pools.md` and sends START/RESUME. Owner checklist: **privacy wall** (a platform patient linked to two tenants sees ONE merged timeline; tenant-1 staff never see her tenant-2 records), **marketplace** (browse logged-out; book a doctor + a lab test (home collection) + a pharmacy order across THREE tenants, all land tenant-side with marketplace badges), **money** (one online mock payment → tenant payable = gross − commission; one cash payment → commission receivable; statements itemise both; ledger balances), **look** (Inter + light surfaces + skeletons across dashboard + all four entrances). The full online + cash flows are proven at the service + DB level; end-to-end money can be driven via `POST /platform/marketplace/book/*` with `paymentMode:"PLATFORM_ONLINE"` → `/checkout/:providerRef/confirm`. The public discover booking UI keeps its pay-at-facility default (the `PLATFORM_ONLINE` seam is wired in the API/DTO; a discover-side online-pay affordance is deferred to keep the public bundle within budget — noted so it is not mistaken for complete).
+
+WORK TYPE: FEATURE (branch feature/48-platform-settlement). Ended with `[HUMAN_REQUIRED]` per spec §6 — the controller records PROGRESS and HOLDS (no auto-merge past this point until the owner verifies).
+
 ## Build-step 47 — Marketplace Discovery & Booking
 
 - **Work-type:** FEATURE. **Phase 5 / item 3 — the foodpanda surface.** Branch `feature/47-marketplace-discovery`.
@@ -1862,3 +1905,47 @@ WORK TYPE: FEATURE (branch feature/43-auth-ui-polish). Ended with `[CHECKPOINT]`
 - Screenshots were not captured in this headless environment; visual acceptance was verified by (a) the extended AA token-pair matrix in both modes, (b) compiled-CSS token inspection, and (c) a clean production build of every route.
 
 WORK TYPE: FEATURE (branch feature/45-design-system-v2). Ended with `[CHECKPOINT]`. Controller handles the staging merge.
+
+---
+
+## 49 — Field Worker Pools: Riders & Phlebotomists (`feature/49-field-pools`) — DONE (2026-07-12)
+
+**Spec:** `specs/49-field-pools.md` (+ `specs/45-53-CODEREF.md`). Phase 5 / item 5, the first step after the (now-RELEASED) 48 owner-verification halt. Depends on 46 (WorkerLink identity + platform auth), 48 (pool earnings → ledger), 25/26/34 (existing phleb/delivery flows).
+
+**What shipped.** Tenant-employed field staff keep working EXACTLY as before (purely additive); ON TOP, a SHARED PLATFORM POOL (foodpanda-style) lets one 46 platform identity (audience RIDER/PHLEBOTOMIST) serve many tenants: own-staff-first dispatch → one-at-a-time offers (accept/decline/lazy-expiry) → visible escalation, job-scoped DTOs only, and per-job earnings posting into the 48 platform ledger.
+
+**Schema (additive) + migration `20260712000000_field_pools`.**
+- New platform-level tables: `PoolWorkerProfile` (PLATFORM-ONLY, no tenant_id — roster: audience, serviceAreas JSON, dutyStatus ON/OFF, verification PENDING/APPROVED/REJECTED; `apply_platform_rls`), and three LINK tables carrying tenant_id (`apply_platform_link_rls`): `JobOffer` (state machine OFFERED→ACCEPTED/DECLINED/EXPIRED, expiresAt, area), `WorkerEarning` (workerFee/tenantFee/platformMargin/codCollected/ledgerEntryId; unique jobKind+jobRefId), `PoolJobFeeConfig` (NULLABLE tenant_id = platform default, per jobKind).
+- New enums: `DutyStatus`, `PoolVerificationStatus`, `PoolJobKind` (DELIVERY|HOME_COLLECTION), `WorkerKind` (OWN|POOL), `JobOfferState`.
+- Existing assignment rows extended: `DeliveryAssignment` + `PhlebotomistAssignment` gained `workerKind` (default OWN — existing rows unchanged) + nullable `poolWorkerId`, and their tenant-staff FK (`rider_id`/`phlebotomist_id`) was RELAXED to nullable (a POOL assignment has no tenant staff id — its worker is a platform identity). `AssignmentRow`/`AssignmentView.phlebotomistId` widened to `string|null` accordingly.
+- **48 money layer extended additively:** `PlatformAccount += WORKER_PAYABLE`, `LedgerSourceType += POOL_JOB` (schema + migration `ALTER TYPE … ADD VALUE`, mirroring 48's PLATFORM_ONLINE). New pure `poolJobPostings(tenantFee, workerFee)` in `settlement.math.ts`: Dr TENANT_RECEIVABLE tenantFee ; Cr WORKER_PAYABLE workerFee ; Cr COMMISSION_REVENUE margin (balanced; zero-margin drops the commission line). `createRun` classification extended so a POOL_JOB entry itemises as a tenant RECEIVABLE (tenant owes the platform the job fee); every existing 48 path byte-identical. `PlatformSettlementModule` now also EXPORTS `PlatformLedgerService` so 49 posts through the SAME single ledger writer (do-not-break #4).
+
+**API — new `apps/api/src/dispatch/` module (self-contained; ZERO edits to 25/26/34 services/repos/fakes — strongest do-not-break):**
+- `DispatchService`: own-first (flag off ⇒ OWN_ONLY identical to today; own field staff present ⇒ routed OWN, pool never pinged; else offer chain), eligibility via pure helpers (audience + duty ON + verification APPROVED + area match + not-already-responded, ordered by id), lazy offer expiry (no queue infra in this stack — an OFFERED offer past expiresAt is expired + re-offered on read + an admin `sweep`), accept/decline/re-offer/escalate, drive-status over the tenant job rows (delivery: rider lifecycle → order OUT_FOR_DELIVERY/DELIVERED + COD settle via the tenant's OWN billing with the SAME `online-cod-<orderId>` idempotency key as 34; collection: home lifecycle → COLLECTED), and job-scoped DTO assembly.
+- `PoolEarningsService`: resolve fee (tenant → platform default → hard fallback), post the balanced POOL_JOB entry via `PlatformLedgerService.post` (idempotent per source ref), record the `WorkerEarning`, audit. Ledger + earning always agree.
+- Reuses only the PURE `@mp/shared` transition guards (`canTransitionRider`/`canTransitionHome`/`orderStatusForDelivery`) so the state machines stay consistent without duplicating logic.
+- Controllers: `PoolController` (`/platform/pool/*`, `@Public()` + `PlatformAuthGuard`; PATIENT tokens rejected) — profile, duty toggle, offers, accept/decline, jobs, drive-status, earnings, ALL returning only job-scoped DTOs; `DispatchController` (`/dispatch/*`, staff `dispatch.manage`) — request dispatch / force pool + the tenant queue (one row per job, POOL badge + ESCALATED visibility); `DispatchAdminController` (`/platform/pool-admin/*`, `@Roles(SUPER_ADMIN)`) — roster, register/verify workers, per-job fee config, sweep.
+- Class-validator-free `parse*` DTOs (matches the rest of the API). New permission `dispatch.manage` (TENANT_OWNER/ADMIN/MANAGER/PHARMACIST/LAB_TECH). New flags `platform.pool.riders` (dependsOn `pharmacy.online`) + `platform.pool.phlebotomists` (dependsOn `lab.homeCollection`); `platform.pool.riders` added to the pharmacy + clinic_pharmacy presets (full auto-includes both).
+
+**Web.** Shared `(field)/PoolPanel.tsx` client mounted beneath BOTH the rider and phlebotomist own-staff queues — driven by the mp.platform (platform) session, NOT the staff token. Duty toggle, live offers (job-scoped), active jobs with the status lifecycle, earnings summary; SkeletonCard loading + EmptyState empties; EN+UR (33 new keys, parity green) + RTL via the entrance `dir(lang)`. Own-staff surfaces untouched.
+
+**Demo seed (staging-gated).** `seedFieldPools()` adds 2 pool riders + 1 pool phlebotomist (46 platform identities), all ON DUTY + APPROVED, covering Karachi, under `runWithPlatformScope`, plus the platform-default per-job fees. Idempotent (stable ids + upsert). Baseline `seed.ts` untouched.
+
+**Isolation (the Ganatra test extended to dispatch — HARD GATE).** New `packages/db/src/field-pools-isolation.spec.ts` (9 cases, real migrations 01→49 in pglite as non-superuser): the pool ROSTER is invisible to any tenant context (platform-scope only); a tenant reads ONLY its own offers/earnings/fee config; a tenant can NEVER forge an offer/earning (WITH CHECK platform-scope-only); the NULL-tenant default fee is invisible to tenants; fail-closed with no context; the additive 48 enums present. Service tests assert the job-scoped DTO exposes ONLY the allow-list keys and contains no patient-history/medical fields.
+
+**Gate results.**
+- typecheck: 29/29 packages green.
+- lint: clean (only a pre-existing unrelated warning in doctor-portal).
+- build: 16/16 (turbo web+api); web compiled, 48 static pages.
+- API unit/service tests: 45 suites / 470 green — incl. NEW `dispatch.spec` (14: own-first, flag-off OWN_ONLY, offer chain + decline→next→ESCALATE, area filter, lazy expiry+re-offer, delivery end-to-end with balanced POOL_JOB postings + COD settle + worker credit, idempotent re-drive, pool collection + job-scoped-DTO allow-list) + `dispatch.helpers.spec` (7 pure) + 2 new settlement-math pool assertions. (The DB-backed e2e suites require `DATABASE_URL`, unavailable in this headless sandbox — they run in the deploy pipeline exactly as for 48's `api 920`; every non-e2e suite is green here.)
+- DB isolation: field-pools-isolation 9/9 green (also validates the 49 migration SQL end-to-end).
+- i18n parity EN+UR: green (+33 keys both sides).
+
+**Decisions (recorded — no approval gates).**
+- Self-contained `dispatch` module writes the POOL assignment + drives the tenant job status directly under `runWithTenant`, rather than adding pool methods to 25/26/34 — chosen to keep those modules byte-unchanged (zero edits to their code/tests/fakes) while reusing the pure transition guards and the exact COD idempotency key so money logic never diverges.
+- "Own-first" is presence-based: a tenant with active own field staff routes OWN (pool never pinged); a tenant without draws the pool. Own staff have no duty toggle (they work exactly as today); the duty concept lives on POOL workers only. Pool engagement is additionally gated by the per-capability `platform.pool.*` flag (off ⇒ OWN_ONLY, identical to today).
+- Offer expiry is LAZY (this stack has no queue/cron): expired-on-read + an admin sweep endpoint. Logged as the deliberate mechanism.
+
+**Follow-ups (non-blocking).** A cron/queue runner would let offer expiry fire proactively rather than on-read/sweep (add when scheduler infra lands). Auto-dispatch is invoked explicitly (tenant endpoint / demo) rather than hooked into 34/25 booking creation, to keep those modules untouched — a thin post-create hook can be added later if desired.
+
+WORK TYPE: FEATURE (branch feature/49-field-pools). Ended with `[CHECKPOINT]`. Controller handles the staging merge.
