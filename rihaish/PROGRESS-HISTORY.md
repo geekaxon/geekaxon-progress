@@ -1343,3 +1343,54 @@ WORK TYPE: FEATURE (branch feature/23-pwa-mobile-shell)
 
 ### Gates
 - NOT run in-session per CLAUDE.md rule 6 (controller runs lint/typecheck/test/build/prisma generate). Self-checked by inspection: import/export names against residents/billing precedents; pass-through vs scoped model semantics in `lib/db.ts`; registry/templates/nav/rbac test brittleness (updated the one exact-list assertion in registry.test.ts). Prisma client types (Announcement*, Priority, Channel[]) require the controller's `prisma generate` before typecheck.
+
+---
+
+## Step 25 — Staff directory & attendance — DONE (2026-07-12)
+
+**Spec:** `/specs/25-staff-directory-attendance.md` (no CODEREF). Work type: FEATURE, branch `feature/25-staff-directory-attendance`.
+
+### [DECIDE AT BUILD] decisions
+- **Geofenced check-in: DEFERRED.** `AttendanceMethod` ships as `MANUAL | QR | SELF`. Manual roster marking is the default; QR = a scanned kiosk, SELF = the staff member's own app. Geofencing adds device-permission + accuracy + spoofing concerns disproportionate to v1; the enum can gain a `GEO` value later without a data migration. Rationale: spec says manual-by-default, QR optional; geofence explicitly optional.
+- **`phone` optional at the DB layer** (`String?`) even though the spec data-model wrote `phone String`, to honour the edge case "vendor staff without a phone → phone optional for VENDOR". The shared Zod schema (`refineStaff`) requires phone for PERMANENT/CONTRACT and allows it empty for VENDOR — one payload shape, type-driven validation.
+- **`LeaveRequest.status` uses a new `LeaveStatus` enum** (PENDING/APPROVED/REJECTED/CANCELLED). The spec wrote `ApprovalStatus` but no such enum exists in the schema; introduced a dedicated one rather than coupling to another module.
+- **CNIC capture reuses the existing `SocietySettings.cnicCaptureEnabled`** toggle (shared with residents step 16) rather than a new staff-specific flag — one society-level PII switch.
+- **Salary crosses the wire as a cleaned digit STRING**, not a `bigint` (BigInt is not JSON-serialisable); the service does `BigInt(...)` on store into `salaryMinor`.
+
+### Data model / migration `20260712280000_staff_directory_attendance`
+- `StaffMember` — societyId + deletedAt ⇒ AUTO-SCOPED (`lib/db.ts`): reads pin to society, `delete` → soft-delete + audit so a departed staff member's attendance/leave history is retained (spec). Unique `(societyId, employeeCode)`. Optional `userId` (may have no login), `cnicEnc` (encrypted), `photoFileId`, `department`, `vendorId`, `shift`, `salaryMinor BigInt`, `skills String[]`, `leftOn`. Indexes `(societyId, isActive)` + `(societyId)`.
+- `Attendance` — societyId, NO deletedAt ⇒ pass-through child (resolved by staffId, society-unique). Unique `(societyId, staffId, date)`; `date` is the society-local calendar day anchored to 00:00Z. Attendance is HISTORY — never deleted; a re-mark UPDATES the unique row. Index `(societyId, date)`. FK → StaffMember ON DELETE CASCADE.
+- `LeaveRequest` — societyId, NO deletedAt ⇒ pass-through. Indexes `(societyId, staffId)` + `(societyId, status)`. FK → StaffMember ON DELETE CASCADE.
+- Enums: `EmploymentType` (PERMANENT/CONTRACT/VENDOR), `Shift` (MORNING/EVENING/NIGHT/ROTATING), `AttendanceStatus` (PRESENT/ABSENT/LEAVE/HALF_DAY/HOLIDAY), `AttendanceMethod` (MANUAL/QR/SELF), `LeaveStatus`.
+- Migration hand-authored to match Prisma's generated DDL (index/constraint names verified against `@@unique`/`@@index` naming).
+
+### Registry / permissions / nav / ui-mode
+- `lib/features.ts`: `staff.directory` (deps residents.registry, core.auth, core.storage) + `staff.attendance` (dep staff.directory). DAG validates (no cycle).
+- `lib/rbac.ts`: `staff.directory.read/.manage` (gated `staff.directory`), `staff.attendance.read/.mark`, `staff.leave.approve` (gated `staff.attendance`) — so with attendance off the ∩ rule drops the attendance perms and the directory keeps working (graceful degradation). Seeded: MANAGER (all), COMMITTEE_MEMBER (directory.read + attendance.read). SOCIETY_ADMIN via `*`.
+- `lib/nav.ts`: `staff` item (icon `idCard`, group manage, perm `staff.directory.read`, feature `staff.directory`, hideOnSharedDevice).
+- `lib/ui-modes/modules.ts`: `staff` module, audience committee (built-in default PRO), supportsModes.
+
+### Society-local dates & pure rules (both unit-tested)
+- `lib/staff/dates.ts` — `societyDayString` (Intl en-CA in the society tz), `dayKey`/`dayKeyToString` (00:00Z anchor), `compareDay`, `monthDays`/`daysInMonth`. A night-shift check-OUT after midnight updates the OPEN check-in-day row (found by `checkInAt != null && checkOutAt == null`), never a new next-day row.
+- `lib/staff/rules.ts` — `assertMarkableDay` (future → `future_date_blocked`; past → `backdate_reason_required`, returns `{backdated}`), `isEmployedOn` (joined ≤ day ≤ leftOn — attendance stops at leftOn), `attendancePercent` (Σweight/counted; HALF_DAY=0.5, HOLIDAY excluded from denominator, null when nothing counted), `assertDecidable`/`assertLeaveRange`.
+
+### Service (`lib/staff/service.ts`)
+- Staff CRUD (soft delete), directory cards, Pro list + export (skill filter applied outside the generic column layer via `skills hasSome`), `getStaffDetail` (CNIC decrypt→mask last-3→`staff.cnic.viewed` audit; runs under READ scope so a READ_ONLY society still views it — audit writes are permitted in read scope, mirroring residents `getFlatPanel`).
+- `listStaffBySkill(code)` — the step-26 complaint assignment-suggestion hook (active staff whose `skills[]` has the category).
+- Roster (`getRoster` — only staff employed on the day), bulk `markAttendance` (future blocked, past reason-gated + audited, non-employed entries skipped, upsert on the unique key), `checkIn` (QR/self IN/OUT with the night-shift open-row rule).
+- Monthly grid (`getMonthlyGrid` — staff×day cells + `attendancePercent`), leave list/create/decide (approve upserts LEAVE marks across the range without overwriting existing marks).
+
+### API
+- `/api/staff` GET (directory / `?scope=manage` table) + POST; `/api/staff/:id` GET (detail) / PATCH / DELETE (soft); `/api/staff/export` (table, PII-audited via the export kit).
+- `/api/attendance` GET roster `?date=`; `/api/attendance/mark` POST bulk; `/api/attendance/check-in` POST; `/api/attendance/grid` GET + `/api/attendance/grid/export` POST (xlsx via the export kit, no PII columns).
+- `/api/leave-requests` GET (`?status=`) / POST; `/api/leave-requests/:id` PATCH (decide). HTTP mapping: future/backdate/range → 422, not-pending leave → 409, duplicate code → 409, unknown → 404.
+
+### UI (`components/staff/*`, `app/[locale]/app/staff/page.tsx`)
+- Sub-view switch: Directory (always) + Roster/Attendance/Leave (only when `staff.attendance.read`). Simple mode renders the directory as cards (call/WhatsApp, initials, skills), Pro as the data-table (export). Roster = mobile-first one-tap chips + "mark all present" + sticky save + a reason field that appears for a past day. Attendance grid = colour cells + attendance % + month nav + Excel export + legend. Leave panel = list + approve/reject + file-a-request modal. Add/edit modal (form kit: TextField/PhoneField/SelectField/MultiSelect skills/MaskedField cnic/DatePicker/SwitchField) + detail drawer (CNIC masked, edit + soft-delete confirm).
+- i18n `messages/en.json` + `messages/ur.json`: `staff.*`, `nav.staff`, `uiModes.module.staff`. RTL via logical props.
+
+### Gates (agent-run: lint + typecheck)
+- `pnpm prisma generate` ✓, `pnpm lint` ✓ (0 warnings), `pnpm typecheck` ✓. Unit (`lib/staff/dates.test.ts`, `lib/staff/rules.test.ts`) + e2e (`e2e/staff-directory-attendance.spec.ts`, auth-gate on every surface) written for the controller to run. Existing features/nav/rbac tests are membership-based and unaffected.
+
+### UI design self-check (by inspection)
+shadcn/form+table kits only · light+dark (semantic tokens) · RTL/Urdu (ms/me/ps/pe, no ml/mr) · responsive (roster one-handed on a phone) · skeleton/empty/error states · Data Table kit for the Pro list (sort/filter/search/export/card toggle) · Form kit for every input · client-side nav (no reload) · Simple + Pro both implemented · nav+actions gated by role×entitlement, re-enforced server-side · toasts (no alert) · graceful degradation with `staff.attendance` disabled.
