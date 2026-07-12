@@ -625,3 +625,67 @@ Registered `core.notifications` + `integrations.email`/`integrations.sms`/`integ
 - The step-09 password-change notification TODO is intentionally left: it needs a security category/template code outside the fixed 7-category matrix; consumers adopt `notify()` as they ship.
 
 **Checkpoint:** [CHECKPOINT] — progress marker; controller auto-approves and continues to step 12.
+
+---
+
+## 12 — worker-scheduler — DONE (2026-07-12)
+
+**Branch:** feature/12-worker-scheduler · **Spec:** /specs/12-worker-scheduler.md (no CODEREF) · **Feature:** `core.worker` (isCore, dependsOn `core.notifications`)
+
+### What shipped
+The second pm2 process is now real: a Postgres-backed job queue + a timezone-aware cron registry. Everything heavy or scheduled runs in the worker inside `withSociety`, never in a request.
+
+**Schema (migration `20260712160000_worker_scheduler`)**
+- `Job` — the queue unit: `dedupeKey String? @unique` (idempotency — a monthly run for "2026-07" can never double-generate), `status JobStatus (QUEUED|RUNNING|DONE|FAILED|DEAD)`, `attempts/maxAttempts`, `runAt` (backoff pushes it out), `lockedAt/lockedBy` (5-min stale-lock reclaim), `lastError/result`, `@@index([status,runAt])`.
+- `CronSchedule` — `@@unique([societyId,code])`, `cron` + per-schedule `timezone`, `enabled`, `lastRunAt/nextRunAt`, `@@index([enabled,nextRunAt])`.
+- `WorkerHeartbeat` — `id` (worker id) + `beatAt`; DB-backed liveness replacing the step-01 file heartbeat.
+- All three carry `societyId?` but **no `deletedAt`**, so the scoping layer treats them as infrastructure (pass-through); the worker owns them through the unscoped client. Any domain effect still runs inside `withSociety`.
+
+**`lib/worker/*`**
+- `cron.ts` (pure) — 5-field parser (`*`, literal, `a-b`, list, `*/n`, `a-b/n`; dow 0/7=Sun, DOM∨DOW when both restricted) + `nextRun(expr, from, tz)` computing the next instant strictly after `from` in an IANA timezone via `Intl.DateTimeFormat` (offset two-pass for DST zones), field-skipping with a ~5-year horizon (returns null for impossible crons e.g. Feb 30).
+- `backoff.ts` (pure) — `BACKOFF_MS = [1m,5m,30m]`; `nextStateAfterFailure(priorAttempts, maxAttempts, err, now)` → re-queue with backed-off `runAt`, or DEAD once the used attempt reaches `maxAttempts`.
+- `types.ts` / `registry.ts` — `CRON_REGISTRY` (the 9 seeded schedules: society-scoped `billing.monthly-run|late-fee|reminders`, `utility.reminders`, `complaints.sla-escalate`, `storage.retention-purge`; platform-scoped `platform.grace-check`, `notifications.retry`, `exports.cleanup`) → `JOB_REGISTRY` (kind → handler + `mutating` + `concurrency`). `skipForReadOnly(def, status)` gates mutating jobs for a READ_ONLY society; read-only/delivery jobs (reminders, notifications.retry) still run.
+- `handlers.ts` — real: `notifications.retry` → `dispatchQueued(200)` (delivery, non-mutating), `storage.retention-purge` → `sweepRetentionForSociety` + purge of grace-elapsed soft-deleted rows via the unscoped client. The other 7 are registered **stubs** (safe no-op logging the owning step: 18/19 billing, 29 utility, 26 complaints, 22 grace-check, 07 exports) so the queue/scheduler/DLQ are exercisable now and the owning module fills the handler at its step.
+- `queue.ts` — `enqueue` (idempotent: catches P2002 on `dedupeKey`, returns the existing job `created:false`), `claimNext` (`UPDATE … WHERE id = (SELECT … WHERE due OR stale-lock … FOR UPDATE SKIP LOCKED LIMIT 1) RETURNING …`, with per-kind `excludeKinds` for concurrency caps), `completeJob`/`failJob`(applies the backoff transition)/`skipJob`, and the console ops `queueStats`/`retryJob`/`killJob`.
+- `scheduler.ts` — `syncSchedules` seeds one platform row per platform code and one row per active society × society code (society timezone), recomputing `nextRunAt` only on cron/timezone drift or when unset (never steals a still-pending occurrence — satisfies the "timezone changed → nextRunAt recomputed" edge case). `tickSchedules` enqueues a job for each due schedule with `dedupeKey = cron:<code>:<society>:<occurrenceISO>` (one job per occurrence even with two workers ticking) and advances `nextRunAt`. `runScheduleNow` for "Run now".
+- `heartbeat.ts` — DB upsert every 30s; `readHeartbeat` returns the freshest beat classified up/stale/down (90s threshold).
+- `runtime.ts` — `createWorker(id)`: intervals for heartbeat (30s), schedule sync (5m), cron tick (15s), pump (2s); a per-kind + global (8) concurrency pool; each society job runs in `withSociety(societyId, …, { readOnly: status==='READ_ONLY' })`; a mutating job for a READ_ONLY society is skipped with a `job.skipped` AuditLog + DONE{skipped}; unknown kinds dead-letter; graceful shutdown drains in-flight jobs then `$disconnect`.
+- `console.ts` / `automation.ts` — platform Jobs list (data-table kit over the unscoped `Job` delegate, enriched with society slug) and the society Automation reads/mutations (every query filters `societyId` explicitly; ownership-checked toggle + run-now).
+
+**Worker process** — rewritten in TypeScript (`worker/index.ts`), run via **tsx** so it shares the app's lib code verbatim with no separate build. `package.json` `worker` script → `tsx worker/index.ts`; `ecosystem.config.cjs` worker → `node_modules/.bin/tsx worker/index.ts` (fork, `kill_timeout: 10000`). Env validation preserved (fails loud on missing keys). Added `tsx@4.23.0` devDependency (verified it resolves the `@/` tsconfig path alias).
+
+**Health** — `/api/health` `checkWorker` now reads the DB heartbeat (`readHeartbeat`) instead of the file mtime; the field is always present so the deploy gate can read it. Removed `lib/worker-heartbeat.ts` and the old `worker/index.js`.
+
+**API + permissions** — `platform.jobs.read`/`platform.jobs.manage` added to the registry (PLATFORM_ADMIN gets both, PLATFORM_SUPPORT gets read). Routes: `GET /api/platform/jobs` (`?stats=1` = queue depth; else paged/filterable list), `POST /api/platform/jobs/[id]` (`retry`|`kill`, jobs.manage). `GET /api/society/automation` (settings-read), `PATCH /api/society/automation/[id]` (enable/disable) + `POST` (`run-now`) (settings-update).
+
+**UI** — Platform **Jobs** page `/platform/jobs` (nav item added; queue-depth tiles + the job/dead-letter table on the kit with retry/kill row actions gated by status). Society **Automation** panel embedded in `/app/settings` (per-schedule label + cron + next/last run in the schedule's timezone, on/off switch, "Run now"; mutations gated by `canManage`). i18n en+ur for `platform.jobs.*`, `platform.nav.jobs`, `settings.automation.*` (incl. friendly names for the 6 society cron codes).
+
+### Decisions
+- **tsx over a compiled worker** — the whole codebase keeps business logic in `@/lib/*` TS with `@/` aliases; compiling a separate worker bundle (or duplicating logic) is worse than running the shared code through tsx. Verified tsx resolves tsconfig `paths` and the full module graph (incl. sharp/db/dispatch) loads; worker boots, logs online, and drains on SIGTERM. **[DECIDE AT BUILD]** Redis/BullMQ deferred per spec — the SKIP-LOCKED Postgres queue avoids adding a service to the free-tier box.
+- **Idempotency via `dedupeKey @unique`** — the spec's Job block had no idempotency column; added one. Cron occurrences and "Run now" mint occurrence-scoped keys so a duplicate enqueue is a no-op under a race (unique index lets one insert win).
+- **DB heartbeat replaces the file heartbeat** — honours the step-01 TODO and works even if web (pm2 cluster) and worker don't share a tmpdir. The deploy health gate now fails when the worker is genuinely down, which is the spec intent.
+- **Stub handlers for unshipped modules** — registering the cron + queue plumbing now (with a logging no-op) keeps the scheduler/DLQ exercisable and lets each owning module (17-19, 22, 26, 29, 07) drop in its handler at its step without touching the worker.
+- **READ_ONLY gating by declared `mutating`** — a handler declares whether it mutates tenant domain data; the runtime skips mutating handlers for READ_ONLY societies (+ audit) and runs read-only-safe ones (reminders enqueue `Notification`, a pass-through model, so they succeed even under a read-only scope).
+- **Automation lives inside `/app/settings`** — avoided adding a sidebar nav item (would churn `nav.test.ts` + nav-icons); "Society → Automation" is a settings subsurface, gated by the existing `settings` nav item's `society.settings.read`.
+
+### Gate results
+- `pnpm typecheck` — clean.
+- `pnpm lint` — 0 warnings/errors.
+- `pnpm test:unit` — **314 passed, 3 skipped** (+20 new: `cron.test.ts` 10, `registry.test.ts` 7, `backoff.test.ts` 3). The 3 skipped are `queue.integration.test.ts` (SKIP LOCKED double-processing, idempotency, backoff→dead-letter) guarded by `describe.skipIf(!DATABASE_URL)` — they **run against Postgres in deploy.sh/CI** (self-cleaning by test kind), satisfying the DB-dependent acceptance criteria; the timezone-correctness criterion is a pure `cron.test.ts` case (Karachi vs America/New_York).
+- `pnpm build` — success; new routes `/platform/jobs`, `/api/platform/jobs`(+`[id]`), `/api/society/automation`(+`[id]`) all present.
+- Worker smoke — `tsx worker/index.ts`: missing env → exit 1 with named error; with env + bogus DB → boots, logs `online`, catches DB errors on each interval (no crash), drains cleanly on SIGTERM.
+
+### Acceptance criteria (spec 12)
+- [x] Vitest: SKIP LOCKED claiming prevents double-processing — `queue.integration.test.ts` (DB path, deploy/CI).
+- [x] Vitest: idempotency key blocks a duplicate monthly invoice run — `queue.integration.test.ts`.
+- [x] Vitest: backoff → dead-letter after `maxAttempts` — `backoff.test.ts` (pure) + `queue.integration.test.ts` (end-to-end).
+- [x] Cron fires at the correct local time for a non-Karachi timezone — `cron.test.ts` (same `0 2 1 * *` → 21:00Z Karachi vs 06:00Z America/New_York).
+- [x] Worker heartbeat visible in `/api/health`; deploy fails if the worker is down — DB heartbeat + `checkWorker`; e2e asserts the field.
+- [x] READ_ONLY society: mutating jobs skipped, reason logged — `skipForReadOnly` (unit) + runtime skip + `job.skipped` AuditLog.
+
+### Notes / follow-ups
+- Stub handlers deliberately no-op until their module ships (17-19 billing, 22 platform grace-check → read-only flip, 26 complaints SLA, 29 utility, 07 exports cleanup).
+- PUSH delivery still lands as SUPPRESSED until step 23 wires a transport (unchanged from step 11).
+- Per-society schedules are materialised for currently-active societies on worker boot/sync; step 21 onboarding can call `syncSchedules` (or add its own `ensureSocietySchedules`) so a brand-new society is scheduled immediately rather than at the next 5-minute sync.
+
+**Checkpoint:** [CHECKPOINT] — progress marker; controller auto-approves and continues to step 13.
