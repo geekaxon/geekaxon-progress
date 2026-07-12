@@ -1949,3 +1949,54 @@ WORK TYPE: FEATURE (branch feature/45-design-system-v2). Ended with `[CHECKPOINT
 **Follow-ups (non-blocking).** A cron/queue runner would let offer expiry fire proactively rather than on-read/sweep (add when scheduler infra lands). Auto-dispatch is invoked explicitly (tenant endpoint / demo) rather than hooked into 34/25 booking creation, to keep those modules untouched — a thin post-create hook can be added later if desired.
 
 WORK TYPE: FEATURE (branch feature/49-field-pools). Ended with `[CHECKPOINT]`. Controller handles the staging merge.
+
+---
+
+## 50 — Super-Admin SaaS Console (`feature/50-saas-console`) — DONE (2026-07-12)
+
+**Spec:** `specs/50-saas-console.md` (+ companion `specs/45-53-CODEREF.md`). **WORK TYPE: FEATURE.** Phase 5 / item 6. Checkpoint step (no halt).
+
+**Goal.** Give the vendor (Marham Patti / AboveNext) its OWN portal — the aaPanel-of-the-platform — to create and run every tenant without a developer or SQL: create-tenant wizard, per-tenant flags/branding/commission, suspend/archive, marketplace listing approval, cross-tenant oversight, and an operator audit trail. A VendorAdmin is a NEW platform-level identity ABOVE tenants, distinct from tenant staff AND from the 46 platform (patient/rider/phleb) accounts.
+
+### What was built
+
+**Schema (additive PLATFORM-LEVEL section — no tenant_id) + migration `20260712100000_vendor_console`:**
+- `VendorAdmin` (email unique, passwordHash, totpSecret/totpEnabled, `VendorRole` VENDOR_OWNER|VENDOR_STAFF, `UserStatus`, failedLogins/lockedUntil), `VendorRefreshToken` (rotating family, reuse-detect), `VendorAuditLog` (actorId/action/targetTenantId/entityType/entityId/summary). All three guarded by `apply_platform_rls(...)` (the 46 helper) → readable/writable ONLY under `runWithPlatformScope`; a tenant context sees ZERO rows and cannot forge one.
+- Additive lifecycle: `TenantStatus += ARCHIVED`; `tenants.city` (nullable, the wizard field); `marketplace_listings.approved_at` / `approved_by` (the platform approval gate). Migration BACKFILLS every currently-PUBLISHED listing as approved so live/staging discovery is preserved byte-for-byte.
+- `packages/db/src/index.ts` exports `VendorRole`.
+
+**API — self-contained `apps/api/src/vendor/` (15 files):**
+- `vendor-token.service.ts` — mints/verifies vendor access (`typ:'vendor'`), single-purpose MFA-step (`typ:'vendor_mfa'`), and 3-day owner-INVITE (`typ:'vendor_invite'`, refresh-secret-signed) tokens; opaque refresh with rotation + family reuse-detection. Distinct audience → staff/46 guards reject it (CODEREF §C.3).
+- `vendor-admin.service.ts` — password login → **always** an MFA challenge (mandatory 2FA, never staging-relaxed), lockout via `LOCKOUT_THRESHOLD`/`LOCKOUT_DURATION_MIN`, first-login TOTP enroll→confirm→bundle, refresh/logout, tenant-owner `acceptInvite` (single-use: rejected once the owner has a password), admin management (create/list/disable/role) gated VENDOR_OWNER-only via `assertVendorOwner`, and a crash-proof env `bootstrapFromEnv` first-admin seed.
+- `vendor-console.service.ts` — create-tenant wizard (`provisionInner` = extracted seed logic: bare `tenant.upsert` for the global registry, then ONE `runWithTenant` for primary branch + TENANT_OWNER user [no password → invite] + `tenantFlags.upsert(preset)`), then branding/commission/marketplace-opt-in starters + invite link; per-tenant preset/flag/branding/commission edits DELEGATED to the existing `FlagService` (05), `BrandService` (45), `PlatformSettlementService`/`CommissionService` (48) each RLS-scoped under `runWithTenant`; suspend/archive/reactivate (fail-closed); owner password-reset (clear + re-invite) + 2FA-reset; marketplace listing approval queue + approve/unapprove (written under the tenant's own RLS); oversight dashboard aggregating tenant counts/preset-mix + 48 `allBalances`/`listRuns` + 49 `roster` pending-verification + recent vendor audit — **operational/financial METADATA only**. Every mutation writes a `VendorAuditLog` row.
+- `vendor.repositories.ts` (platform-scope tables + per-tenant scoped reads/writes; global tenant registry on the bare client), `vendor-auth.guard.ts` + `current-vendor.decorator.ts` (+ `assertVendorOwner`), three controllers (`vendor-auth` public: login/2fa/enroll/refresh/logout/invite-accept; `vendor` guarded: me/overview/audit/tenants CRUD+lifecycle+flags+branding+commission+owner-reset/2fa-reset/listings; `vendor/admins` guarded owner-only), `vendor.module.ts` (imports Flags/Brand/PlatformSettlement/Dispatch modules; provides TotpService locally; `OnApplicationBootstrap` → env first-admin). Registered in `AppModule`.
+- **Marketplace approval gate (47 hook):** `marketplace.repositories.ts` discovery `searchListings` + `tenantProfile` now require `approvedAt != null` (published AND vendor-approved). Existing rows backfilled; `seed-demo.ts` listings stamped seed-approved so demo discovery stays live. `PlatformSettlementModule` now also EXPORTS `CommissionService` (console reads a tenant's commission config).
+- **Config/env:** `VENDOR_BOOTSTRAP_EMAIL`/`VENDOR_BOOTSTRAP_PASSWORD` added to the zod schema + `.env.example` (placeholders; real values via server secrets). `seed-demo.ts` seeds one demo VENDOR_OWNER (`console@marhampatti.mp`, 2FA enrolls on first login).
+
+**Web — `(vendor)` entrance in `apps/web` (mirrors the 46 `(platform)` entrance):**
+- `lib/vendor-session.ts` (`mp.vendor` bundle), `lib/vendor-api.ts` (`vendorFetch/getJsonV/postJsonV`, single-flight refresh, Bearer only — no `x-tenant-slug`), `lib/vendor-nav.ts` (role-gated), `lib/vendor-me.tsx` (`GET /vendor/me` context), `public/manifest-vendor.webmanifest`.
+- `components/shell/VendorRouteGuard.tsx` + `VendorChrome.tsx` (guard + left-sidebar console chrome, ToastProvider + VendorMeProvider).
+- `(auth)/login/vendor/*` (always-MFA login + 2FA enroll/verify panel, raw auth atoms + `tr()`), `app/invite/*` (public `?token=` owner password-set).
+- `(vendor)/vendor/*` — oversight dashboard (KPIs, preset mix, recent audit, skeletons/empties), tenants DataTable, create-tenant wizard (→ copyable invite link), tenant detail (Tabs: Overview+lifecycle w/ ConfirmDialog, Flags/preset, Branding+contrast warnings, Commission, Owners reset, Listing approve), listing approval queue, admins (owner-only, EmptyState for staff) — all `@mp/ui` + `useI18n().t()`.
+- i18n: flat `vendor*` auth keys + a nested `vendor` block added to BOTH `en.json` and `ur.json` (identical key sets; parity gate green). NOT added to the public entrance chooser (console is internal/direct-URL).
+
+### Decisions (recorded, autonomous — no approval gate)
+- **Owner invite** = a dedicated 3-day `vendor_invite` JWT (single-use, enforced by a null-password guard on the tenant User) rather than reusing the 30-min staff reset token; the invited owner sets the first password via `POST /vendor/invite/accept`, then logs in via the STAFF entrance and enrolls 2FA (TENANT_OWNER mandate). Notifications degrade gracefully — the invite link is returned in the wizard response for the operator to relay (matches the staging staff-reset log behavior).
+- **Approval gate scope:** enforced on the two DISCOVERY read paths (list + detail-by-slug). Booking projections (47) are left keyed on `status = PUBLISHED` only — an unapproved listing is simply undiscoverable (not navigable), and approval is a platform curation gate, not a cross-tenant isolation boundary, so this keeps the 47 booking blast radius zero.
+- **First vendor admin** via crash-proof env bootstrap (production-safe, secrets-driven) AND a staging demo-seed VENDOR_OWNER (turnkey staging login). Both create-if-absent.
+- **Reuse over re-implement:** the console never gets raw cross-tenant SQL — flags/branding/commission go through the existing services under `runWithTenant`; oversight uses the existing 48/49 platform-scope aggregates. Only additive edits to other modules: export `CommissionService` (48), gate discovery on `approvedAt` (47), seed-demo approvals + demo admin (41).
+
+### Gate results
+- **typecheck:** all packages green (48-task `turbo typecheck lint build` run: 48/48 successful).
+- **lint:** clean (the single remaining warning is pre-existing in `doctor-portal.repositories.ts`, untouched here).
+- **build:** `turbo build` green — web 7/7 (new routes `/login/vendor`, `/invite`, `/vendor`, `/vendor/tenants`, `/vendor/tenants/new`, `/vendor/tenants/[id]`, `/vendor/listings`, `/vendor/admins`), api 13/13.
+- **API unit tests:** 46 suites / **482** passed (+12 new in `vendor.spec.ts`: token-audience isolation, mandatory-2FA + lockout + no-enumeration, VENDOR_OWNER-only admin mgmt + self-disable guard, provisioning + single-use invite, duplicate-slug reject, suspend/archive audit, listing-approval gate toggle, oversight metadata-only + tenant-detail key allowlist with zero medical fields). *(API `*.e2e.spec.ts` need the deploy DB and run in the pipeline, as for 48/49.)*
+- **DB isolation:** 41 suites / **246** passed (+6 new in `vendor-isolation.spec.ts`, real migrations 01→50: tenant context reads ZERO vendor admins/audit + cannot INSERT them, no-context zero, platform scope reads/writes, additive `tenants.city` + `marketplace_listings.approved_*` columns present).
+- **i18n parity:** 3 suites / 19 passed — vendor EN+UR key sets identical (hard gate).
+- **Isolation / Ganatra test:** EXTENDED to the console — the console reaches zero medical data (API allowlist test) and the vendor operator tables are platform-RLS-only (DB test). 46/47/48/49 suites stay green.
+- **Feature-flag gate:** ➖ the console MANAGES flags; it is not itself gated by a tenant flag. Vertical smoke unaffected (marketplace approval gate is additive; discovery preserved via backfill + seed-approval).
+- **`.env.example`:** updated with `VENDOR_BOOTSTRAP_EMAIL`/`VENDOR_BOOTSTRAP_PASSWORD` placeholders; no secrets committed.
+
+**Follow-ups (non-blocking).** Owner invite is returned in the API response (operator relays it) rather than pushed through the 09 notifications engine — a notifications-backed send can be wired later without changing the token/accept contract. A future step could optionally gate 47 booking on `approvedAt` too (currently only discovery), if platform policy wants unapproved listings fully non-bookable.
+
+WORK TYPE: FEATURE (branch feature/50-saas-console). Ended with `[CHECKPOINT]`. Controller handles the staging merge.
