@@ -15,6 +15,7 @@ Build-loop mechanics live in `CLAUDE.md` (controller-managed). This file is **wh
 10. **Utility-bill amounts never enter the maintenance ledger.** Notices are reminders, not receivables.
 11. **CNIC and other sensitive PII**: encrypted at rest, masked in UI (last 4), never in logs, never exported without an audit entry.
 12. **Cross-tenant reads are impossible.** A tenant host can never reach a platform route, and vice versa — including via the screenshot token.
+13. **Never assert exact equality against a growing global registry** (cron, features, nav, templates, permissions). Assert that required entries are present, plus invariants (uniqueness, validity, handler exists). Registries are append-only by design; a test that forbids appending is a broken test.
 
 ## 2. Per-module workflow
 **The build loop, branch naming (`feature/<NN-slug>` / `fix/<slug>`), the mandatory `WORK TYPE:` line, the no-self-merge rule and the PROGRESS-file update rules all live in `CLAUDE.md`. Follow it — do not re-derive them from here.** This section only adds what is specific to Rihaish:
