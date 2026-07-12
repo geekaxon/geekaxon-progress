@@ -1574,3 +1574,52 @@ Added `utility.notice.reminder` + `utility.notice.amount_added` templates (en+ur
 `pnpm prisma generate` ✓, `pnpm lint` ✓ (fixed jsx-no-literals in the client), `pnpm typecheck` ✓. Did NOT run test:unit/test:e2e/build per CLAUDE.md — controller runs full gates. Tests written: `lib/utility/rules.test.ts` (reminder cadence incl. stop-on-paid/dismiss/due-pass), `lib/utility/architecture.test.ts` (never-ledger), `e2e/utility-bill-notices.spec.ts` (401 on every endpoint).
 
 WORK TYPE: FEATURE (branch feature/29-utility-bill-notices)
+
+## 30 — expenses-accounts — DONE (2026-07-12)
+
+**Feature:** `expenses.core` (deps `billing.ledger`, `core.storage`; `staff.directory` is a SOFT dep — runtime-checked via `isEnabled`, NOT a DAG edge, so enabling expenses never forces the directory on). Registered in `lib/features.ts`. The ui-mode module `expenses` was already pre-registered (`lib/ui-modes/modules.ts`, audience committee → default PRO); no change there.
+
+**Spec:** /specs/30-expenses-accounts.md (AUTHORITATIVE). "Where the union's money went." Collection without expense transparency is half a product.
+
+### Hard rule (architecture test)
+`lib/expenses/architecture.test.ts` statically forbids `@/lib/billing/`, `@/lib/charges/`, `ledgerEntry`, `.invoice.create` in every `lib/expenses/*.ts` (non-test). An expense NEVER creates a `LedgerEntry` and never touches a flat's maintenance balance — expenses are the society's books, not a resident's dues. Income for the account summary is read by AGGREGATING the `Payment` table directly (status CLEARED) — a read, never a ledger write — so no billing-module import is needed (kept the FORBIDDEN list airtight; had to reword a service.ts comment that literally contained `@/lib/billing/` so the test itself stays green).
+
+### Data model — migration `20260712320000_expenses_accounts`
+- New enum `ExpenseStatus` (DRAFT/PENDING_APPROVAL/APPROVED/REJECTED/PAID/VOID). Reused existing `PaymentMethod` (spec restricts the Zod layer to CASH/CHEQUE/BANK_TRANSFER).
+- `ExpenseHead` (societyId+deletedAt → auto-scoped; self-relation parent→sub-head `HeadSubHead`; unique [societyId,code]; isActive).
+- `Vendor` (auto-scoped; contactPerson/phone/email/ntn/category; soft-remove modelled as `isActive=false` so historical expenses keep showing the vendor, flagged — spec edge case).
+- `Expense` (auto-scoped; gapless per-society `voucherNumber` "RUFI-EXP-2026-07-0031"; headId/vendorId?/staffId?; amountMinor BigInt; paymentMethod; attachments String[] StoredFile ids; status; approvedBy/At, rejectedReason, voidedAt/voidReason, recordedBy; unique [societyId,voucherNumber]; index [societyId,expenseDate,headId] + [societyId,status]).
+- `Budget` (auto-scoped; unique [societyId,headId,period] where period is "2026-07" or "2026").
+- Infra pass-through (societyId-keyed, no deletedAt): `ExpenseSettings` (requireApproval, approvalThresholdMinor?, publishToResidents, voucherPrefix default "EXP"; FK→Society) + `ExpenseSequence` (@@id [societyId,prefix,year,month]).
+- Migration hand-written to repo convention (scalar lists as bare `TEXT[]`, matching utility's `targetIds`). `pnpm prisma generate` clean.
+
+### Numbering
+Voucher = `{societyPrefix}-{docCode}-{YYYY}-{MM}-{seq4}`. societyPrefix ← `BillingSettings.invoicePrefix` (fallback society name → "SOC"); docCode ← `ExpenseSettings.voucherPrefix`. `seq` allocated inside the create txn via atomic `INSERT … ON CONFLICT DO UPDATE` on `ExpenseSequence` (same gapless mechanism as invoices/receipts/passes). A VOIDED expense keeps its number (void is a status flip, never a delete / never re-allocates).
+
+### lib/expenses/
+- `constants.ts` — pure enum tuples, `SPEND_COUNTED_STATUSES` (APPROVED∪PAID = actual money out), `HEAD_PRESETS` (salaries/electricity/lift-maintenance/water-tanker/security/cleaning/repairs/generator-fuel), `VOUCHER_DOC_CODE`, `SALARY_HEAD_CODE`.
+- `rules.ts` (vitest `rules.test.ts`) — `formatVoucherNumber`/`normalizePrefix`; `requiresApproval` (off→never; on+no threshold→always; on+threshold→strictly ABOVE, so below/equal SKIP approval); `initialStatus`; `accountSummary` (opening+income−expense=closing, all BigInt; hand-computed fixture 200k+644k−512k=332k, income−expense=132k matching the Simple card); `budgetVariance` (exceeded flag, %; over-budget warns, never blocks); `isUnsupported` (no receipt & not void/rejected).
+- `actor.ts` — perms EXPENSES_READ/RECORD/APPROVE/MANAGE; `requireExpenseMember` (any authed member, for the resident transparency view), `requireExpenseActor(req,perm)`, `getExpenseServerActor` (RSC), isCommittee/canRecord/canApprove/canManage, runReadScope/runWriteScope (fold impersonation-RO + READ_ONLY society → 423), expenseCtx. Mirrors `lib/utility/actor.ts`.
+- `http.ts` — `expenseErrorResponse` (ExpenseRuleError→422; ExpenseError code sets →404/403/409/422/400; Zod→400; else shared authErrorResponse) + parseBody + parseListQueryFromUrl.
+- `columns.ts` — Pro expense table ColumnConfig (voucher/description searchable, headId/vendorId/status/paymentMethod enum filters, amount+expenseDate sortable) + export cells; head/vendor names + has-receipt derived by the service.
+- `service.ts` — settings ensure/get/update; heads CRUD+seed (+ensureSalaryHead); vendors CRUD (isActive deactivate); expense create (approval decision → DRAFT/PENDING_APPROVAL/APPROVED)→updateDraft (throws `not_editable` past DRAFT — the immutability gate)→submit→approve→reject→markPaid→void (keeps voucher); listExpenses/getExpense (decorate head/vendor names, vendorDeleted, unsupported); budgets setBudget(upsert)/listBudgets(variance)/deleteBudget; `getAccountSummary(period)` (opening = net of all prior activity, income = CLEARED payments, expense = counted, byHead groupBy, cash/bank split, unsupportedCount); `residentAccounts` (published-only; head-level aggregates + monthly trend + totals; NO vendor, NO per-staff — the transparency guarantee); `generateSalaryDrafts` (staff.directory-gated → 422 `staff_directory_off`; one DRAFT per active staff with salary); `getOverview` (page bootstrap).
+- `schemas/expenses.ts` — shared Zod (head/vendor/expense create+update, reject/void/markPaid, budget, salaryDraft, settings). Amounts are non-negative minor-unit ints (client parses money→minor before send), mirroring utility.
+
+### Permissions (lib/rbac.ts)
+`expenses.read` (COMMITTEE_MEMBER, MANAGER, ACCOUNTANT) · `expenses.record` (ACCOUNTANT, MANAGER) · `expenses.approve` (COMMITTEE_MEMBER, MANAGER) · `expenses.manage` (MANAGER). All gated by `expenses.core` (∩ rule). Residents hold NO perm — the published transparency view is authenticated-member only. SOCIETY_ADMIN via wildcard.
+
+### API
+`/api/expense-heads` (GET/POST) + `/[id]` (PATCH) + `/seed` (POST) · `/api/vendors` (GET/POST) + `/[id]` (PATCH) · `/api/expenses` (GET overview | `?scope=list` Pro table; POST create) + `/[id]` (GET/PATCH) + `/[id]/{submit,approve,reject,void,mark-paid}` (POST) + `/salary-draft` (POST) + `/settings` (GET/PUT) · `/api/budgets` (GET/POST) + `/[id]` (DELETE) · `/api/accounts/summary?period=` (GET) · `/api/me/society-accounts` (GET, resident, `{published:false}` when off).
+
+### UI
+Page `app/[locale]/app/expenses/page.tsx` (feature-gated; branches committee vs resident). Client `components/expenses/expenses-client.tsx` (`useUiModule("expenses")` Simple/Pro): committee console — month summary card (Collected/Spent/Balance + cash/bank + unsupported count), tabs Add/Expenses/Approvals(badge)/Budgets/Vendors/Settings gated by perms; Add-expense Simple flow (category tiles → amount → description → vendor/method → date → receipt capture, save-draft/record); expense list (Simple cards / Pro table, unsupported+vendor-inactive flags, detail drawer with approve/reject(reason)/mark-paid/void(reason)); budgets vs actual bars; vendor add/list; settings (requireApproval, threshold, publish toggle). Resident view — published-only spend-by-head bars + income/expense/balance. Nav item `expenses` (icon `wallet`, group `main`, feature-only gate so residents can reach the published view; hideOnSharedDevice). i18n en+ur full `expenses.*` namespace + `nav.expenses`.
+
+### Deliberate scope decisions (recorded, no approval gate)
+- NO worker cron and NO notification templates/category: spec 30 requires neither (approvals are a pull queue, salary batch is a manual button). Kept the worker/notification registries untouched.
+- Salary batch creates DRAFT expenses (committee reviews then submits/approves).
+- "Expense" for the summary counts APPROVED∪PAID (committed money); DRAFT/PENDING/REJECTED/VOID excluded.
+
+### Gates
+`pnpm prisma generate`, `pnpm lint`, `pnpm typecheck` all clean. Did NOT run test:unit/e2e/build (controller runs full gates). Acceptance-criteria unit tests written (`rules.test.ts` for numbering/threshold/summary/variance/receipt-flag; `architecture.test.ts` for the no-ledger rule). e2e `e2e/expenses-accounts.spec.ts` (401 on every endpoint).
+
+WORK TYPE: FEATURE (branch feature/30-expenses-accounts)
