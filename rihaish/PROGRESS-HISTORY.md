@@ -2387,3 +2387,26 @@ back-fill migrations); the migration set was regenerated as ONE clean init.
 - The one-society-holds-towers+houses+shops billing scenario is exercised by the pure resolver tests
   (property-type + node ladder + PER_QUANTITY); a dedicated DB integration test for a single mixed invoice
   run is a candidate follow-up.
+
+## 47 — platform-bootstrap & deployability — DONE (2026-07-13)
+
+**Branch:** feature/47-platform-bootstrap · **Feature code:** platform.bootstrap (isCore). Spec: /specs/47-platform-bootstrap.md + 47-47-CODEREF.md.
+
+**Problem solved:** a fresh deploy was unusable — empty Feature table, no PLATFORM_ADMIN, so nobody could reach /platform and no society could be created. syncFeatureRegistry() existed but nothing called it; platform roles (syncPlatformRoles, already present in lib/roles.ts) were never seeded on deploy.
+
+**What shipped:**
+- lib/bootstrap.ts — shared core: assertDbReady (clear message on unmigrated/unreachable DB, not a Prisma stack trace), runBootstrap (DAG integrity check → syncFeatureRegistry → syncPlatformRoles → count admins, idempotent, never creates a user), countPlatformAdmins, createPlatformAdmin (societyId null, ACTIVE, mustEnrolTotp=true; refuses a second admin unless forceAdd; generates+returns a strong password to print once; SYSTEM audit "platform.admin.bootstrapped"). Typed errors PlatformAdminExistsError / DatabaseNotReadyError.
+- scripts/bootstrap.ts (pnpm bootstrap) and scripts/bootstrap-admin.ts (pnpm bootstrap:admin, arg-parsed --email/--phone/--password/--force-add). Added both to package.json.
+- lib/entitlements.ts — syncFeatureRegistry now calls assertFeatureRegistryIntegrity() (exported; assertValidDag on FEATURE_DAG, throws MissingDependencyError/FeatureCycleError before any write) and, per golden rule #1, never hard-deletes a vanished code: a Feature no longer in lib/features.ts is flagged deprecated=true (warns if still referenced by a SocietyEntitlement), un-deprecated if it reappears. Return type now { count, deprecated[] }.
+- TOTP second factor (spec requires the bootstrapped admin enrol before any /platform route): dependency-free RFC 6238 in lib/auth/totp.ts (base32, HMAC-SHA1, generate/verify with ±1 step, otpauth URI). Schema: User.mustEnrolTotp/totpSecret/totpEnrolledAt; Feature.deprecated. AuthContext gains pendingTotpEnrolment. Platform layout renders the enrolment gate (components/platform/platform-enrol-totp.tsx, form kit) instead of the console while pending; requirePlatform 403s pending callers; the enrol route (app/api/platform/totp/enrol) guards on new requirePlatformOperator (skips the gate) — POST {} mints/returns the secret, POST {code} verifies + clears the flag + audits "platform.totp.enrolled". i18n keys platform.enrolTotp (en + ur).
+- /api/health — added bootstrap { featuresSeeded, platformAdmins, ready }; ready=false (503) when features unseeded or no admin.
+- deploy.sh — pnpm bootstrap after migrate deploy, before gates; pm2 restart + health port now branch-aware (the ecosystem rename forces this so a staging deploy never touches production processes). CI — same Bootstrap step after migrate deploy.
+- ecosystem.config.cjs — replaced the single 2-process config with four: rihaish-web-staging (cluster×2, 127.0.0.1:39330), rihaish-worker-staging (fork), rihaish-web (cluster×2, :39331), rihaish-worker (fork); web bound to 127.0.0.1 (nginx-only); cwd via RIHAISH_STAGING_CWD/RIHAISH_PROD_CWD. worker/index.ts asserts tsx resolvable at boot (fails loudly on a --prod install). .env.example: PLATFORM_ADMIN_PASSWORD + the two cwd vars.
+
+**Migration:** hand-edited the single 0000000000000_init/migration.sql (repo pattern — step 46 did the same) to add the User TOTP columns + Feature.deprecated; ran prisma generate.
+
+**Tests:** lib/auth/totp.test.ts (pure: roundtrip, ±1 window, reject far/other-secret/malformed, otpauth URI, KAT). tests/unit/bootstrap.integration.test.ts — DAG integrity (pure: real registry passes, unregistered edge throws MissingDependencyError) + Postgres-backed: full feature+role seed, twice-idempotent, exactly-one admin with mustEnrolTotp true + SYSTEM audit + password hash verifies, refuses second without force-add, supplied-password path. e2e/bootstrap.spec.ts — health readiness shape; anonymous 401 on enrol + society-create; env-gated full flow login → TOTP-gate 403 → enrol → create society.
+
+**Decisions:** (1) TOTP is not a pre-existing subsystem; built it minimally but real (dependency-free) since the spec + e2e require enrolment before console access — kept the UI to the enrolment gate only. (2) Placed bootstrap logic in lib/bootstrap.ts (not just scripts/) so vitest, which only includes lib/schemas/tests-unit, actually runs the coverage; scripts are thin CLIs. (3) Added lib/bootstrap.ts to the db.unscoped() eslint allow-list (platform-level code). (4) Made deploy.sh branch-aware to avoid the ecosystem rename regressing staging into production processes.
+
+**Gates:** pnpm prisma generate ✓, pnpm lint ✓ (added lib/bootstrap.ts to unscoped override), pnpm typecheck ✓. Did not run test:unit/e2e/build (controller runs them).
