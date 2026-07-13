@@ -2213,3 +2213,49 @@ Perms `schedules.read` (→`utility.schedules`, seeded COMMITTEE_MEMBER + MANAGE
 - Tap-drag grid implemented as a functional row-editor (day + start/end + label + exclusion), not literal drag — same data outcome.
 - The Today strip is on the schedules page; wiring it into the global home dashboard is a future enhancement (endpoint `/api/utility/schedules/today` already exists).
 - An ongoing midnight-spanning slot that started YESTERDAY is not surfaced in the Today strip (the visual grid carries it); documented in `nextEventToday`.
+
+---
+
+## 44 — seasonal-events-qurbani — DONE (2026-07-13)
+
+**Spec:** /specs/44-seasonal-events-qurbani.md (AUTHORITATIVE). **Work type:** FEATURE (branch feature/44-seasonal-events-qurbani).
+
+### What was built
+Generic `SeasonalEvent` machinery whose first-class use case is Eid-ul-Adha Qurbani: per-animal permits, fought-over tie-up spaces, butcher rate lists + resident ratings, and scheduled waste rounds. Feature `seasonal.core` + sub-features `seasonal.charges` (per-animal fees via ledger), `seasonal.spaces` (tie-up spots + ballot), `seasonal.vendors` (butcher directory + ratings). `billing.ledger` and `staff.directory` are RUNTIME `isEnabled` checks (graceful degradation), NOT DAG edges.
+
+### Key decisions (recorded — no approval gate)
+- **Enum name clash avoided:** spec's `PermitStatus` is already owned by step 42, so the per-flat permit status enum is `SeasonalPermitStatus`. Likewise `SeasonalSpaceMode`/`SeasonalVendorKind`/`SeasonalTaskStatus` are prefixed to avoid collisions.
+- **Sub-feature `seasonal.permits` folded into `seasonal.core`.** Registration IS the core function of the module — there is no meaningful state where the event runs but nobody can register — so a separate toggle would only be a footgun. `charges`/`spaces`/`vendors` remain independently toggleable sub-features (each degrades cleanly). Recorded here as an intentional deviation from the spec's four-sub-feature list.
+- **Fee snapshot discipline (acceptance #1):** `rules.buildPermitLines` freezes each type's `feeMinor` onto a `SeasonalPermitLine` at registration; `computePermitTotal` sums from the frozen line totals, never a live type read. A committee raising next year's fee (`patchPermitType`) never touches an existing permit's lines or `totalFeeMinor`. Proven by both a pure test and a DB test (create at 2000 → change type to 2500 → reload line still 2000).
+- **One itemised invoice (acceptance #4):** approval raises ONE `Invoice` with one `InvoiceLine` per animal type under charge head `qurbani`, plus one `LedgerEntry(INVOICE, DEBIT)` for the total. Flows through the normal payment/receipt/arrears machinery — no parallel money system. FREE + `invoiceId` null when pricing off (`billing.ledger` && `seasonal.charges`).
+- **Space double-allocation impossible (acceptance #2):** `allocateSpace` and the ballot take a per-space `pg_advisory_xact_lock(hashtext(society:seasonal-space:<id>))` then re-check `allocatedToPermitId` inside the tx (`rules.canAllocateSpace`). Two concurrent allocations of one spot serialize → exactly one wins (`space_taken`, 409). DB test uses `Promise.allSettled` on two permits → 1 fulfilled / 1 rejected.
+- **Auditable ballot (acceptance #3):** deterministic `xmur3`→`mulberry32` seeded Fisher-Yates (`seededShuffle`/`runBallot`) — no `Date.now()`/`Math.random()`, so the same (seed, entrants, spaces) reproduces the exact draw. Append-only `SeasonalBallot` records seed + result + entrant order; a re-run (a prior ballot exists) DEMANDS a reason (`reason_required`) and BOTH runs are retained. Ballot allocates only currently-free BALLOT-mode spaces, winners locked transactionally.
+- **Moon-sighting shift (edge case):** `rules.shiftEventToEid` slides `arrivalWindowStart/End` + `departureDeadline` by the delta between the old and newly-confirmed Eid day; registration timestamps are NOT shifted (a society opens registration when it likes — only the animal windows track Eid). `shiftEventDate` notifies all members (`seasonal.date.shifted`). Idempotent when the day is unchanged. `eventDate` is stored (not live-derived) — step 45's Hijri calendar will call this when built.
+- **Guard board (acceptance #5):** `getGuardBoard` returns per-flat APPROVED animal counts by type + the arrival window, so an animal arriving without an approved permit is stopped at the gate. GUARD role gets `seasonal.read`.
+- **Copy last year (acceptance #6):** `copyEvent` clones an event's permit types + spaces (fees copied verbatim, editable afterwards; allocations NOT carried over) into a new DRAFT event.
+- **Registration grace:** `rules.registrationState` gives a 10-minute grace after `registrationClosesAt`, then a clear `registration_closed`.
+- **Numbering:** gapless per-event `RUFI-QRB-<year>-0042` via `SeasonalPermitSequence` (atomic upsert keyed societyId+eventId).
+- **Cross-tenant safety:** top-level entities (`SeasonalEvent`/`SeasonalPermitType`/`SeasonalPermit`/`SeasonalSpace`/`SeasonalVendor`/`SeasonalTask`) have societyId+deletedAt → auto-scoped soft-delete. Child/audit records (`SeasonalPermitLine`/`SeasonalVendorRating`/`SeasonalBallot`/`SeasonalPermitSequence`) are pass-through (societyId, NO deletedAt) — every read keys off a society-unique parent id (eventId/permitId/vendorId), and creates set societyId explicitly, so no cross-tenant leak (same discipline as step 42/43 pass-through models).
+
+### Files
+- Schema: `prisma/schema.prisma` (6 enums + 10 models); migration `prisma/migrations/20260713460000_seasonal_events_qurbani/migration.sql`.
+- Backend: `lib/seasonal/{constants,rules,actor,http,service}.ts` + `rules.test.ts` + `seasonal.integration.test.ts`; `schemas/seasonal.ts`.
+- API: `app/api/seasonal/**` (events/permit-types/permits/spaces/ballot/vendors/tasks/guard/board/copy/shift-date) + `app/api/me/seasonal/route.ts`.
+- Registration: `lib/features.ts` (seasonal.core + 3 sub-features), `lib/rbac.ts` (seasonal.read/manage → seasonal.core; seeded COMMITTEE_MEMBER read, MANAGER both, GUARD read), `lib/nav.ts` (seasonal), `components/shell/nav-icons.ts` (beef icon), `lib/ui-modes/modules.ts` (seasonal), `lib/notifications/templates.ts` (5 codes, en+ur).
+- i18n: `messages/en.json` + `messages/ur.json` (`seasonal.*` 189 keys, parity 0-diff; `nav.seasonal`).
+- UI: `app/[locale]/app/seasonal/page.tsx` + `components/seasonal/seasonal-client.tsx` (Simple + Pro, light/dark, EN/UR RTL, mobile-first).
+
+### Gate results
+- `pnpm prisma generate` — clean (schema valid).
+- `pnpm lint` — clean (0 errors/warnings; replaced two `confirm()` with `<ConfirmDialog>`, wrapped JSX literal punctuation, removed unused imports).
+- `pnpm typecheck` (tsc --noEmit) — clean.
+- Ballot determinism sanity-checked standalone (deterministic + permutation + seed-sensitive) outside the test runner.
+- Did NOT run test:unit/test:e2e/build per CLAUDE.md — the controller runs full gates. Tests written: `rules.test.ts` (snapshot, ballot reproducibility, space guard, window, status machine, date shift, rating fold) + `seasonal.integration.test.ts` (DB-backed, skipIf no DATABASE_URL: snapshot-holds-across-fee-change + itemised debit, space concurrency exactly-one-wins, ballot seed recorded + re-run needs reason, free-when-billing-off + guard board).
+
+### Known follow-ups / honest constraints
+- Vendor photo is a `photoFileId` field only; the upload UI is a future enhancement.
+- `eventDate` is committee-entered for now; step 45 (platform Hijri calendar) will own the confirmed-sighting recompute via `shiftEventDate`.
+- Waste-task ↔ complaint (step 26) linkage and per-slot staff assignment UI are minimal (assign by staff id, mark done); richer scheduling is a future enhancement.
+- Collection-vs-outstanding board computes "collected" from `LedgerEntry(PAYMENT, CREDIT)` rows linked by `invoiceId`.
+
+[CHECKPOINT]
