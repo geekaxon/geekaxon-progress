@@ -2152,3 +2152,64 @@ en+ur `cctv.*` (99 keys) + `nav.cctv`. Genuine Urdu, RTL. Parity 0-diff (recursi
 **Gates:** `pnpm prisma generate` OK. `pnpm lint` clean. `pnpm typecheck` clean. `pnpm test:unit`/`test:e2e`/`build` deliberately NOT run (controller runs full gates). Pure `rules.test.ts` (40 assertions) + DB-backed `permits.integration.test.ts` (5 acceptance cases) written.
 
 **Acceptance criteria coverage:** fast-track never fee/deposit + auto-approve (test 1 + rules) ✓; funeral works READ_ONLY (test 2) ✓; two permits can't share an area/time (test 3, concurrency) ✓; approved chargeable → one ledger debit snapshot + deposit refund credit (test 4) ✓; renovation emits worker passes when gatepass on / silent when off (test 5) ✓; funeral gentle language + guard banner + no fee shown (UI + templates + getActiveFunerals) ✓; light/dark + EN/UR RTL + mobile-first + Simple+Pro (permits-client.tsx, logical Tailwind tokens) ✓.
+
+---
+
+## 43 — utility-schedules-notices — DONE (2026-07-13)
+
+**Feature:** `utility.schedules` (main) + sub-features `utility.outages`, `utility.external_notices`. Deps: `residents.registry`, `core.notifications`, `core.storage`, `core.worker`. Reuses `UtilityProvider` (step 29) but is INDEPENDENT of `utility.notices` (step 29 tracks BILLS/money; step 43 tracks TIME).
+
+### Hard rules honoured
+- **Wall-clock, never shifted by UTC.** Slot `startTime`/`endTime` are society-local `"HH:mm"` strings. `lib/schedules/rules.ts` NEVER constructs a `Date` from a slot string; it reads `zonedParts(now, tz)` (Intl `en-CA` h23 formatToParts → dayKey/dayOfWeek/minutes-of-day) and compares minutes-of-day. Proven: a 14:00 slot is 30 min away at local 13:30 in BOTH Asia/Karachi and Europe/London (25 vitest in `rules.test.ts`).
+- **Never touches the ledger** (same as step 29). `lib/schedules/architecture.test.ts` (6) forbids `@/lib/billing`/`@/lib/charges`/`ledgerEntry`/`invoice.create` in every non-test file under `lib/schedules/`.
+- **Midnight-spanning slot** (22:00–02:00 → `end<=start`) renders as TWO display segments (`slotDisplaySegments`) but fires ONE reminder (keyed off the start).
+- **Eid/holiday exclusion**: an `isExclusion` slot matching a date suppresses ALL reminders + the Today strip for that date (`isExcludedDate`).
+
+### Data model (migration `20260713450000_utility_schedules_notices`)
+- Enums: `ScheduleKind` (LOADSHEDDING|GAS_AVAILABILITY|GAS_SUSPENSION|WATER_SUPPLY|WATER_TANKER|GENERATOR_HOURS|LIFT_MAINTENANCE), `ServiceNoticeKind` (PLANNED_SHUTDOWN|UNPLANNED_OUTAGE|WATER_SHORTAGE|CLOSURE|ROAD_WORK|GOVERNMENT|OTHER), `NoticeSeverity` (INFO|WARNING|CRITICAL), `ServiceNoticeStatus` (DRAFT|PUBLISHED|ONGOING|RESOLVED|CANCELLED). Reuses existing `TargetType` + `Channel`.
+- `UtilitySchedule` (scoped: societyId+deletedAt; soft-delete). **DECISION**: `providerId` made NULLABLE (spec wrote `String`) — GENERATOR_HOURS/LIFT_MAINTENANCE are society-internal with no provider; a required FK could not express them. FK `onDelete SetNull`.
+- `ScheduleSlot` (pass-through: societyId, NO deletedAt), FK→schedule `onDelete Cascade`. `dayOfWeek Int?` (null=every day), `specificDate DateTime?` (one-off, stored UTC-midnight, compared via `specificDateKey`), `startTime`/`endTime` strings, `isExclusion`.
+- `ServiceNotice` (scoped), `remindBeforeMinutes Int[] @default([1440,120])`, dedupe cols `remindersSent Int[]` + `startReminderSent Boolean`, `channels Channel[]`, `@@index([societyId,status,startAt])`. FK provider `onDelete SetNull`.
+- `ServiceNoticeConfirmation` (pass-through) `@@unique([noticeId,userId])` — the "mine too" aggregation, idempotent. FK→notice Cascade.
+- `ScheduleReminder` (pass-through) `@@unique([scheduleId,userId])` — resident opt-in "remind me before" + `leadMinutes`. FK→schedule Cascade.
+- `ScheduleSlotReminderLog` (pass-through) `@@unique([userId,slotId,dayKey])` — per-day slot-reminder dedupe.
+- `UtilityProvider` gains back-relations `schedules`/`serviceNotices`.
+
+### Cross-tenant care (recorded)
+Pass-through models (societyId but NO deletedAt) are NOT auto-scoped by `lib/scoping.ts`. Fixed: `sweepScheduleReminders` filters `scheduleReminder.findMany({ where:{ societyId, isActive:true }})` explicitly; every other pass-through read keys off already-society-scoped parent ids (scheduleId/noticeId from scoped queries) or the caller's userId. `createMany`/`create` on these stamp `societyId` manually.
+
+### Reminders (worker)
+`schedules.reminders` cron `*/15 * * * *` society-scoped, `mutating:true` (READ_ONLY skipped by runtime), handler `runScheduleReminders` feature-gated on `utility.schedules`. `sweepScheduleReminders`:
+- SLOT reminders: for each opt-in active `ScheduleReminder`, skip if schedule inactive or day excluded; `slotReminderDue` (pure) fires when the slot applies today & start is within lead & still future; dedupe via `ScheduleSlotReminderLog` unique (P2002→skip); notify `schedule.slot.reminder`.
+- NOTICE reminders: `noticeRemindersDue` returns crossed-but-unsent `remindBeforeMinutes` offsets (stops on RESOLVED/CANCELLED/DRAFT, none after start); `noticeStartDue` fires an at-start reminder once; notify `service.notice.reminder`; stamp `remindersSent`/`startReminderSent`.
+
+### API
+`/api/utility/schedules` GET (overview | `?scope=manage` list) / POST create; `/[id]` GET/PATCH/DELETE(soft); `/[id]/slots` POST bulk-replace; `/[id]/remind` POST (resident pref, no perm); `/today` GET strip. `/api/service-notices` GET list(`?status=`)/POST create; `/[id]` GET; `/[id]/publish|resolve` POST (manage); `/[id]/confirm` POST (resident "mine too", no perm); `/quick-outage` POST (two-tap ONGOING outage, manage); `/export` POST (PDF/CSV/xlsx outage-duration report via `buildInlineExport` + `loadUrduFont`, audited). `/api/me/schedules` GET.
+
+### Sub-feature gating
+`assertNoticeFeature`: a notice with an `authority` set OR kind ∈ {GOVERNMENT,ROAD_WORK,CLOSURE} → requires `utility.external_notices`; every other notice → `utility.outages`. Off → `ScheduleError("feature_disabled")` (422). Timetables are unaffected by either sub-feature.
+
+### Permissions / nav / ui-mode
+Perms `schedules.read` (→`utility.schedules`, seeded COMMITTEE_MEMBER + MANAGER) / `schedules.manage` (seeded MANAGER; admin via `*`). Resident view/remind/confirm need NO perm (`requireScheduleMember`). Nav `schedules` (icon `calendarClock` — added `CalendarClock` to `nav-icons.ts`, main group, `hideOnSharedDevice`, feature `utility.schedules`). ui-mode `schedules` (resident audience → default SIMPLE).
+
+### UI (`components/schedules/schedules-client.tsx`, page `app/[locale]/app/schedules/page.tsx`)
+- Simple (resident, default): live outage banners (severity-toned, "mine is out too" confirm), **Today strip** (kind-coloured next-event chips), my-schedule cards (remind-me toggle → `/remind`, provider-PDF link, expandable colour-coded week grid handling midnight carry-over + one-off/exclusion rows).
+- Committee tabs (Pro toggle adds the effective-window column): schedules-table (overlap warning per `overlappingScheduleIds`), notices panel (publish/resolve, two-tap report-outage modal, export-report PDF download), create-schedule form (kind/name/provider/target/effective/source-PDF upload + "no auto-sync" honesty note) with a per-slot editor (weekly/one-off, start/end time, label, exclusion checkbox).
+- Design self-check: semantic tokens (card/muted/primary), logical props (ms-/me-/text-start/text-end) for RTL, mobile-first (max-w-3xl, flex-wrap, overflow-x-auto), light/dark safe.
+
+### i18n
+`schedules.*` (100 keys) + `nav.schedules` in en + ur (genuine Urdu, RTL), parity 0-diff verified by key-walk script. Notification templates (category `utility`, en+ur every channel): `schedule.slot.reminder`, `service.notice.published`, `service.notice.reminder`, `service.notice.resolved`.
+
+### Tests
+- `rules.test.ts` (25): wall-clock same-across-timezones, lead-window open/closed, post-start no-fire, midnight two-segment + single reminder, dow/one-off applicability, Eid exclusion, Today-strip ongoing/upcoming/excluded, notice offsets fire + stop-on-resolve + no-DRAFT + at-start-once, overlap flag, duration stats.
+- `architecture.test.ts` (6): no ledger/billing coupling.
+- `schedules.integration.test.ts` (DB-backed, `describe.skipIf(!DATABASE_URL)`, 4): slot reminder once/day + Eid suppression; notice reminder stops on resolve; "mine too" aggregates + idempotent (2nd same-user rejected); outage refused when `utility.outages` off while timetable still works.
+
+### Gate results
+`pnpm prisma generate` ✓ · `pnpm typecheck` ✓ clean · `pnpm lint` ✓ 0 warnings · `rules.test` 25/25 + `architecture.test` 6/6 green locally. (Did NOT run test:unit/e2e/build per CLAUDE.md — controller runs full gates.)
+
+### Notes / deferred (recorded, NOT blocking)
+- NO scraper/auto-sync built — the spec's honest constraint. `externalSourceUrl` + `lastCheckedAt` columns reserved so a future per-provider importer needs no migration; none promised.
+- Tap-drag grid implemented as a functional row-editor (day + start/end + label + exclusion), not literal drag — same data outcome.
+- The Today strip is on the schedules page; wiring it into the global home dashboard is a future enhancement (endpoint `/api/utility/schedules/today` already exists).
+- An ongoing midnight-spanning slot that started YESTERDAY is not surfaced in the Today strip (the visual grid carries it); documented in `nextEventToday`.
