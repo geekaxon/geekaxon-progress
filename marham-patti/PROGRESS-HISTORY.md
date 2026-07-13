@@ -2222,3 +2222,37 @@ Now `pnpm prisma generate` (and `pnpm prisma migrate deploy`, `--version`, etc.)
 **Verification.** `pnpm --filter @mp/db typecheck` and `pnpm --filter @mp/db lint` both green (the typed `where: { tenantId_code }` compiling proves the composite key name is correct). Schema + generated Prisma client both confirm `(tenantId, code)` is Account's real unique key. Logic traced for all three cases: fresh DB (create `d_acct_*`, identity remap, lines unchanged), app-provisioned DB (update existing cuid rows, lines remapped to cuid ids), and re-run (accounts found-by-code + updated, all other tables found-by-id + updated) — all coherent and duplicate-free. The task's "runs cleanly twice on a DB with baseline data" runtime check requires the staging Postgres (RLS non-superuser role + `app.tenant_id` GUC + app-provisioned accounts); no Postgres/container runtime is available in this build environment, so the live twice-run must be exercised on staging by the controller/operator. No schema change → no migration; `prisma generate` not required by the change (run only as part of typecheck).
 
 Files: `packages/db/prisma/seed-demo.ts` (persist loop + new `persistAccounts` + `AccountType` import).
+
+---
+
+## fix — demo seed Patient phone uniqueness (P2002 Patient) — 2026-07-13 — branch `fix/demo-seed-account-idempotency`
+
+**Symptom.** `APP_ENV=staging SEED_DEMO=1 pnpm --filter @mp/db seed:demo` on staging (real Postgres, baseline data present) got through account/fiscalPeriod/user/doctor/doctorAvailability/commissionConfig and then died with P2002 `Unique constraint failed`, modelName `Patient`, at `packages/db/prisma/seed-demo.ts:476` (the generic `persist()` upsert, `where: { id: rid }`).
+
+**Root cause (re-audit — the prior "Account is the only table" conclusion was wrong).** The demo DATA in `packages/db/src/demo/data.ts` gave multiple DISTINCT patients the SAME phone number (household members sharing one number):
+- `03001234500` → a1 (Muhammad), a2 (Rukhsana), a3 (Hamza)
+- `03011234511` → b1 (Fatima), b2 (Yousuf)
+- `03021234522` → c1 (Abdul Rehman), c2 (Shabana)
+- `03031234544` → d1 (Nasreen), d2 (Shahid)
+
+Schema `Patient` carries `@@unique([tenantId, phone])` (Postgres treats NULL phones as distinct, so the genuine null-phone dependents a4/b3/e11 are fine). Each family's head is created first; the next member's id-keyed create then collides on `(tenant_id, phone)` → P2002. This surfaced ONLY now because the earlier account fix (592fb7c) let the seed reach Patient for the first time. It is not an app-provisioned/baseline collision — `seed.ts` creates no patients — it is an INTERNAL duplicate-natural-key in the demo dataset itself, so it fails even on a pristine DB.
+
+**Why NOT fix by changing the upsert `where` to `(tenantId, phone)`** (the pattern used for Account). Account codes are genuinely one-per-row, so keying on `(tenantId, code)` + remapping the FK-less `JournalLine.accountId` is safe. Patient phones are genuinely shared across DISTINCT people; upserting by `(tenantId, phone)` would MERGE a1/a2/a3 into a single row (last write wins), destroying two of the three patients and dangling every hard FK that references `d_pat_a2` / `d_pat_a3` (allergies, relations, credits, invoices, encounters…). The app itself models phone→one-patient (`ensurePatient(tenantId, phone)` in online-pharmacy / `ensureMarketplaceLink`), confirming the invariant the demo must respect. The correct fix is therefore to make the DATA conform to the constraint, keeping every patient a distinct, contactable person.
+
+**Fix.** Gave the 5 secondary family members distinct phones (minimal, keeps them in `consultingPatients` so downstream visit/lab rotation is unperturbed; no guardian restructuring):
+- a2 `03001234500`→`03001234501`; a3 →`03001234502`
+- b2 `03011234511`→`03011234512`
+- c2 `03021234522`→`03021234523`
+- d2 `03031234544`→`03031234545`
+Verified no remaining duplicate phones and no collision with any other patient's number (checked the full 0300–0318 range; c3=…533 and the e-series are untouched). Result: every `(tenantId, phone)` is unique, so id-keyed upserts create on first run and update in place on re-run — idempotent.
+
+**Exhaustive re-audit of every constrained demo table (per the task's "fix Patient AND every other table with the same defect in one pass").** Walked all 55 entries of `plan.tables` plus every direct upsert in `seed-demo.ts` against `schema.prisma`:
+- **Internal duplicate natural key → defect:** ONLY `Patient (tenantId, phone)`. Fixed above.
+- **External bootstrap collision (app auto-seeds rows under cuid ids):** ONLY `Account (tenantId, code)` via `ensureChartSeeded`/`ensureAccounts` — already handled by `persistAccounts` + remap in the prior fix. Searched for other `ensure*`/bootstrap provisioners: none seed lab tests, medicines, etc. (`ensurePatient`/`ensureMarketplaceLink` create patients by phone on demand, not a guaranteed bootstrap; a real user colliding on an exact demo phone is out-of-scope and un-reproducible).
+- **Verified internally-distinct (no fix needed):** `User (tenantId,email)/(tenantId,phone)` (phones null; demo-specific emails), `LabTest (tenantId,code)`, `Stock (tenantId,branchId,medicineId)`, `Token (…,dayKey,number)`+clientActionId, `Vitals`/`Sale`/`Payment` clientActionId, `Sample.barcode`, `NotificationPref.patientId`, `CommissionEntry (tenant,doctor,sourceType,sourceRefId)`, `CommissionPayout (tenant,doctor,periodKey)`, `JournalEntry (tenant,source,sourceRefId)`, `MarketplaceListing.tenantId`, `MarketplaceDoctor/Test/Product` composite keys, `PlatformUser (phone,audience)`, `PoolWorkerProfile.platformUserId`, `VendorAdmin.email`, `TenantFlags.tenantId`. `Medicine.barcode`, `Batch`, `CommissionConfig`, `Doctor.pmcNo` carry NO unique constraint (only indexes) → no collision possible.
+
+**Files.** `packages/db/src/demo/data.ts` (5 phone literals). No schema/migration/feature change.
+
+**Gates.** `pnpm --filter @mp/db typecheck` exit 0; `pnpm --filter @mp/db lint` exit 0. Did not run the seed (no Postgres locally, as noted in the task) — reasoned from constraints. Controller runs the full repo gates.
+
+WORK TYPE: FIX (branch fix/demo-seed-account-idempotency)
