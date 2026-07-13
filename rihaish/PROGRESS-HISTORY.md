@@ -2410,3 +2410,34 @@ back-fill migrations); the migration set was regenerated as ONE clean init.
 **Decisions:** (1) TOTP is not a pre-existing subsystem; built it minimally but real (dependency-free) since the spec + e2e require enrolment before console access — kept the UI to the enrolment gate only. (2) Placed bootstrap logic in lib/bootstrap.ts (not just scripts/) so vitest, which only includes lib/schemas/tests-unit, actually runs the coverage; scripts are thin CLIs. (3) Added lib/bootstrap.ts to the db.unscoped() eslint allow-list (platform-level code). (4) Made deploy.sh branch-aware to avoid the ecosystem rename regressing staging into production processes.
 
 **Gates:** pnpm prisma generate ✓, pnpm lint ✓ (added lib/bootstrap.ts to unscoped override), pnpm typecheck ✓. Did not run test:unit/e2e/build (controller runs them).
+
+## 48 — worker-stubs-notifications — DONE (2026-07-13)
+**Branch:** feature/48-worker-stubs-notifications · **Spec:** /specs/48-worker-stubs-notifications.md (+ 48-48-CODEREF.md)
+
+Closed the three things the system promised and silently never did, plus a sweep for other dead crons.
+
+**1. Dues reminders (`billing.reminders`) — was a stubHandler no-op.**
+- New `lib/billing/reminders.ts` `sweepBillingReminders(societyId, now)`: for each open invoice (ISSUED/PARTIALLY_PAID) whose unit is genuinely in arrears (`flatBalanceMinor > 0`), fires on each configured before/after-due day via the pure `reminderKindFor` (reused from platform-billing math) and then STOPS — no daily nagging.
+- Recipient is the invoice `billedToUserId` SNAPSHOT, never the current occupant, so an ownership change never duns the wrong person. Sends through the step-11 `notify` engine (honours NotificationPreference).
+- Idempotent per (invoiceId, offset) via a new `BillingReminderLog` model (unique [invoiceId, offset]); the slot is CLAIMED before sending (claim rolled back if notify throws, so a retry can re-try but never double-sends). A mid-cycle change to the reminder-day list can't double-message.
+- Skips a READ_ONLY society (checked inside the sweep so it is behaviourally testable) and, in the handler, when `billing.ledger` is off. Arrears unit with no billable person → counted `skippedNoBillable`, logged, never crashes.
+- New settings `BillingSettings.reminderDaysBefore [7,3,1]` / `reminderDaysAfter [1,3,7,14]`, surfaced on `BillingSettingsView`.
+- Templates `billing.reminder.before` + `billing.reminder.overdue` (category billing), en+ur, IN_APP/EMAIL/SMS/PUSH.
+
+**2. Export purge (`exports.cleanup`) — was a stubHandler no-op.**
+- `runExportsCleanup` (platform-scoped): finds `Export`/`ReportExport` StoredFile rows older than 7d via the raw client, soft-deletes each IN the owning society scope (scoping layer writes the `storedFile.deleted` audit + frees `maxStorageMb` usage), then purges the object and hard-removes the row. Recent exports and non-export files are untouched.
+
+**3. Password/PIN change security notification — was a `TODO(step 11)`.**
+- New `security` notification category; behaves like `emergency` but floors IN_APP + EMAIL (cannot be muted) via `isChannelLocked`/`applyChannelFloor`.
+- `changePassword` and `setGuardPin` now fire `account.password.changed` / `account.pin.changed` (category security) via `notifySafe`, with the society-local time + revoked-session count. No new-device-login path exists yet, so that variant was not added.
+- Templates for both codes, en+ur, IN_APP + EMAIL. i18n category labels added (en+ur) so the account/settings panels render.
+
+**Sweep for other stubs:** grep of `stubHandler(` and `TODO(step` across lib/ + app/ → the two crons above and the one password TODO were the ONLY occurrences; all now real. `stubHandler` kept as a helper but has ZERO callers, and it now tags its function `isStub` so `registry.test.ts` asserts no seeded cron ever points at a no-op again.
+
+**Schema/migration:** added `BillingSettings.reminderDaysBefore/After`, `BillingReminderLog`; regenerated the squashed `0000000000000_init` baseline (clean superset — only the new fields/table/indexes) and `prisma generate`.
+
+**Tests added/updated:** `lib/billing/reminders.integration.test.ts` (offsets, idempotency, snapshot recipient, READ_ONLY skip, no-billable), `lib/storage/exports-cleanup.integration.test.ts` (only-exports-past-retention, object deleted, audited), `lib/account/security-notify.integration.test.ts` (in-app+email survive a full opt-out), `lib/worker/registry.test.ts` (no-stub-cron invariant), `lib/account/notifications-policy.test.ts` (security email-lock + length 10).
+
+**Gates:** `pnpm prisma generate`, `pnpm lint`, `pnpm typecheck` all clean. (Did not run test:unit/build per AGENT.md — controller runs full gates.)
+
+WORK TYPE: FEATURE (branch feature/48-worker-stubs-notifications)
