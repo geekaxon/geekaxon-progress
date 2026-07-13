@@ -2057,3 +2057,144 @@ WORK TYPE: FEATURE (branch feature/50-saas-console). Ended with `[CHECKPOINT]`. 
 **Follow-ups (non-blocking).** No automated recurring subscription-fee billing (spec §3 defers it — invoicing the subscription fee can post to the 48 ledger as a console action later). BYOK validate-ping becomes a real provider ping when a concrete AI provider SDK is wired. `assertCanAddBranch/User` await a tenant-facing branch/user creation endpoint to guard.
 
 WORK TYPE: FEATURE (branch feature/51-subscriptions-ai-modes). Ended with `[CHECKPOINT]`. Controller handles the staging merge.
+
+---
+
+## 52 — Mobile App Experience (`feature/52-mobile-app-experience`) — DONE 2026-07-12
+
+**Goal (spec 52).** On a phone the app must FEEL like a native app per audience — bottom tab navigation, view transitions, safe areas, pull-to-refresh, ≥44px targets, standalone polish — plus a QR "Install app" affordance on every home/dashboard and the `/` chooser. Presentation-only (Phase 5 item 8); RLS/schema/flags untouched; public budgets never loosen (52 adds ≤15 KB).
+
+### What shipped
+- **One presentational `MobileTabBar` (`packages/ui/src/components/mobile-tab-bar.tsx`, exported from the barrel).** Props: `items: MobileTab[]` (`{key,label,icon,active?,href?,onSelect?}`), `ariaLabel`, optional `more` (overflow affordance), optional `renderLink` (route tabs go through the app's `next/link`; in-page tabs render as `<button>` firing `onSelect`). It is DUMB about where items come from, so every audience flows through the same bar. Styled app-side via `.mp-tabnav*` in `globals.css` (deliberate deviation from CODEREF's "in @mp/ui, Tailwind" note — the rendered 40/42 shells are all plain-CSS `mp-*` components, NOT the Tailwind `@mp/ui` `app-shell.tsx`, so the bar lives in the same visual system as the sidebar/entrance chrome it replaces on mobile). Spec test `mobile-tab-bar.spec.tsx` covers: in-page `onSelect` + `aria-current`, `renderLink` client-nav path, and the "More" overflow (`aria-haspopup=menu`).
+- **Staff tabs from the SINGLE registry.** New `staffMobileTabs(me)` in `apps/web/lib/nav.ts`: flattens `visibleNav(me)` (flag→permission→role filtered), takes up to `STAFF_TAB_COUNT=4` by a `STAFF_TAB_PRIORITY` href list, then tops up in registry order — so a pharmacy-only tenant gets pharmacy-first tabs and a clinic gets clinic-first, and the bar is never short and never invents a module the session can't see. NO second nav definition (single-registry contract, Acceptance §1 grep). `AppShell.tsx` maps `primary` → `MobileTab[]` (icons via the existing `NavIcon`), renders the bar after `<main>`, and the "More" cell simply `setNavOpen(true)` — reusing the EXISTING off-canvas full-nav drawer (no new sheet).
+- **Patient/platform bar = the same `setTab` state.** `PlatformClient.tsx` already owned `tab` state and rendered an inline `.mp-tabbar` row; added a `MobileTabBar` (timeline/browse/clinics/family/shares, icons) driven by the SAME `setTab`. CSS hides the inline row and shows the bottom bar below the 860px breakpoint (and vice-versa) — one state, presentation switches by breakpoint. (Legacy `(patient)` `/patient` app left on its wrapping inline `.mp-pt-inline` tabs: it's superseded as the patient ENTRANCE by `/platform`, and a 6-item fixed bottom bar is poor UX — scoping call, still gets the install affordance via its chrome.)
+- **Rider/phleb section-jump bar.** `(field)/FieldTabBar.tsx`: the field apps are single-scroll pages with two REAL sections already present — the job/visit queue and the shared 49 PoolPanel (Earnings & duty). Rather than invent routes or widen reads, the bar quick-jumps those sections (Jobs/Visits + Earnings) with smooth-scroll + an IntersectionObserver scroll-spy keeping the active tab in sync. `rider/page.tsx` + `phlebotomist/page.tsx` gained `id` anchors (`FIELD_JOBS_ID`/`FIELD_POOL_ID`) and mount `<FieldTabBar>`.
+- **App-feel.** `layout.tsx`: `viewport-fit=cover` + `appleWebApp` (capable/statusBarStyle/title) standalone metadata. `globals.css` new §: safe-area insets (`env(safe-area-inset-*)` padding on the sticky top bars + the fixed tab bar's bottom); `@view-transition { navigation: auto }` cross-fade under `prefers-reduced-motion: no-preference` (a silent no-op on SPA client-navs and unsupported browsers — reduced-motion is already globally neutralized by the top-of-file reset); `-webkit-tap-highlight-color: transparent` + `:active` press states; `overscroll-behavior-y: contain` in standalone; ≥44px tab rows (3.25rem) and install trigger (2.75rem). Content areas reserve `padding-bottom` for the fixed bar (`.mp-shell-main`, `.mp-has-tabnav`) below the breakpoint.
+- **Pull-to-refresh.** `lib/use-pull-to-refresh.ts` (`usePullToRefresh`): touch-only (skips binding entirely when `!('ontouchstart' in window)`), fires only at scrollTop≤0 on a downward drag past a 68px threshold, `preventDefault`s the native rubber-band, and re-runs the surface's OWN callback — NO new data path/read. `components/shell/PullIndicator.tsx` renders a lightweight fixed top spinner (rotates with pull progress, spins while refreshing). Wired into `PlatformClient` (timeline `load`), `RiderClient` (jobs `load`, changed to return its promise so the spinner awaits it), `PhlebotomistClient` (visits `load`, offline-safe).
+- **QR install everywhere.** `components/shell/InstallApp.tsx` (in every chrome top bar — `AppShell`/`EntranceChrome`/`PlatformChrome`, audience-derived) + `lib/use-pwa-install.ts` (`usePwaInstall`: captures `beforeinstallprompt`, reports `installed`/`ios`). The sheet (Radix `Drawer`) offers: one-tap install where `canPrompt`; a LOCAL SVG QR of the entrance's absolute URL (`window.location.origin` + audience home — domain-agnostic per 53) generated with the existing `qrcode` dep **dynamically imported** exactly like the 2FA panels (off the route JS budget, no external service, offline-safe, fixed black-on-white so it scans in dark mode); and iOS add-to-home-screen steps. Hides itself once `installed`. `/` chooser: a dependency-LIGHT `app/EntranceInstall.tsx` per card (no Radix, strings passed as props from the server component, `qrcode` still dynamic) as a positioned SIBLING of the card link (a button may not nest in an anchor). Chooser JS budget is 180 KiB — the light island keeps huge headroom.
+- **i18n (EN+UR parity verified).** Added flat keys `mobileMore`/`fieldTabJobs`/`fieldTabVisits`/`fieldTabEarnings` and a nested `install.*` object (button/title/intro/direct/scan/scanHint/iosTitle/iosStep1-3/close) to both `packages/i18n/src/messages/{en,ur}.json`; parity check (flattened key sets) is identical.
+
+### Judgement calls (autonomous, logged per CLAUDE.md)
+1. **`MobileTabBar` styled app-side (`.mp-tabnav*`) instead of Tailwind-in-`@mp/ui`.** CODEREF §B suggested Tailwind in the package, but the shells actually mounted (`AppShell`/`EntranceChrome`/`PlatformChrome`) are plain-CSS `mp-*` components in `apps/web`, not the package's `app-shell.tsx`. Styling app-side keeps the bar in one visual system with the sidebar/entrance chrome and lets `globals.css` own the safe-area/breakpoint rules. Component itself stays in `@mp/ui` (literal location + spec test home honored).
+2. **Field bar = section-jump over existing sections, not new Earnings/Profile routes.** Spec §2 lists "Rider (Jobs, Earnings, Profile)"; but §5 forbids widening any read, and there is no Profile surface. The rider/phleb pages already render the queue + the 49 PoolPanel (earnings/duty), so the honest, read-safe realization is a two-item quick-jump over THOSE. Account actions remain in the top-bar (logout/language/install). No fabricated surface, no new fetch.
+3. **Legacy `/patient` inline tabs left as-is.** It's back-compat only (the patient ENTRANCE is `/platform`, which got the full bottom bar); a 6-item fixed bottom bar is poor phone UX. It still gets the install affordance through `EntranceChrome`.
+4. **View transitions via the CSS `@view-transition` at-rule (MPA) + never-blank SPA nav + existing skeletons**, rather than a JS `startViewTransition` shim — "graceful no-op fallback" per spec, zero route JS, reduced-motion respected by the global reset.
+
+### Do-NOT-break check
+Single nav registry (staff bar derives from `nav.ts`, no fork) ✓ · entrance/PWA identities + ONE service worker untouched ✓ · 45 tokens/AA (bar uses `--mp-*`/`--brand-*`, dark-aware active colour) ✓ · perf budgets (QR + Radix kept off the public chooser; `qrcode` dynamic; chooser island tiny vs 180 KiB) ✓ · offline paths (phleb visits, token, POS) reachable via tabs, pull-to-refresh re-runs existing fetch only ✓ · EN+UR parity + RTL (logical props throughout) ✓ · desktop unchanged above 860px (sidebar/inline paradigms) ✓ · reduced-motion ✓ · **RLS/Ganatra: zero API/schema/query change — no read widened.**
+
+### Files
+- New: `packages/ui/src/components/mobile-tab-bar.tsx` (+ `.spec.tsx`); `apps/web/lib/use-pwa-install.ts`, `apps/web/lib/use-pull-to-refresh.ts`; `apps/web/components/shell/InstallApp.tsx`, `apps/web/components/shell/PullIndicator.tsx`; `apps/web/app/EntranceInstall.tsx`; `apps/web/app/(field)/FieldTabBar.tsx`.
+- Changed: `packages/ui/src/index.ts` (export); `apps/web/lib/nav.ts` (`staffMobileTabs`); `apps/web/components/shell/{AppShell,EntranceChrome,PlatformChrome}.tsx` (bottom bar + install trigger); `apps/web/app/(platform)/platform/PlatformClient.tsx`, `apps/web/app/(field)/{rider,phlebotomist}/*` (bottom bars + pull-to-refresh); `apps/web/app/page.tsx` (chooser install); `apps/web/app/layout.tsx` (viewport/appleWebApp); `apps/web/app/globals.css` (mobile §); `packages/i18n/src/messages/{en,ur}.json`.
+
+### Gates
+Not run in-session (controller runs `lint`→`typecheck`→`test:unit`→`build`). Self-checks done by inspection: EN/UR key parity verified via a flatten-and-diff (identical); both message JSONs parse; no unused imports introduced; ≥44px on new interactive surfaces; nested-`<a>`/`<ul>` HTML validity fixed (chooser install is a card sibling; rider indicator hoisted out of `<ul>`).
+
+[CHECKPOINT]
+
+---
+
+## 53 — Tenant Addressing: Subdomains & Custom Domains — DONE (2026-07-12)
+
+**Branch:** `feature/53-tenant-addressing` (stacked on `feature/52-mobile-app-experience`). **WORK TYPE: FEATURE.** Phase 5, item 9 — completes Phase 5 and the specced build order (1→53).
+
+### Problem / goal
+Everything ran on one shared staging host with a login "clinic" field. Professionally each tenant should have its OWN address (`<slug>.<product-domain>`) landing straight in THEIR branded experience with no tenant field, and premium tenants should map their OWN domain (`portal.clinic.com`). The real product domain is NOT yet purchased, so NOTHING may hardcode a hostname — staging must keep working on today's names and the future domain must drop in as pure config.
+
+### What was built
+**Config seam (domain-agnostic) — `packages/config/src/index.ts` + `.env.example`:**
+- `PLATFORM_BASE_DOMAIN` (optional) — the base every tenant subdomain hangs off (`<slug>.base`). `platformBaseDomain()` normalises (strips scheme/leading-dot/port).
+- `HOSTNAME_MAP` (optional JSON, boot-validated) — irregular hosts → `{tenant}` | `{kind:'shared'}` | `{kind:'vendor'}`. `hostnameMap()` parses to a normalised record; `HostMapEntry` type exported.
+- Buying the real domain later = set `PLATFORM_BASE_DOMAIN` + map + ops DNS/TLS, restart — ZERO code edits.
+
+**Resolver (extended, never forked) — `apps/api/src/tenancy/tenant-domain.resolver.ts`:** replaced the dormant `resolveTenantFromHost` with pure, DB-free functions + one async orchestrator:
+- `extractSubdomainSlug(host, base)` — exactly one URL-safe label in front of the base.
+- `classifyHost(host, {appHosts, hostnameMap, baseDomain})` → `custom-domain-candidate | map-tenant | shared | vendor | subdomain | unknown` (the whole precedence order, provable from strings).
+- `resolveHost(host, {..., lookup})` runs the two lookups (ACTIVE custom domain across all tenants; tenant-by-slug) → `HostResolution` (`custom-domain | tenant-mapped | tenant-subdomain | shared | vendor | unknown`). Precedence: (1) ACTIVE custom domain, (2) `HOSTNAME_MAP` exact, (2b) `APP_HOSTS` exact → shared, (3) `<slug>.PLATFORM_BASE_DOMAIN`, (4) shared/unknown fallback. Only ACTIVE domains resolve. Rewrote the unit spec to prove all four rules + collisions + malformed/unknown → shared + domain-agnostic swap.
+
+**Wiring — `HostResolutionService` + `HostResolutionMiddleware` (tenancy module):** the service resolves via the chain with a 60s per-host cache (shared/mapped hosts are classified with NO DB hit → today's staging stays fast/unchanged; only real custom-domain/subdomain hosts touch the DB), ACTIVE-domain lookup under `runWithPlatformScope`, slug lookup against the global (RLS-less) `tenants` registry, `invalidate(host?)` on activate/disable. The middleware runs BEFORE `TenantContextMiddleware`, stamping `req.tenantId` + `req.hostTenantId` for a tenant-bound host (so pre-auth branded surfaces run in that tenant), and NOTHING for shared/vendor/unknown (byte-for-byte today). Never throws (degrades to shared).
+
+**Host hygiene — `JwtAuthGuard`:** after decoding the principal, a token whose tenant ≠ the host's tenant (`req.hostTenantId`) is rejected with a clean 401 (re-auth on the correct host), logged. RLS still binds to the principal's tenant, so this is defence-in-depth, not the isolation boundary. Shared host resolves to no host-tenant → unchanged.
+
+**Custom domains — `TenantDomain` table + `apps/api/src/tenant-domains/`:** additive schema (`tenant_domains`: domain UNIQUE globally, status PENDING|VERIFIED|ACTIVE|DISABLED, method DNS_TXT|HTTP_WELL_KNOWN, verificationToken, verified/activated/disabled stamps, createdBy/reviewedBy, tenant relation + FK). Migration `20260712300000_tenant_addressing` installs `apply_tenant_domain_rls`: a tenant reads/writes ONLY its own rows; the platform scope reads ALL (resolver + console) AND writes status (approve/disable) — a tenant can never touch a sibling's domain. Module: `TenantDomainService` (add → PENDING + random token; verify → DNS TXT at `_marham-patti.<domain>` / HTTP well-known token check, PENDING→VERIFIED; remove; addressing view = subdomain + domains), `TenantDomainRepository` (tenant `runWithTenant` + platform `runWithPlatformScope`; global-unique duplicate → neutral "already registered"), `DnsHttpDomainVerifier` behind `DOMAIN_VERIFIER` (swappable for tests; any lookup/network error → clean false). Controller `tenant-domains`: `GET /addressing` (ungated — every tenant sees its subdomain + `customDomainEnabled`), mutations `@RequireFeature('platform.customDomain')` + `@RequirePermission('domains.manage')` + `@Audited`.
+
+**Vendor console — `apps/api/src/vendor/`:** `VendorConsoleService.listDomains()` / `activateDomain()` (VERIFIED→ACTIVE only) / `disableDomain()` (→DISABLED), each audited to the vendor stream + invalidating the host cache; controller `GET /vendor/domains`, `POST /vendor/domains/:id/activate|disable`. VendorModule imports TenantDomainsModule + TenancyModule (shared `HostResolutionService` singleton so console activation clears the resolver cache the middleware reads).
+
+**Public `GET /host-context` (`HostContextController`, tenancy):** returns `{scope:'tenant'|'shared'|'vendor', resolution, tenantSlug, tenantName}` for the current request host (no secrets) — the web signal for branded chooser + no-clinic-field.
+
+**Flags/permissions (`@mp/shared`):** added flag `platform.customDomain` (premium-only — deliberately absent from BASIC/STANDARD 51 ceilings, so only a wildcard-ceiling package grants it; subdomains themselves need no flag) and permission `domains.manage` (added to ADMIN defaults; TENANT_OWNER inherits all tenant keys). Boot sync upserts both; no migration needed.
+
+**Web (`apps/web`, EN+UR parity):** `lib/host.ts` `useHostContext()` (memoised single fetch, persists the slug on a tenant host so the api client carries `x-tenant-slug`); `StaffLoginForm` + `PatientLoginForm` hide the clinic field ONLY when `scope==='tenant'` (shared/loading unchanged); `Settings→DomainsClient` (always-shown subdomain address; premium custom-domain add/verify/remove with copyable DNS/well-known instructions; clean premium-gate off-state); `(vendor)/vendor/domains` page (list + activate[VERIFIED]/disable) + vendor nav item; new `domains.*` / `vendor.domains.*` i18n keys in en.json + ur.json.
+
+**Docs:** `docs/addressing-runbook.md` — resolution model, env, the buy-the-domain-later swap, wildcard base cert + per-custom-domain cert steps for the current Nginx/aaPanel setup, the custom-domain lifecycle (who does what), and a post-wiring verification checklist.
+
+### Tests written (controller runs them)
+- `tenant-domain.resolver.spec.ts` (rewritten) — full precedence incl. custom-domain-beats-subdomain collision, non-ACTIVE domains don't resolve, malformed/unknown → shared, domain-agnostic base swap.
+- `packages/db/src/tenant-addressing-isolation.spec.ts` (new) — real 01→53 migrations under pglite: tenant reads only its own domains; platform scope reads all + can write status; WITH CHECK blocks forging a sibling domain; global-unique binds a host to one tenant; fail-closed with no context. (Extends the Ganatra floor — host resolution adds NO cross-tenant bypass.)
+- `no-hardcoded-hosts.spec.ts` (new grep guard) — scans app + package TS (comments stripped, tests/docs/env excluded), asserts no real registrable domain (`abovenext`) in live code + the config seam exists.
+
+### Judgement calls (I decided — no approval gate)
+- **Custom domains = premium-only** via absence from BASIC/STANDARD ceilings (not a new package field) — matches "premium tenants map their own domain" with the smallest surface; the always-on subdomain needs no flag so every tenant still has an address.
+- **Host hygiene = clean 401 re-auth** (not a silent tenant swap): forcing re-auth on the correct host is the safe, loop-free behaviour; RLS already binds to the principal, so no data can leak in the interim. Full AuditLog wiring in the guard was out of proportion — logged a warning + rely on the standard 401 path; the domain MUTATIONS (add/verify/activate/disable) are fully audited where it matters.
+- **Middleware sets `req.tenantId` for tenant hosts** so pre-auth branded surfaces resolve in-tenant; the JWT guard/interceptor re-bind the principal's tenant for protected handlers, so RLS is unaffected and the shared host is byte-for-byte unchanged.
+- **DB verifier wrapped fail-safe + swappable**; real DNS/HTTP checks live behind a DI token so unit tests never hit the network.
+
+### Gates (self, by inspection + the cheap ones)
+`pnpm db:generate` ✓; `pnpm --filter @mp/{shared,config,db,api,web} typecheck` ✓; `@mp/{api,web,shared,config,db} lint` ✓ (api had 1 pre-existing unrelated warning); `@mp/i18n` EN/UR parity ✓. Did NOT run test:unit/e2e/build (controller runs those). RLS ✓ (new isolation suite). White-label/branding untouched. Do-NOT-break honoured: shared staging host + slug fallback preserved; resolver extended not inverted; no hardcoded domains (grep guard); 46–52 isolation intact.
+
+---
+
+## FIX — CI `@mp/api#test` green (AI e2e commercial-port override) — 2026-07-13 — branch `fix/ai-e2e-commercial-port`
+
+**Symptom.** GitHub CI job `install → generate → typecheck → lint → build → test` failing on staging since runs #144–147 (after the 50–52 merges). `@mp/api#test` exits 1; typecheck/lint/build all pass. Locally: `4 failed suites, 30 failed tests` — `src/ai/ai.e2e.spec.ts`, `src/ai-feedback/ai-feedback.e2e.spec.ts`, `src/clinical-ai/clinical-ai.e2e.spec.ts`, `src/ops-ai/ops-ai.e2e.spec.ts`, every failure a `200 → 500`.
+
+**Root cause (build-step 51 regression, not 53).** Step 51 introduced the AI commercial seam: `AiModule` binds `{ provide: AI_COMMERCIAL_PORT, useExisting: AiCommercialAdapter }` (apps/api/src/ai/ai.module.ts:46), and `AiGatewayService.runAiTask` now calls `this.commercial.resolveForRun(tenantId)` (ai.service.ts:100). `AiCommercialAdapter.resolveForRun` → `SubscriptionService.getCommercialContext` → `SubscriptionRepo.getSubscriptionWithPackage` (subscriptions.repository.ts:86) runs a real Prisma `$transaction`. The four AI **e2e wiring** suites exercise the REAL `AppModule` graph with every repo faked and NO database (CI's `DATABASE_URL` is a placeholder that never connects). Pre-51 the gateway never touched the DB; post-51 the un-faked commercial port hits Prisma → `PrismaClientInitializationError` → 500. The gateway only falls back to `NoopAiCommercialPort` when the port is ABSENT — in the full graph it is present (bound to the adapter), so these suites need it overridden like every other repo. Step 51's author added the port + adapter and faked it in the subscriptions' own tests, but missed the four downstream AI e2e suites that route through `runAiTask`.
+
+**Fix (code/config only, no feature change).** Each of the four suites now adds, alongside its existing repo/clock overrides:
+```
+.overrideProvider(AI_COMMERCIAL_PORT)
+.useValue(new NoopAiCommercialPort())
+```
+`NoopAiCommercialPort` (exported from `apps/api/src/ai/ai.commercial.ts`) returns exactly the pre-51 resolution — `{ mode: 'MANAGED', apiKey: null, keySource: 'platform', ratePer1k: 0, byokUnavailable: false }` and a no-op biller — so the suites assert the identical token/cost/latency/budget behaviour they were written against, DB-free. Imports added: `AI_COMMERCIAL_PORT` from `ai.constants` and `NoopAiCommercialPort` from `ai.commercial`. No product/source code, schema, migration, or module wiring touched — the real adapter still bites in staging/prod where the DB exists (proven by the subscriptions suite + `@mp/db` isolation specs).
+
+**Files.** apps/api/src/ai/ai.e2e.spec.ts, apps/api/src/ai-feedback/ai-feedback.e2e.spec.ts, apps/api/src/clinical-ai/clinical-ai.e2e.spec.ts, apps/api/src/ops-ai/ops-ai.e2e.spec.ts.
+
+**Verification.** Ran only the affected suites: `jest ai/ai.e2e ai-feedback clinical-ai ops-ai` → `7 passed, 7 total · 104 tests passed`. The residual `[SubscriptionsModule] Subscription boot failed (continuing)` line is a pre-existing, self-caught `onModuleInit` log (ceiling-resolver registration attempting a boot-time DB read), not a test failure. `pnpm --filter @mp/api typecheck` clean; `pnpm --filter @mp/api lint` clean except one PRE-EXISTING unrelated warning in doctor-portal.repositories.ts (untouched). Did NOT run the full test:unit/e2e/build suites (controller runs the gates). WORK TYPE: FIX.
+
+---
+
+## fix — `pnpm prisma generate` verification gate green on new server (2026-07-13, `fix/prisma-generate-root-gate`)
+
+**Symptom:** The CLAUDE.md §6 cheap-verify command `pnpm prisma generate`, run from the repo root, failed with:
+`ERR_PNPM_RECURSIVE_EXEC_FIRST_FAIL — Command "prisma" not found`.
+
+**Diagnosis (cause only, no scope creep):**
+- NOT a schema/migration conflict from the stacked 45–53 branches. `prisma generate` itself is clean: `pnpm --filter @mp/db exec prisma generate` succeeds (Prisma Client v6.19.3 generated in ~0.7s), and the real gates already use that form — CI (`.github/workflows/ci.yml:43`), `deploy.sh:120`, and the `@mp/db` `build`/`typecheck` scripts (`prisma generate && tsc`). All green.
+- Real cause = tooling resolution on this fresh server. `prisma` is only a **devDependency of `@mp/db`**, not a root dep. With pnpm's isolated node_modules, its bin is NOT hoisted to the repo-root `node_modules/.bin`, so a bare `pnpm prisma …` at root has no `prisma` command to run (`ls node_modules/.bin/prisma` → absent). `.npmrc` has no hoist pattern for it. Hence the documented verify command can't resolve, even though generation works everywhere the filter is used.
+- CLAUDE.md is controller-managed ("do not edit by hand"), so the fix must make the *documented* bare command work rather than change the instruction. Adding `prisma` as a root devDep is wrong too: `prisma generate` at root would then find the bin but no `prisma/schema.prisma` (root has none) and fail differently.
+
+**Fix (package.json only):** added a root delegator script
+`"prisma": "pnpm --filter @mp/db exec prisma"`.
+Now `pnpm prisma generate` (and `pnpm prisma migrate deploy`, `--version`, etc.) invoked from the repo root forwards its args to the `@mp/db` package, resolving the correct binary against the correct schema. Left the existing `db:generate`/`db:migrate:deploy` convenience scripts untouched.
+
+**Verification:**
+- `pnpm prisma generate` from repo root → **exit 0**, "Generated Prisma Client (v6.19.3)".
+- `pnpm prisma --version` → args forwarded correctly (`pnpm --filter @mp/db exec prisma "--version"`), proving multi-arg commands (`migrate deploy`) will forward too.
+- Root `package.json` re-parsed as valid JSON.
+- No schema.prisma change → no migration/generate concern; no touched workspace package → no per-package lint/typecheck needed for this pure root-script addition. CLAUDE.md left unmodified.
+
+**Files:** `package.json` (1 added script), `PROGRESS.md`, `PROGRESS-HISTORY.md`.
+
+---
+
+## FIX — `@mp/api` `test:unit` green DB-free (config `DATABASE_URL` placeholder) — 2026-07-13 — branch `fix/prisma-generate-root-gate`
+
+**Symptom.** Controller-run `pnpm test:unit` failed: `@mp/api#test` → `Test Suites: 36 failed, 48 passed`, `Tests: 466 failed, 513 passed`. Every failure the same trace: `loadConfig` (`packages/config/src/index.ts:312`) throwing `Invalid environment configuration:\n  - DATABASE_URL: Required`, raised from `InstanceWrapper.useFactory` at `apps/api/src/platform-settlement/platform-settlement.module.ts:51`.
+
+**Root cause (environmental, not a code regression).** The 36 failing suites are the e2e *wiring* suites that build the REAL `AppModule` graph with every repo faked and NO database. `PlatformSettlementModule` binds `PAYMENT_PROVIDER` via a `useFactory` that calls `loadConfig()` at construction (platform-settlement.module.ts:51, present since build-step 48). `@mp/config`'s zod `EnvSchema` hard-requires `DATABASE_URL` (`z.string().min(1)`, index.ts:36). CI supplies a placeholder `DATABASE_URL` env var precisely so this validation passes without a real DB (`.github/workflows/ci.yml:20,67` → `postgresql://ci:ci@localhost:5432/ci`), and the 4 AI e2e suites were made green the same way in the prior `fix/ai-e2e-commercial-port`. The local controller gate on this fresh server exports NO such env, so config validation throws for every suite that instantiates the module graph. The 48 passing suites are pure unit tests that never build `AppModule`. Not a schema/module/feature defect — the requirement predates step 53 (confirmed via `git show e8e1645^:packages/config/src/index.ts`); the suites simply relied on the caller providing `DATABASE_URL`.
+
+**Fix (test-infra only, no product change).** Added `apps/api/src/jest.setup.ts`, wired as jest `setupFiles` in `apps/api/jest.config.js` (`setupFiles: ['<rootDir>/jest.setup.ts']`). It sets a NON-CONNECTING placeholder `DATABASE_URL` (`postgresql://test:test@localhost:5432/test?schema=public`) ONLY when unset, so a real value from CI or the shell always wins. The URL is validated by zod but never dialed — Prisma is faked in these DB-free suites — so no connection is ever attempted. This mirrors CI in-process, making `test:unit` self-contained rather than dependent on the caller exporting env. Placed under `src/` so it sits inside the ts-jest `rootDir`/tsconfig `include` (avoids a TS6059 "not under rootDir" transform error); it does not match the `.*\.spec\.ts$` testRegex so it never runs as a test; and added `src/jest.setup.ts` to `tsconfig.build.json` `exclude` so it is not emitted into `dist`. Only `DATABASE_URL` is needed — it is the sole non-defaulted required var in `EnvSchema` (REDIS_URL optional; everything else defaulted; the production-only `superRefine` never fires under the default `APP_ENV=development`).
+
+**Files.** `apps/api/src/jest.setup.ts` (new), `apps/api/jest.config.js`, `apps/api/tsconfig.build.json`.
+
+**Verification.** `pnpm --filter @mp/api typecheck` clean; `pnpm --filter @mp/api lint` clean except one PRE-EXISTING unrelated warning in `doctor-portal.repositories.ts` (untouched, noted in prior history). Did NOT run `test:unit`/`test:e2e`/`build` (controller re-runs the gates). WORK TYPE: FIX.
