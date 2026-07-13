@@ -2515,3 +2515,29 @@ WORK TYPE: FEATURE (branch feature/48-worker-stubs-notifications)
 **UI self-check:** shadcn Button + design tokens; status/flag chips light+dark; logical props / `dir` passed through; EmptyState for feature-off + empty + empty-console; Simple + Pro (DataTable kit) both implemented; toasts (sonner), no alert(); operator console renders Urdu-first via the `ur` locale (dir=rtl). Follow-up: a dedicated lift-create/service-log form modal (form kit) and uptime charts were scoped for a later Pro pass; registry CRUD + maintenance logging are exposed via API now.
 
 **Notes:** `expenses.core` deliberately left OFF in the integration test to prove criterion 6; enabling the leaf features pulls their whole dependency subtree via `planEnable`.
+
+## 52 — noc-system — DONE (2026-07-13)
+
+Built the NOC system (spec 52, feature `noc.core` + sub-features `noc.sale`, `noc.rent`, `noc.transfer`, `noc.dues_clearance`, `noc.fees`). Companion CODEREF 52-52 was authoritative for reuse targets.
+
+**The two hard rules, enforced in code (lib/noc/rules.ts + service.ts):**
+1. Issuance is BLOCKED while `flatBalanceMinor(unitId) > 0`; the ONLY escape is an audited committee override carrying a non-empty reason, which is recorded on the request, written to AuditLog, and printed on the certificate. No config flag can silently disable the gate.
+2. `complete()` executes the spec-16 occupancy transfer via `transferOccupancy` (residents/service) — closes the old holding, opens the new, invites the incoming party — so register and reality never drift. Historical invoices stay snapshot-attached to the previous person (untouched).
+
+**Data model:** NocRequest (scoped: societyId+deletedAt), NocEvent, NocSettings (infra), NocSequence (gapless per society/year). Enums NocType (SALE/RENT/TRANSFER/DUES_CLEARANCE/MORTGAGE/SUBLET), NocStatus (11 states). Migration 20260713140000_noc_system.
+
+**Reuse (not reimplemented):** balance via `flatBalanceMinor`; gapless numbering via an atomic INSERT…ON CONFLICT DO UPDATE RETURNING on NocSequence (copied from InvoiceSequence); fee as a one-off `createSpecialCharge` on SINGLE_UNIT (snapshotted `feeMinor`, only when `noc.fees` on); certificate PDF via a new `lib/noc/certificate.ts` modelled on invoice-pdf.ts (branded, Noto-Naskh Urdu, VOID watermark on revoke, logo via readFileBytes); vault filing via `createDocument` UNIT_SCOPED into the seeded "NOCs" folder (best-effort); CNIC via `encrypt`/`decrypt` + `maskCnic`, gated by `SocietySettings.cnicCaptureEnabled`; resident invite folded into `transferOccupancy`.
+
+**Workflow:** owner submits (OWNER-only, 403 via live-occupancy check) → DUES_PENDING (if owes) or UNDER_REVIEW → override (audited) or auto-advance on payment (`refreshDues`, also lazy on read) → distinct-member approvals to quorum → APPROVED → issue (dues gate + PDF + vault + fee) → ISSUED → complete (transfer + auto-expire competing live NOCs on the unit) → COMPLETED. Plus reject, cancel (owner), revoke (VOID re-render), retrospective transfer (reality-wins), and a daily `noc.expire` worker sweep (06:00 society time) for issued-but-uncompleted NOCs past validity.
+
+**Routes:** app/api/noc (GET list / POST create), /[id] (GET), /[id]/{approve,reject,override,issue,complete,revoke,cancel,refresh-dues,certificate}, /settings (GET/PUT), /retrospective (POST). Every route calls `requireFeature(noc.core)` (spec 49). Actor mirrors residents (READ_ONLY society → issuance refused 423; reads still work).
+
+**Registration:** features.ts (6 defs), rbac.ts (noc.read/approve/manage → COMMITTEE_MEMBER + MANAGER; owners apply with no permission), nav.ts (fileCheck icon, feature-gated only), ui-modes/modules.ts (committee/PRO default), notifications/templates.ts (8 codes reusing `announcements`/`billing` — no new category), worker registry+handlers (`noc.expire`), messages/en+ur (`noc` namespace, mirrored). Added FileCheck2 to nav-icons.
+
+**UI:** components/noc/noc-client.tsx — Simple owner flow (owned-unit cards with live dues + Pay-now link + Apply dialog, status history, Download NOC), committee approvals inbox (dues red/green, Approve disabled while owing + Override beside it, issue/complete/revoke), Pro register DataTable. Light/dark tokens, RTL via dir, mobile-first.
+
+**Tests:** lib/noc/rules.test.ts (pure dues gate/quorum/expiry). lib/noc/noc.integration.test.ts (Postgres) covers all mandatory criteria: dues gate blocks + override is the only path (audited), OWNER-only 403, completion transfer with historical-invoice regression, dues auto-advance, gapless numbering under concurrency (8 parallel), auto-expire competing NOCs, quorum with distinct members. e2e/noc.spec.ts probes unauth refusal.
+
+**Gates:** `pnpm prisma generate`, `pnpm lint`, `pnpm typecheck` all clean. (test:unit/e2e left for the controller.)
+
+**Decisions:** fee posts as a SCHEDULED SpecialCharge (rides the next billing run) rather than an immediate standalone invoice, avoiding a risky reimplementation of the invoice+sequence transaction; `invoiceId` spec field realised as `feeChargeId`. Vehicle registration on completion is a no-op (the model captures only `vehicleCount`, no plate data). Certificate renders EN labels with the Urdu font embedded so Urdu content (society/party/conditions) renders; locale-UR labels are available in certificate.ts if needed later.
