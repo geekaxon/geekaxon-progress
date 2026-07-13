@@ -1825,3 +1825,58 @@ WORK TYPE: FEATURE (branch feature/34-surveys)
 **Tests.** `lib/amenities/rules.test.ts` (16 pure, PASS). `lib/amenities/amenities.integration.test.ts` (6 DB-backed acceptance: concurrency exactly-one, rate gate+effective-dating+snapshot, ledger separate `amenity` line, deposit refund credit + withhold-needs-reason, manager scoping 403, billing-disabled free). `e2e/amenities-booking.spec.ts` (401 on every endpoint).
 
 **Gates:** `pnpm prisma generate` OK; `pnpm lint` clean; `pnpm typecheck` clean; rules 16/16 + rbac 8/8 (updated the pre-existing rbac test to entitle `amenities.core` instead of the old placeholder `amenities`). Did NOT run test:unit/e2e/build (controller runs full gates). No cron.
+
+---
+
+## 36 — staff-performance — DONE (2026-07-13)
+
+**Feature:** `staff.performance` (module `36-staff-performance`), deps `staff.directory` + `complaints` (spec's `complaints.core`) + `staff.console`. Branch: `feature/36-staff-performance`. WORK TYPE: FEATURE.
+
+**Spec intent.** Track staff on what residents actually EXPERIENCE — resolution speed, reopen rate, SLA compliance, resident ratings. The composite score is society-configurable (weights ARE the policy, visible to staff — a hidden scoring system is a management failure). Snapshots are computed MONTHLY by the worker and stored; reports must not recompute across a year of tickets on a page load.
+
+### Data model / migration `20260713380000_staff_performance`
+- `StaffPerformanceSnapshot` — pass-through infra (societyId, NO deletedAt → not auto-scoped; service filters societyId explicitly, like Attendance/TicketRating). Fields per spec + additions: `reassignedCount` (separate signal from reopen, per the reassignment edge case), `scoreStatus` ("ok"|"insufficient_data"|"no_ratings"), `reviewFlag`, `partialPeriod`, `computedAt`. `score` is nullable (null = insufficient data — never a misleading number). `@@unique([societyId, staffId, period])` makes a re-run idempotent.
+- `PerformanceWeights` — one row keyed by `societyId` (@id), pass-through like ComplaintSettings; FK → Society onDelete Cascade; back-relation added on Society.
+
+### Pure rules (`lib/staff-performance/rules.ts`) + 14 vitest (`rules.test.ts`, incl. hand-computed fixture)
+- `computeScore(raw, weights, ctx)` → weighted average of five 0-100 sub-scores; a sub-score with no data is EXCLUDED and its weight RENORMALISED over the remaining metrics (so zero ratings gracefully falls back to speed+SLA, attendance drops out when disabled — never silently counted as 0).
+- Sub-scores: speed `100*min(1,target/actual)` (target 48h constant — society expresses speed-vs-quality via WEIGHTS not target); sla `100*(1-breach/resolved)`; reopen `100*(1-reopen/resolved)`; rating `100*avg/5` only when ratingCount≥3 (MIN_RATED_TICKETS); attendance = attendance% passthrough only when sub-feature on.
+- HONESTY: society collects ratings but <3 rated → status `insufficient_data`, score NULL. Society collects NO ratings → status `no_ratings`, score from non-rating metrics. No metric at all → insufficient. `reviewFlag` when avgRating ≤ LOW_RATING_THRESHOLD (2) with ≥1 rating.
+- Fixture: full metrics + default weights → 88.5 (100·30+80·35+90·20+80·10+90·5 /100). Attendance-off renormalise → 88.4. No-ratings fallback → 93.3. Period arithmetic helpers (periodOf/periodBounds/periodMinus/periodsBack), `scoreTrend`.
+
+### Service (`lib/staff-performance/service.ts`)
+- `computeSnapshotsForSociety(societyId, period)` — worker entry: gathers raw metrics per employed staff and upserts a snapshot each (idempotent). Attribution per spec edge cases: resolution/rating/SLA credited to a ticket's FINAL assignee (`Ticket.assignedStaffId`); assignment + reassignment derived from `assigned` TicketEvents (first per ticket = initial, rest = reassignment); reopens (`reopened` events) map back to the final assignee; first-response = earliest `status`→IN_PROGRESS event minus assignedAt; partialPeriod set when joinedOn>periodStart or leftOn<periodEnd. Attendance % computed from Attendance rows only when `staff.attendance` enabled.
+- `getWeights`/`updateWeights` (audited), `getLeaderboard` (stored rows + previous period for trend arrow + raw metrics for the browser live-preview), `getStaffPerformance` (snapshot + 12-month trend + the resolved tickets behind the numbers), `getMyPerformance` (resolves staffId from userId → the worker's own view). All reads are cheap lookups — never a recompute.
+
+### Worker
+- Handler `runStaffPerformanceSnapshot` (`lib/worker/handlers.ts`): society-scoped; gated by `isEnabled(staff.performance)` (skips when off); CRON finalises the just-ended month `periodMinus(periodOf(now),1)`, MANUAL honours `payload.period`.
+- Registry: cron `staff.performance.snapshot` `0 1 1 * *` (society scope); job entry mutating, concurrency 1 (skipped for READ_ONLY society).
+
+### Wiring
+- `lib/features.ts`: registered `staff.performance` (deps as above) — disabling leaves complaints + directory unchanged (graceful degradation).
+- `lib/rbac.ts`: perms `staff.performance.read` + `.manage` (gated by the feature). Seeded COMMITTEE_MEMBER→read, MANAGER→read+manage. A worker's own view rides `staff.console.read` (STAFF role) + the feature gate.
+- `lib/ui-modes/modules.ts`: `staffPerformance` module (committee, supportsModes). `lib/nav.ts` + `components/shell/nav-icons.ts`: nav item `staff-performance` (icon `gauge`, permission+feature gated, hideOnSharedDevice). i18n nav labels en+ur.
+
+### API routes
+- `GET /api/staff/[id]/performance?period=` (staff.performance.read) — static-vs-dynamic Next resolution keeps `[id]/performance`, `performance/leaderboard`, `me/performance` distinct.
+- `GET /api/staff/performance/leaderboard?period=` (read; default = most recent complete month).
+- `GET|PUT /api/staff/performance/weights` (read | manage).
+- `GET /api/staff/me/performance?period=` — staff-console actor + `isEnabled(staff.performance)` (403 when off); resolves the caller's own staff record. Residents never reach any of these.
+
+### UI (`components/staff-performance/` + console integration)
+- `score-ring.tsx` — animated SVG ring (arc grows on mount, hue red→green; null = dashed muted ring with em-dash, never a 0) + `Stars`.
+- Simple = committee leaderboard cards (rank badge top-3, score ring, trend arrow, rating stars, jobs done, review flag). Pro = metric table + weights editor (sliders, share %, RECOMPUTES every staff score live in-browser via the shared pure `computeScore` before saving — the "live recalculation preview") + per-staff detail drawer (metric grid + three animated 12-month LineCharts: resolution hours, rating, reopen % + the ticket list behind the numbers). `perf-client.tsx` orchestrates via `useUiModule("staffPerformance")`; no-ratings banner shown when the society collects none.
+- Staff-facing: `components/staff-console/my-performance.tsx` — compact own-score card in the `my-jobs` "More" panel; fetches `/api/staff/me/performance`, renders nothing on 403/404 (feature off → graceful).
+- i18n `staffPerformance.*` en+ur (full parity).
+
+### Tests
+- `rules.test.ts` — 14 unit tests (score fixture, renormalisation, insufficient, no-ratings fallback, review flag, empty, weight clamp, trend, period arithmetic).
+- `perf.integration.test.ts` — Postgres-backed (skipIf no DATABASE_URL), 2 societies: (1) worker-computed+stored (leaderboard empty before run), score 96.3 for full-data staff, FINAL-assignee credit on a reassigned ticket, insufficient-data (<3 rated → null), own-view via userId, breach/reopen lowering sub-scores (92.1); (2) zero-ratings society → status `no_ratings`, score 100 from speed+SLA.
+
+### Gates
+- `pnpm prisma generate` ok. `pnpm lint` clean (fixed react/jsx-no-literals on decorative glyphs). `pnpm typecheck` clean. Did NOT run test:unit/e2e/build (controller runs full gates).
+
+### Decisions (autonomous, recorded)
+- Added `reassignedCount`/`scoreStatus`/`reviewFlag`/`partialPeriod`/`computedAt` beyond the spec's bare model — the spec's edge cases (reassignment signal, insufficient-data, no-ratings fallback, partial period, review flag) need somewhere to live; the spec model is authoritative but silent on storage for these, so extended it minimally rather than guess.
+- Speed benchmark (48h) is a code constant, not a per-society knob — the society expresses its speed-vs-quality priority through the WEIGHTS, matching "the weights ARE the policy".
+- Reads strictly never recompute (spec rule): leaderboard/detail default to the most recent COMPLETE month; the current in-progress month is finalised by the worker on the 1st. A society only sees data after the first monthly run (or a manual `payload.period` job) — deliberate, per "not on request".
