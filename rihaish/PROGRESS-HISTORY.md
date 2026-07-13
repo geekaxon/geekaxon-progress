@@ -2441,3 +2441,29 @@ Closed the three things the system promised and silently never did, plus a sweep
 **Gates:** `pnpm prisma generate`, `pnpm lint`, `pnpm typecheck` all clean. (Did not run test:unit/build per AGENT.md — controller runs full gates.)
 
 WORK TYPE: FEATURE (branch feature/48-worker-stubs-notifications)
+
+## 49 — feature-registry-completeness — DONE (2026-07-13)
+
+Enforced ARCHITECTURE principle #2 (no module ships without registering its feature code + dependency edges) by closing the four quiet gaps spec 49 named, and adding the guard test that catches this class of drift forever.
+
+**Registry (lib/features.ts):**
+- Registered the six CCTV transport-tier sub-features (link, embed, agent, snapshots, playback, events) with the spec-41 DAG edges. `cctv.events` deliberately does NOT hard-depend on gate pass — that is a soft runtime integration (event snapshots degrade to nothing when gate pass is off), matching the file's established soft-dep convention; a hard edge would wrongly force gate pass on.
+- Registered `seasonal.permits` (the Qurbani-animal registration flow; the spine charges/spaces/vendors already hung off `seasonal.core`).
+- Split the PWA into three real, independent features: kept `branding.pwa` (white-label manifest) and added `pwa.core` (installable shell, deps branding.core + notifications + shell) and `pwa.push` (web push, dep pwa.core). A society can now install the app without white-label branding and disable push on its own.
+- Renamed the two drifted codes `complaints` → `complaints.core` and `gatepass` → `gatepass.core`, deleted the substitution comments, and re-pointed every edge (staff.console, staff.performance, complaints/gatepass sub-features) plus the `branding.pwa` stand-in edges (staff.console/gatepass.core/chat.core → pwa.core; islamic.core → pwa.push).
+- Also registered `platform.bootstrap` (spec 47, isCore) — the completeness guard flagged it as genuinely missing, so registering it was the honest fix rather than an exception.
+
+**Reference renames (feature-code usages only — NOT the i18n namespaces, notification categories, nav/tab keys, ui-mode codes or storage buckets that share the string):** app complaints/gate/gate-pass pages, lib/rbac.ts (permission→feature map values), lib/nav.ts, lib/pwa/tabs.ts (feature: only, keys/permissions kept), lib/reports/dashboards.ts + constants.ts, lib/permits/constants.ts (GATEPASS_FEATURE), and the permits integration test.
+
+**Route/service enforcement (a code nothing enforces is decoration):**
+- lib/cctv/service.ts: mode selection requires the matching tier (LINK→cctv.link, EMBED→cctv.embed, AGENT→cctv.agent); enabling resident/camera playback requires cctv.playback; enrollAgent requires cctv.agent; pushSnapshot requires cctv.snapshots. Agent heartbeat route also gated on cctv.agent.
+- lib/seasonal/service.ts: registerPermit + listPermits gated on seasonal.permits (same isEnabled/feature_disabled pattern as spaces/vendors).
+- PWA push routes: subscribe gated on pwa.push (403); public-key returns publicKey:null when off — the app still installs, push simply never registers (spec edge case: no dead nav, no 500).
+
+**Migration (prisma/migrations/20260713120000_feature_registry_completeness):** UPDATEs SocietyEntitlement rows and array_replace on Plan.featureCodes for the two renames (never DELETE), plus an idempotent back-fill that grants CCTV sub-features to societies by their current CctvIntegration.mode (LINK→link, EMBED→embed, AGENT→agent+snapshots) so nobody loses access on upgrade day. syncFeatureRegistry already flags the vanished bare codes deprecated (kept, not deleted).
+
+**Tests:** lib/features.test.ts now scans every shipped module's spec header for cited feature codes and asserts each is registered (SUPERSEDED map handles flats.registry→units.registry from step 46) — the drift guard that would have caught all four of these on day one; plus explicit assertions for the new codes and the two renames. feature-dag.test.ts gained real-registry coverage of the CCTV subtree (cascade + chain + the no-hard-gatepass-edge invariant). New DB-backed tests/unit/feature-rename-migration.integration.test.ts proves a society entitled to `gatepass` before is entitled to `gatepass.core` after, same row id, access intact, nothing deleted. Updated the cctv + seasonal integration tests to enable the newly-required sub-features.
+
+**Gates:** pnpm typecheck + pnpm lint both clean. Verified out-of-band (not test:unit): the registry imports/validates at runtime (83 features, 15 core, DAG acyclic) and every spec-cited code resolves against the registry.
+
+WORK TYPE: FEATURE (branch feature/48-worker-stubs-notifications)
