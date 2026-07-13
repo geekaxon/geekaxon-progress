@@ -2118,3 +2118,37 @@ en+ur `cctv.*` (99 keys) + `nav.cctv`. Genuine Urdu, RTL. Parity 0-diff (recursi
 - Agent enrolment models the agent as bearer-authenticated (sha-256 of a one-time code); heartbeat/snapshot use that bearer. No user session for the edge box.
 - Signing uses one Rihaish Ed25519 key (rotatable via `publicKeyId`/`CCTV_TOKEN_KEY_ID`), not per-society keys — simpler, and the edge pins one public key. Per-camera public-key rotation is out of scope.
 - Full gate-pass/emergency/complaint WIRING of `linkLatestSnapshot` into those modules' flows was left to those modules' own call sites (the helper + link columns ship here, degrade-clean); this module adds no hard edge into them.
+
+---
+
+## 42 — permission-requests — DONE (2026-07-13)
+
+**Spec:** /specs/42-permission-requests.md (AUTHORITATIVE). WORK TYPE: FEATURE (branch feature/41-cctv — continued on the active feature branch; controller merges).
+
+**What was built:** A resident asks to hold an event, put up a tent, hold a milad, renovate, shift house or arrange a funeral and gets a request with a status instead of an unanswered phone call to a committee member.
+
+**Feature registry (`lib/features.ts`):**
+- `permits.core` (deps `residents.registry`, `core.notifications`, `core.storage`).
+- `permits.charges` (dep `permits.core`) — fees + renovation debris deposit through the step-18 ledger; off → free/un-invoiced. Also needs `billing.ledger` on to actually price (RUNTIME `isEnabled`, not a DAG edge).
+- `permits.fasttrack` (dep `permits.core`) — the funeral fast-track.
+- `billing.ledger` and `gatepass` are RUNTIME checks, NOT hard edges → graceful degradation (unpriced permits; no worker passes) when off.
+
+**Data model (migration `20260713440000_permit_requests`):** `PermitStatus` enum (DRAFT/SUBMITTED/APPROVED/REJECTED/ACTIVE/COMPLETED/CANCELLED). `PermitType` + `PermitRequest` carry `societyId`+`deletedAt` → AUTO-SCOPED (soft-delete infra; permits are NEVER hard-deleted — cancelled/rejected keep their reason). `PermitEvent` (societyId, NO deletedAt) = append-only audit trail (pass-through, like EmergencyEvent). `PermitSequence` (societyId, year) = gapless per-society/year counter (atomic INSERT…ON CONFLICT). `PermitRequest` adds `announceToSociety`/`announcementId`/`cancelledAt` beyond the spec skeleton to carry the funeral opt-in + the linked BEREAVEMENT announcement.
+
+**Decisions (recorded, autonomous — no approval gates):**
+1. READ_ONLY funeral exception implemented like emergency: `runWriteScope` NEVER sets scope-readOnly (so a funeral write is always allowed by the scope layer), and the SERVICE re-imposes the freeze via `assertSocietyWritable` (reads Society.status, throws `ReadOnlyError`→423) for EVERY non-fast-track write path (create/submit/approve/reject/cancel/complete/refund + both type editors). Normal permit blocked under READ_ONLY, funeral exempt. Proven in integration test 2.
+2. Fast-track no-charge invariant enforced at the DATA LAYER by pure `fastTrackChargeViolation` — called in `createPermitType` and `patchPermitType` (against MERGED values), and `snapshotCharge` always returns zero for a fast-track type. Setting a fast-track flag also nulls fee/deposit + forces requiresApproval true. Proven in test 1.
+3. Common-area conflict guard mirrors amenities: per-area `pg_advisory_xact_lock(hashtext(societyId:area:area)::int8)` taken inside the create/submit/approve transaction, then `overlappingAreaCount` (pure, only counts LIVE=SUBMITTED/APPROVED/ACTIVE permits on the SAME non-null area overlapping the window). A permit with no area never conflicts. Proven race-free in test 3.
+4. Money seam mirrors amenities: a SEPARATE `permits` invoice line + INVOICE DEBIT ledger entry, and a SEPARATE ADJUSTMENT DEBIT deposit hold, snapshotted at approval. Cancel writes REVERSAL CREDITs (fee + deposit) + cancels the invoice; complete/refund-deposit writes an ADJUSTMENT CREDIT refund unless withheld with a mandatory audited reason. Charge head `permits` (constant, self-labelling). Proven in test 4.
+5. Funeral notifications go through the `emergency` category with `ignorePreferences` (a death cannot be muted) to roles GUARD+SOCIETY_ADMIN+COMMITTEE_MEMBER+MANAGER, and (opt-in) `allMembers`. Bereavement announcement created best-effort by a DIRECT `Announcement`(type BEREAVEMENT, PUBLISHED, priority IMPORTANT, IN_APP)+`BereavementDetail` insert (janaza time = permit.startAt, place = area/details) — wrapped in try/catch so it never fails the funeral. Templates carry plain, gentle EN+UR copy (incl. "Inna lillahi wa inna ilayhi raji'un").
+6. Renovation worker passes: `emitWorkerPasses` calls the gate-pass `createPass` (STAFF_RECURRING, valid for the permit window) once per approval, feature-gated on `isEnabled(gatepass)` and wrapped in try/catch so a disabled sub-feature/type is a silent no-op. Worker persons are placeholder-named `Worker N` (real crew names a future enhancement). Proven both ways in test 5.
+7. Guard active-funeral banner: `getActiveFunerals` returns APPROVED/ACTIVE fast-track permits within ±1 day of now; surfaced on the desk/guard UI so no mourner is turned away and no gate pass is demanded. GUARD role granted `permits.read`.
+8. Noise-window violations are surfaced as rule text only (they become a complaint, step 26) — the software states the rule, it does not police it (spec).
+
+**Files:** `lib/permits/{constants,rules,rules.test,actor,http,service}.ts`, `lib/permits/permits.integration.test.ts`, `schemas/permits.ts`. API: `app/api/permit-types/route.ts`+`[id]/route.ts`; `app/api/permits/route.ts`+`[id]/route.ts`+`[id]/{submit,approve,reject,cancel,complete,refund-deposit}/route.ts`+`availability/route.ts`; `app/api/me/permits/route.ts`. UI: `app/[locale]/app/permits/page.tsx` + `components/permits/permits-client.tsx` (Simple resident icon tiles + request form with fee-before-submit and gentle funeral flow + my-requests; Simple committee approvals inbox + area calendar + funeral banner; Pro table + permit-type editor + complete/refund). Registrations: `lib/features.ts` (3), `lib/rbac.ts` (3 perms + COMMITTEE/MANAGER/GUARD seeds), `lib/nav.ts` (permits, icon stamp), `components/shell/nav-icons.ts` (Stamp), `lib/ui-modes/modules.ts` (permits), `lib/notifications/templates.ts` (5 codes), `messages/{en,ur}.json` (permits.* 106 keys + nav.permits, parity 0-diff).
+
+**Permissions:** `permits.read` (COMMITTEE_MEMBER+MANAGER+GUARD), `permits.approve` (COMMITTEE_MEMBER+MANAGER), `permits.manage` (MANAGER + admin `*`) — all →permits.core. A resident's OWN create/submit/cancel needs NO permission (authenticated-member only).
+
+**Gates:** `pnpm prisma generate` OK. `pnpm lint` clean. `pnpm typecheck` clean. `pnpm test:unit`/`test:e2e`/`build` deliberately NOT run (controller runs full gates). Pure `rules.test.ts` (40 assertions) + DB-backed `permits.integration.test.ts` (5 acceptance cases) written.
+
+**Acceptance criteria coverage:** fast-track never fee/deposit + auto-approve (test 1 + rules) ✓; funeral works READ_ONLY (test 2) ✓; two permits can't share an area/time (test 3, concurrency) ✓; approved chargeable → one ledger debit snapshot + deposit refund credit (test 4) ✓; renovation emits worker passes when gatepass on / silent when off (test 5) ✓; funeral gentle language + guard banner + no fee shown (UI + templates + getActiveFunerals) ✓; light/dark + EN/UR RTL + mobile-first + Simple+Pro (permits-client.tsx, logical Tailwind tokens) ✓.
