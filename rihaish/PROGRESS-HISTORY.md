@@ -1713,3 +1713,52 @@ Enums `ThreadKind` (RESIDENT_TO_COMMITTEE|RESIDENT_TO_MANAGER|RESIDENT_TO_AMENIT
 - Bottom-tab unread badge: the count is exposed at the data layer (`/api/chat/overview.unreadTotal`) and shown as per-thread badges in-surface; wiring a live badge into the shared shell bottom-tab bar (lib/nav.ts has no badge slot) is deferred to a shell change.
 - No cron: auto-close is a lazy display (`effectiveStatus`); a nightly materialise-to-CLOSED sweep can be added if a report needs the stored status.
 - Message edit UI not built (spec lists it as a marker only; `editedAt` field + DTO `edited` flag are in place for a future edit action).
+
+---
+
+## 33 — polls-voting — DONE (2026-07-13)
+
+**Feature:** `polls.core` (deps `residents.registry`, `core.notifications`). Spec: /specs/33-polls-voting.md. Branch: `feature/33-polls-voting`.
+
+### What it is
+Binding society decisions (electing a committee, approving a levy) — not a survey; a vote with an auditable result the losing side cannot credibly dispute.
+
+### Key design decisions
+- **The FLAT is the atomic voting unit for EVERY eligibility mode.** The spec's flagship acceptance criterion is a DB-enforced one-vote-per-flat (`@@unique([pollId, flatId])`), and its edge cases (three residents share one vote; a two-flat resident gets two votes; a flat with no resident is not in the quorum base) all centre on the flat. Rather than switch the uniqueness key per mode (multi-resident-per-flat would collide with a flat-unique index under ALL_RESIDENTS), eligibility governs only (a) WHICH flats are eligible and (b) WHICH occupant may cast the flat's single vote:
+  - ALL_RESIDENTS / ONE_PER_FLAT → any current occupant of an occupied flat.
+  - OWNERS_ONLY → only an OWNER-relation current occupant.
+  - COMMITTEE_ONLY → only a flat held by a current committee member (the voter must hold a committee role).
+  - BLOCK → only flats inside the poll's `eligibilityIds` blocks.
+  This keeps a single unambiguous DB constraint and makes the acceptance test provable. Recorded here as the authoritative interpretation.
+- **Anonymity vs turnout split across two tables.** `Vote` (holds `optionIds` = WHAT) sets `voterUserId = NULL` when anonymous; `VoteTurnout` (flat-keyed `@@id([pollId, flatId])`, NO userId, pass-through infra) records WHO/turnout. Person→choice is never stored for an anonymous poll, yet the committee can chase non-voting FLATS. VoteTurnout deliberately omits userId (matches the spec model exactly: `{ pollId, flatId, votedAt }`).
+- **Receipt hash** = sha256(`pollId|flatId|sortedOptionIds|voteId-nonce`). Deterministic + verifiable (`verifyReceipt`), reveals nothing about the choice to anyone lacking the inputs, and the vote-id nonce stops two identical ballots sharing a receipt. Two-step write: create Vote (id = nonce) → compute → update `receiptHash`.
+- **Results 403 before close for EVERY role** incl SOCIETY_ADMIN — `canSeeResults` is a pure function on (status, endsAt, now); the route throws `results_hidden` (→403). No live counts anywhere. `getTurnout` returns counts/percent + the not-voted flat list ONLY (never per-option tallies).
+- **Quorum** — `tally` checks quorum first; below `quorumPercent` turnout → outcome `INCONCLUSIVE_QUORUM`, `winnerOptionIds = []`, however lopsided. Counts still returned for transparency. Ties for first surface every tied option; multi-seat (COMMITTEE_ELECTION, votesPerVoter>1) elects the top N.
+- **Server time authoritative** — `isOpenAt` requires status OPEN and `startsAt ≤ now < endsAt` (`endsAt` EXCLUSIVE → a clock-skew vote at/after close is rejected). `effectiveStatus` lazily shows an OPEN-past-endsAt poll as CLOSED without a write.
+- **Immutability / cancel** — a cast Vote is never edited/deleted (`deletedAt` exists only for the scoping contract, never set). Cancel sets status CANCELLED + `cancelledAt`/`cancelReason` + audit + notify-all; the result outcome becomes CANCELLED (void), votes retained, never silently rerun.
+- **Notifications** routed through the existing `announcements` category (codes `poll.opened` / `poll.results_published` / `poll.cancelled`, en+ur, IN_APP+PUSH) — avoids adding a NOTIFICATION_CATEGORIES entry (which has a `toHaveLength(8)` test) while still respecting residents' broadcast prefs.
+- **Shared-device block** — `requirePollMember`/`getPollServerActor` refuse a SHARED device (a binding, anonymous vote must never be cast from a guard gate terminal); nav item `hideOnSharedDevice`.
+
+### Tenant-scoping
+`Poll` + `Vote` carry societyId+deletedAt → auto-scoped (reads pinned, writes stamped, READ_ONLY society → 423 on a cast vote). `VoteTurnout` has societyId, no deletedAt → pass-through, scoped explicitly. Verified via Prisma DMMF at build.
+
+### Files
+- Migration `prisma/migrations/20260713350000_polls_voting/migration.sql` — PollKind/Eligibility/PollStatus enums; Poll, Vote (unique `Vote_pollId_flatId_key`), VoteTurnout; FKs Vote/VoteTurnout → Poll (cascade). schema.prisma models appended.
+- `lib/polls/`: `constants.ts`, `rules.ts` (pure; `rules.test.ts` ~30 assertions), `actor.ts` (POLLS_READ/POLLS_MANAGE, member/actor guards, read/write scopes), `http.ts` (error→status incl 409 for `already_voted`, 403 for `results_hidden`/`not_eligible`), `service.ts` (create/patch/open[snapshot eligibleFlatCount]/close/cancel/castVote[P2002→already_voted]/getResults/getTurnout/listPolls/getPoll/listMyPolls/getOverview/listBlocks), `polls.integration.test.ts` (DB-backed: raw P2002, two-residents-one-vote, anonymity+turnout+receipt, results 403→reveal, quorum inconclusive, two-flats-two-votes).
+- `schemas/polls.ts` (pollCreate/pollPatch/vote/pollCancel).
+- API: `app/api/polls/route.ts` (GET/POST), `app/api/polls/[id]/route.ts` (GET/PATCH), `.../[id]/{open,close,cancel,vote}/route.ts` (POST), `.../[id]/{results,turnout}/route.ts` (GET), `app/api/me/polls/route.ts` (GET).
+- Registries: `lib/features.ts` (polls.core), `lib/rbac.ts` (polls.read→COMMITTEE_MEMBER/MANAGER, polls.manage→MANAGER; both gated by polls.core; residents vote with NO perm), `lib/nav.ts` (key `polls`, icon `vote`, hideOnSharedDevice), `components/shell/nav-icons.ts` (`vote`→Vote), `lib/ui-modes/modules.ts` (polls, resident/SIMPLE), `lib/notifications/templates.ts` (3 poll codes).
+- UI: `app/[locale]/app/polls/page.tsx` (feature-gated, blocks for BLOCK picker), `components/polls/polls-client.tsx` (Simple ballot: big option cards, anonymity note, confirm "you cannot change this", receipt with hash, animated result bars; Pro builder + live turnout dashboard + who-hasn't-voted chase list + open/close/cancel).
+- i18n: `messages/en.json` + `messages/ur.json` `polls.*` + `nav.polls` (parity).
+- e2e: `e2e/polls-voting.spec.ts` (401 on every endpoint).
+
+### Gates
+`pnpm prisma generate` ok. `pnpm lint` clean (fixed react/jsx-no-literals on ·/✓/% and unused vars). `pnpm typecheck` clean. Did NOT run test:unit/e2e/build (controller runs full gates). No cron.
+
+### Acceptance criteria mapping
+- one-vote-per-flat DB constraint → migration unique index + `polls.integration.test.ts` (raw P2002 + castVote 409). ✓
+- anonymous: no voterUserId, turnout recorded, receipt verifies → integration test. ✓
+- results 403 before close for every role → `canSeeResults` + `getResults` throws + integration test (admin ctx). ✓
+- quorum not met → inconclusive, never winner → `tally` + rules.test + integration test. ✓
+- multi-flat user one vote per flat → flat switcher + integration test. ✓
+- light/dark, EN/UR RTL, mobile-first, Simple+Pro → design tokens, logical props (text-start/ms/gap), mobile-first grid, both variants implemented (self-check by inspection). ✓
