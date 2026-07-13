@@ -2467,3 +2467,24 @@ Enforced ARCHITECTURE principle #2 (no module ships without registering its feat
 **Gates:** pnpm typecheck + pnpm lint both clean. Verified out-of-band (not test:unit): the registry imports/validates at runtime (83 features, 15 core, DAG acyclic) and every spec-cited code resolves against the registry.
 
 WORK TYPE: FEATURE (branch feature/48-worker-stubs-notifications)
+
+## 50 — cctv-architecture-guard — DONE (2026-07-13)
+**Branch:** feature/50-cctv-architecture-guard · **Spec:** /specs/50-cctv-architecture-guard.md · extends cctv.core
+
+**What:** Added `lib/cctv/architecture.test.ts` — a PURELY STATIC guard (fs + regex, no DB/network) enforcing ARCHITECTURE.md principle #11 "Rihaish never carries video." It is the static counterpart to the runtime guarantees already proven in `cctv.integration.test.ts`.
+
+**Assertions:**
+1. No media/streaming dependency is imported anywhere in production source (SOURCE_ROOTS = app, components, lib, schemas, scripts, worker, i18n; test files excluded). Extracts real module specifiers (`from`/`import`/`require`/dynamic-import) so a bare string literal naming a lib — as the assertion lists themselves do — is not a false positive. Forbidden: fluent-ffmpeg, ffmpeg-static, node-media-server, mediasoup, wrtc, werift, hls.js, rtsp-*, @ffmpeg/*. Also asserts package.json declares none of them.
+2. No CCTV route proxies a body — walks app/api/cameras/** + app/api/cctv/** and per route file forbids ReadableStream, `.pipe(`, `new Response(`, `.body`, `fetch(`; positively asserts each responds via NextResponse (JSON only). 9 route files covered.
+3. Stream URL always resolves to the society edge: buildStreamUrl origin === the edge base it was given; token.ts contains no process.env/APEX_HOST/WILDCARD_HOST; no lib/cctv file references a Rihaish apex/wildcard host; service builds the URL from `integration.edgeBaseUrl`.
+4. Snapshot caps enforced in code (not docs): MAX_SNAPSHOT_BYTES ≤ 128KB; service.ts references MAX_SNAPSHOT_BYTES + snapshot_too_large + snapshotAllowed() + snapshot_rate_limited + storeFile().
+5. View tokens single-scoped + short-lived: MAX_TOKEN_TTL_SECONDS ≤ 120; token claim shape carries societyId/cameraId/userId/jti/exp/iat and has no plural id arrays; service clamps to MAX_TOKEN_TTL_SECONDS. (token.test.ts already covers mint/verify/expiry/replay/tamper — no extension needed.)
+- Acceptance: CameraViewLog has NO delete path in production code — repo-wide (non-test) scan for `cameraViewLog.delete(Many)` returns empty. Test cleanup in cctv.integration.test.ts is excluded (it is a *.test.ts file and a legitimate teardown).
+
+**Verified pre-write the tree is clean:** no media deps in package.json, no APEX/WILDCARD in lib/cctv, no streaming patterns in routes, no production CameraViewLog delete path — so the suite is green now and only goes red on a real violation (acceptance: add a stream-proxy route or a media import → red).
+
+**Also-verify items already covered by existing tests (no new test needed):** RESTRICTED/PRIVATE-not-grantable-to-resident-for-any-role (cctv.integration.test.ts #1 + rules.test.ts), ex-tenant grant auto-revoke on ended occupancy (cctv.integration.test.ts #3), http.ts signs/returns only — never fetches upstream (now also asserted statically here).
+
+**Gates:** `pnpm lint` ✔ (no warnings/errors) · `pnpm typecheck` ✔ (tsc --noEmit clean). Did not run test:unit/e2e/build per standing rules (controller runs full gates). No schema change → no prisma generate.
+
+**Files:** added lib/cctv/architecture.test.ts. No source changes (this step adds a guard; the guarantees it locks in were already implemented in steps 41/49).
