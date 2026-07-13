@@ -1880,3 +1880,56 @@ WORK TYPE: FEATURE (branch feature/34-surveys)
 - Added `reassignedCount`/`scoreStatus`/`reviewFlag`/`partialPeriod`/`computedAt` beyond the spec's bare model — the spec's edge cases (reassignment signal, insufficient-data, no-ratings fallback, partial period, review flag) need somewhere to live; the spec model is authoritative but silent on storage for these, so extended it minimally rather than guess.
 - Speed benchmark (48h) is a code constant, not a per-society knob — the society expresses its speed-vs-quality priority through the WEIGHTS, matching "the weights ARE the policy".
 - Reads strictly never recompute (spec rule): leaderboard/detail default to the most recent COMPLETE month; the current in-progress month is finalised by the worker on the 1st. A society only sees data after the first monthly run (or a manual `payload.period` job) — deliberate, per "not on request".
+
+---
+
+## 37 — meter-readings — DONE (2026-07-13)
+
+**Feature:** `meters.core` (isCore false; deps `flats.registry`, `billing.charges`, `staff.directory`). Spec `/specs/37-meter-readings.md` (authoritative). Branch `feature/37-meter-readings`.
+
+### What was built
+Sub-metered utilities (WATER/GAS/ELECTRICITY/GENERATOR) billed by consumption, feeding the charge engine's `METERED` charge heads (step 17/18).
+
+**Data model** (migration `20260713390000_meter_readings`):
+- `MeterKind` enum (WATER/GAS/ELECTRICITY/GENERATOR), `ReadingStatus` enum (DRAFT/CONFIRMED/DISPUTED/BILLED).
+- `Meter` (societyId+deletedAt scoped): flatId nullable (null = common/society meter), code (unique per society), kind, unit, chargeHeadId (must be a METERED head), initialReading (Decimal), digitCount (default 6, rollover ceiling), isActive, installedOn.
+- `MeterTariff` (scoped): meterKind, ratePerUnitMinor/fixedChargeMinor (BigInt), slabs (Json `[{upTo,rateMinor}]`), effectiveFrom/effectiveTo — effective-dated, never edited in place (a new tariff closes the prior current one in a txn).
+- `MeterReading` (scoped): meterId, period "YYYY-MM", previous/current/consumption (Decimal), readingDate, photoFileId, readBy, status, disputeNote, estimated, amountMinor (BigInt, set at billing). Unique `(societyId, meterId, period)` → idempotent round.
+- `MeterSettings` (pass-through infra, no deletedAt, Society relation): photoRequired, estimateMissing. Society back-relation `meterSettings` added.
+- Readings are Decimal (a meter counts units, fractional for m3/kWh); pure rules operate on `number` (service converts at the boundary via `Number()`), keeping rules Prisma-free.
+
+**Pure rules** (`lib/meters/rules.ts`, 20 vitest in `rules.test.ts`):
+- `computeConsumption(previous,current,digitCount)` → rollover-safe. current≥previous → current−previous. current<previous → wrap `ceiling−previous+current` accepted ONLY when smaller magnitude than the drop `previous−current` (so 999,980→000,020 = 40 rollover; 500→200 = implausible → disputed, consumption 0). Equal → 0, not a dispute.
+- `computeAmountMinor(consumption,tariff)` → slab telescoping bands + fixed charge, or flat rate + fixed; never negative; rounds fractional minor. Hand-checked: 120u over [100@2000, rest@2500] + 1000 fixed = 251,000.
+- `selectTariff(tariffs,kind,at)` — effective-dated, latest effectiveFrom wins, null when none.
+- `estimateConsumption(recent)` — avg of last N (caller-trimmed), `estimated:true`, `basis:0` when no history (caller must NOT bill a made-up number).
+- `isAnomalous(consumption,avg,mult)` (>2× recent avg), `averageConsumption`, `isImmutable` (BILLED only).
+
+**Billing integration** (the substance): `lib/meters/billing.ts` `meteredLinesForRun(period,now,societyId)` loads active flat-bound meters on METERED heads, prices each CONFIRMED reading via `selectTariff`+`computeAmountMinor`, sums per (flat,head) → `Map<flatId, ResolveMetered[]>`. When `MeterSettings.estimateMissing` is on, a missing reading with real history is billed as a labelled estimate (basis 0 → skipped). `lib/charges/resolve.ts` `resolveCharges` gained an optional trailing `metered: ResolveMetered[] = []` param (backward-compatible — the step-17 simulator's 5-arg call and `resolve.test.ts` still pass, METERED head warns `metered_unavailable` with no lines): a supplied metered line bills (carries sourceReadingId + estimated), absence warns (never a silent zero), feature OFF → no lines → head skipped cleanly. `lib/billing/service.ts`: `loadRunContext` gates on `isEnabled(societyId,"meters.core")` → loads `meteredByFlat` into `RunContext`; `buildFlat` passes the flat's metered lines to `resolveCharges` and carries `meta.readingId`/`estimated`; the invoice COMMIT marks each consumed CONFIRMED reading BILLED with its amount in the SAME transaction (immutable thereafter; estimate lines carry a synthetic `estimate:*` id and are skipped). MeterSettings queried by explicit societyId (pass-through, not auto-scoped).
+
+**Service** (`lib/meters/service.ts`): meter CRUD (asserts METERED head, unique code, flat exists), tariff create (closes prior current, validates one open-ended top band last), `recordReadings` (the round — derives previous from the latest prior-period reading or initialReading, computes consumption+status, enforces `photoRequired`, upserts; overwrites only DRAFT/DISPUTED — never silently un-confirms a CONFIRMED reading, never a BILLED one), `patchReading` (pre-confirmation only), `confirmReading`, `bulkConfirm` (DRAFT only — never sweeps DISPUTED/BILLED), `disputeReading` (mandatory note + resident notification), `getConsoleData` (Pro bootstrap: meters/tariffs/meteredHeads/flats/blocks/settings), `getResidentUsage` (own held flats only — latest priced reading + 6-month trend + photo), `updateSettings`, `societyMoney`. Typed `MeterError` → `http.ts` status map (404/403/409 immutable/422/400).
+
+**API:** `/api/meters`(GET desk/POST manage), `/api/meters/[id]`(PATCH manage), `/api/meter-tariffs`(GET/POST), `/api/meters/readings`(GET ?period&kind&status&blockId), `/api/meters/readings/bulk`(round, record), `/api/meters/readings/bulk-confirm`(manage), `/api/meters/readings/[id]`(PATCH pre-confirm), `/[id]/confirm`(manage), `/[id]/dispute`(manage), `/api/meters/settings`(PUT manage), `/api/me/meters`(GET own usage, no perm).
+
+**RBAC:** `meters.read`/`meters.record`/`meters.manage` → gated by `meters.core`. Seeds: COMMITTEE_MEMBER (read+record), MANAGER (all three), STAFF (record — walks the round). Residents see own usage with NO permission (`requireMeterMember`).
+
+**UI:** page `app/[locale]/app/meter-readings/page.tsx` (feature-gated EmptyState when off), client `components/meter-readings/meter-readings-client.tsx`. nav `droplets` (resident `main` ungated + committee `manage` on `meters.record`); ui-mode `meterReadings` (resident audience → default SIMPLE); nav-icon `droplets` (lucide Droplets). Simple: Urdu-first mobile reading round (previous reading, big number input, `<FileUpload camera>` photo, save & swipe, DISPUTED toast on lower reading) + resident own-usage cards (latest "X units — ₨Y", estimated label, meter photo link, 6-month `<Sparkline>`). Pro (committee, tabbed): readings table (period/kind/status/block filters via `/api/meters/readings`, >2× anomaly row tint + icon, confirm/dispute, bulk confirm, client CSV export) + slab tariff editor (flat or add/remove slab bands) + meter CRUD (deactivate a replaced meter) + policy toggles (mandatory photo / estimate-missing). Design self-check: semantic light/dark tokens + dark: tone variants; `dir` threaded + logical `ms/me/text-start/text-end`; mobile-first single-card round + `sm:` grids + `overflow-x-auto` table/tabs.
+
+**Notifications:** `meter.reading.disputed` template (category `announcements`, en+ur, IN_APP+PUSH) so residents' broadcast prefs apply.
+
+**i18n:** `meterReadings.*` en+ur (115 keys each, parity 0-diff) + `nav.meterReadings`.
+
+### Decisions
+- Billing integration IS in scope (acceptance criteria "missing → preview warning" and "feature off → skipped cleanly" only become truthful with the run wired). Kept the billing-service change minimal and additive: an optional resolver param + a gated context load + a same-txn BILLED marking. No existing billing/charges test broken (metered param defaults to []).
+- Rollover heuristic "wrap only when smaller magnitude than the drop" chosen over a fixed threshold — deterministic, needs no usage history, and rejects genuine misreads (near-top drops) as disputes.
+- BILLED transition is driven by the invoice COMMIT (not preview), so immutability is not vacuous; the meters service refuses every edit path on a BILLED reading.
+- A common/society meter (flatId null) is never billed to a resident; excluded from `meteredLinesForRun`.
+
+### Gate results
+- `pnpm prisma generate` ✓ · `pnpm typecheck` clean · `pnpm lint` clean (0 warnings).
+- `pnpm vitest run lib/meters/rules.test.ts` → 20/20. `lib/charges/resolve.test.ts` → 17/17 (unchanged). Registries `lib/features.test.ts`/`feature-dag`/`rbac`/`nav`/`notifications/templates` → 37/37. en/ur meterReadings parity 115/115.
+- `lib/meters/meters.integration.test.ts` written (DB-backed, `skipIf(!DATABASE_URL)`): rollover=40, lower→DISPUTED, slab pricing → 80,000 metered line + resolver line, missing→`metered_unavailable` warning + feature-off skip, opt-in estimate labelled (60,000), BILLED immutable (confirm/patch/dispute refused), resident own-usage priced (50,000). Runs under the controller's full gates (no local DATABASE_URL).
+- Did NOT run test:unit/test:e2e/build per standing rules (controller runs full gates).
+
+### Files
+schema.prisma (+MeterKind/ReadingStatus enums, Meter/MeterTariff/MeterReading/MeterSettings, Society.meterSettings); migrations/20260713390000_meter_readings/migration.sql; lib/meters/{constants,rules,rules.test,actor,http,service,billing,meters.integration.test}.ts; schemas/meters.ts; lib/charges/resolve.ts (metered param); lib/billing/service.ts (gated metered load + BILLED marking); lib/notifications/templates.ts (meter.reading.disputed); lib/features.ts; lib/rbac.ts; lib/nav.ts; lib/ui-modes/modules.ts; components/shell/nav-icons.ts (droplets); app/api/meters/**, app/api/meter-tariffs/route.ts, app/api/me/meters/route.ts; app/[locale]/app/meter-readings/page.tsx; components/meter-readings/meter-readings-client.tsx; messages/en.json, messages/ur.json.
