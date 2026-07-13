@@ -2016,3 +2016,105 @@ New pass-through model `ReportSettings { societyId @id, scheduledMonthly, schedu
 - The report table is rendered directly (server returns pre-formatted string rows) rather than through the full `<DataTable>` saved-views component, to keep the surface bounded; exports still go through the authoritative step-07 export kit (audit + PII gate + Urdu PDF).
 
 WORK TYPE: FEATURE (branch feature/39-reports-dashboards)
+
+---
+
+## Step 40 — public-site — DONE (2026-07-13)
+
+**Feature:** `platform.public_site` (module `40-public-site`, isCore false, dependsOn `platform.billing`, `core.shell`). Registered in `lib/features.ts`; DAG validation passes (registries green).
+
+**Spec:** `/specs/40-public-site.md` (authoritative). No CODEREF companion found (proceeded).
+
+### What was built
+The apex marketing site (rihaish.pk): where a prospect lands, understands the product, and asks to be called; also the legal home.
+
+- **Apex-only (spec: "a society host never renders it").** Pure `isMarketingPath(pathname)` added to `lib/tenant-host.ts` (root `/`, `/features`, `/pricing`, `/demo`, `/about`, `/legal/*`, locale-tolerant; app/platform/api/assets excluded). `middleware.ts` returns a generic 404 when `ctx.kind !== "platform" && isMarketingPath(pathname)` — reveals nothing, identical to any other miss. `/api/leads` re-checks the host in-handler (defence in depth). DECISION: a society host hitting `/` now 404s (rather than the old generic placeholder). Acceptable per spec — no browser e2e navigates a society host to a marketing root; society entry is `/app`. Kept it a 404 (not a redirect) to avoid coupling to app-login routing this step.
+- **Static/ISR + DB-down resilience.** Every marketing page is a Server Component using only `setRequestLocale` + `getTranslations` (no cookies/headers/DB) → statically generated for en/ur → renders through an app-DB outage. Old `app/[locale]/page.tsx` placeholder REMOVED; landing moved into route group `app/[locale]/(marketing)/` (does not affect URLs). Pages: `page.tsx` (landing: hero/problem/solution/token-free product preview/social proof/CTA), `features/`, `pricing/`, `demo/`, `about/`, `legal/{privacy,terms,data-protection}/`. `(marketing)/layout.tsx` = header + footer + optional first-party analytics `<Script>`; no `headers()` so it stays static.
+- **Lead form — layered defence.** `app/api/leads/route.ts` POST: apex host check → in-memory per-IP rate limit (`lib/public-site/rate-limit.ts`, DB-free so it survives a DB outage; `LEAD_RATE_LIMIT` 3/10min) → ONE shared Zod schema (`schemas/public-site.ts`, browser resolver + server) → `checkSpam` (`lib/public-site/spam.ts`, pure: honeypot `companyWebsite` + time-trap `MIN_FILL_MS` 2.5s + stateless arithmetic challenge validated by id) → `createLead` (unscoped platform write — the authoritative record) → fire-and-forget `notifyPlatformOfLead`. Honeypot/time-trap → silent `{ok:true, dropped}` (a bot learns nothing); wrong challenge → 400 `challenge` (a human retries); rate limit → 429 + Retry-After; **DB down → 503 `{db_unavailable, fallbackEmail}`** and the client form degrades to "email us at hello@rihaish.pk" (never pretends it saved). Honeypot schema accepts any string (so a filled trap does not 400 and tip off the bot).
+- **Existing-society edge case.** `flagExistingSocieties` (case-insensitive, trimmed; reads the small society registry once, matches in memory) flags a lead whose society name matches a tenant. Never rejected — flagged in the console (amber warning + hint in the detail dialog).
+- **Platform console.** New `Lead` model + `LeadStatus` enum (NEW|CONTACTED|DEMO_SCHEDULED|WON|LOST); migration `prisma/migrations/20260713420000_public_site/migration.sql`. Platform-level (no `societyId`/`deletedAt`) — a lead predates any society. `/platform/leads` page + `LeadsTable` (data-table kit, newest-first, status/city filters, row → detail dialog to move the pipeline + keep notes). API `/api/platform/leads` (GET list via `runPlatformList`) + `/[id]` (PATCH status/notes, `LeadNotFoundError`→404). Nav item `leads` (icon `Inbox`) in `PlatformShell`. Perms reuse `platform.society.{read,manage}`.
+- **SEO.** `app/sitemap.ts` (all 8 marketing routes × en/ur with hreflang alternates; app/api/platform never listed). `app/robots.ts` (allow /, disallow /app /api /platform, sitemap + host). Per-page `generateMetadata` via `lib/public-site/seo.ts` `buildMetadata` (canonical + `alternates.languages` hreflang incl. x-default + OpenGraph + Twitter). JSON-LD `SoftwareApplication`/Organization on the landing. `(marketing)/opengraph-image.tsx` (next/og ImageResponse, emerald/gold, async `params` per Next 15.5 image loader — awaited; NO staging token/screenshot).
+- **Analytics/trust.** Analytics is first-party only (self-hosted Plausible/Umami) and OPT-IN via `ANALYTICS_SCRIPT_URL`/`ANALYTICS_SITE_ID`; unset → nothing emitted. No third-party tracker. Product "screenshots" are a token-free MOCK (`components/marketing/product-preview.tsx`) rendered from the palette — spec forbids embedding a staging token; real screenshots await a screenshot pipeline.
+- **Pricing.** Pure `lib/public-site/pricing.ts` `quoteMonthly` — published list price, volume tiers (60/50/40/32 PKR per flat across 1–100/101–300/301–750/751+), ₨3,000 monthly floor, 10% annual discount (floored). 184 flats → ₨9,200/mo. Client `PricingCalculator` recomputes with the same function (server == browser); beyond 1,000 flats → honest "let's talk" (lumpsum).
+- **Env (all optional, in `.env.example`):** `PLATFORM_ALERT_EMAIL`, `PLATFORM_ALERT_PHONE`, `PLATFORM_WA_PHONE_NUMBER_ID`, `PLATFORM_WA_ACCESS_TOKEN` (best-effort lead heads-up; a lead ALWAYS lands in the console regardless), `ANALYTICS_SCRIPT_URL`, `ANALYTICS_SITE_ID`. Added to `lib/env.ts`.
+- **i18n.** `messages/en.json` + `ur.json`: full `marketing.*` namespace (nav/footer/hero/preview/problem/solution/socialProof/cta; features 8 module families written for a committee chairman; pricing incl. calculator + 3 plans; demo form + spam-challenge questions; about + offices; legal privacy/terms/data-protection with real CNIC-handling and child-exit safeguarding sections) + `platform.leads` + `platform.nav.leads`. Genuine Urdu (not machine-dumped), RTL via the root layout `dir`. Parity check: 0 diff en↔ur including array lengths.
+
+### Files
+- Prisma: `schema.prisma` (+`Lead`/`LeadStatus`), migration `20260713420000_public_site`.
+- `lib/public-site/`: `constants.ts` (contact, nav, plans, challenges, honeypot, rate-limit config), `pricing.ts` (+`pricing.test.ts`), `spam.ts` (+`spam.test.ts`), `rate-limit.ts` (+`rate-limit.test.ts`), `seo.ts`, `leads.ts` (create/notify/flag/list/update, +`leads.integration.test.ts`).
+- `schemas/public-site.ts` (leadFormSchema + leadFields).
+- `lib/tenant-host.ts` (+`isMarketingPath`, +tests), `middleware.ts` (marketing gate), `lib/env.ts`, `lib/features.ts`.
+- API: `app/api/leads/route.ts`, `app/api/platform/leads/route.ts` + `[id]/route.ts`.
+- Pages: `app/[locale]/(marketing)/` layout + landing + features/pricing/demo/about + legal/{privacy,terms,data-protection}; `app/[locale]/platform/leads/page.tsx`; `app/sitemap.ts`; `app/robots.ts`; `(marketing)/opengraph-image.tsx`.
+- Components: `components/marketing/` (marketing-header, marketing-footer, lead-form, pricing-calculator, product-preview, legal-article); `components/platform/leads-table.tsx`; `platform-shell.tsx` (+leads nav).
+
+### Gates
+- `pnpm prisma generate` ✓ · `pnpm lint` ✓ (no warnings/errors; had to route bare JSX literals through i18n/expressions for `react/jsx-no-literals`) · `pnpm typecheck` ✓ (removed stale `.next` after deleting the old root page; dropped an invalid `numeric` key from a server `ColumnConfig`). Did NOT run test:unit/e2e/build per CLAUDE.md — controller runs full gates.
+- Tests authored: pricing (6), spam (6), rate-limit (4), `isMarketingPath` (2), leads DB-backed integration (`describe.skipIf(!hasDb)`: lands-as-NEW+listed / existing-society-flagged-not-rejected-case-insensitive / pipeline status+notes).
+
+### Decisions recorded
+- **[DECIDE AT BUILD] trademark/domain clearance for "Rihaish"** (spec, PROGRESS-HISTORY D10): this is a business/legal filing, not code. Surfaced on the pricing page ("Trademark & domain clearance for your society is on us") but the actual clearance action is out of code scope for this step — no code blocker.
+- Society-host root → 404 (not redirect) this step; revisit if a society-host landing/login is specced later.
+- Lead notification is best-effort (email via deploy SMTP transport; WhatsApp via wa-cloud env creds) and can never fail the lead; with nothing configured the operator still sees the lead in the console.
+
+WORK TYPE: FEATURE (branch feature/40-public-site)
+
+---
+
+## Step 41 — cctv — DONE (2026-07-13)
+
+**Feature:** `cctv.core` (module `41-cctv`). DAG deps: `residents.registry`, `core.storage`. Notifications/gatepass/emergency are RUNTIME integrations (event snapshots degrade to nothing when absent), NOT DAG edges — no module ever depends on CCTV existing.
+
+**Spec:** /specs/41-cctv.md (AUTHORITATIVE). No CODEREF.
+
+### The non-negotiable constraint (verified by test)
+Rihaish NEVER carries video. No RTSP proxy, transcode, HLS repackage or relay anywhere. Rihaish is the REGISTRY + PERMISSION ENGINE + TOKEN ISSUER + AUDIT LOG. The architecture test (`cctv.integration.test.ts` §5) reads service/token/keys/actor/rules source and asserts none imports a media/streaming lib (ffmpeg/fluent-ffmpeg/node-media-server/wrtc/mediasoup/hls.js/rtsp/gstreamer/@ffmpeg), and the mint test asserts the stream URL contains the SOCIETY edge host and NOT "rihaish".
+
+### The security heart — the view token (`lib/cctv/token.ts`, pure)
+Ed25519 (EdDSA) signed JWT. `mintViewToken(privateKey, claims, kid)` → SHORT-LIVED, single society/camera/user, `jti` for replay, absolute `iat`/`exp`. `verifyViewToken(publicKey, token, {nowSeconds, seenJtis, clockSkewSeconds})` is exactly what the society EDGE runs: EdDSA signature check → alg check → exp/iat window → jti replay cache. Rejects malformed/bad_alg/bad_signature/expired/not_yet_valid/replayed. `buildStreamUrl(edgeBaseUrl, streamPath, token)` assembles the SOCIETY-edge URL with the token as a query param (never a Rihaish host). 7 vitest (roundtrip, expired, tampered-payload, foreign-key, replayed, malformed, edge-url).
+Keys: `lib/cctv/keys.ts` reads `CCTV_TOKEN_{PRIVATE,PUBLIC}_KEY` (PEM PKCS#8/SPKI) + `CCTV_TOKEN_KEY_ID`; when unset generates a per-process EPHEMERAL keypair so dev live-view works out-of-box (production MUST set a stable key so the edge can pin the public key). `hasStableSigningKey()` surfaces production-readiness in the integration view.
+
+### Safeguarding (pure `lib/cctv/rules.ts`, 7 vitest) — enforced in code, not committee judgement
+- `canGrantClassToSubject(class, subjectType, roleCode?)`: only COMMON is resident-grantable. FLAT/USER/ALL_RESIDENTS are always resident audiences; a ROLE grant is resident only for the plain RESIDENT role (any staff/committee role → any class; unknown role → fail-safe resident). `createGrant` rejects RESTRICTED/PRIVATE to a resident subject for EVERY caller incl. a SOCIETY_ADMIN-level ctx (checks every camera a grant covers, expanding groups). AND `resolveAccessibleCameras` re-filters resident-subject matches to COMMON at ACCESS time (defense in depth — a bad grant that somehow slipped in still can't resolve).
+- `residentAccessEnabled` OFF by default (a plain resident resolves to zero cameras until the society opts in; committee sees via role, ungated).
+- Watermark `watermarkText(name, flat, iso)` = viewer name + flat + time, rendered as a non-removable DOM overlay on the live view.
+- Concurrency cap (`maxConcurrentViewsPerUser`, default 2) enforced at mint by counting the user's view-log rows started inside the TTL window.
+- Token TTL clamped to `MAX_TOKEN_TTL_SECONDS` (120) so the honesty guarantee ("access dies within the TTL, ≤60s") can't be silently widened.
+
+### The ex-tenant nightmare — closed two ways (test §3)
+1. AUTOMATIC: `resolveAccessibleCameras` requires an ACTIVE `FlatOccupancy` (endDate null) for any resident-subject match. The instant an occupancy ends, the ex-tenant resolves to zero cameras and mint → `access_denied`.
+2. EXPLICIT: `revokeGrantsForEndedOccupancy(societyId, userId)` (feature-gated via `isEnabled`, no-op when off/absent) revokes live USER grants for a departed user who no longer holds anywhere in the society. Wired best-effort (try/catch, dynamic import) into residents `updateOccupancy` on the `endOccupancy`/endDate path — residents never breaks when CCTV is off, and does NOT depend on it.
+
+### Read-only rule (spec edge case)
+Live view SURVIVES a READ_ONLY (unpaid) society — cutting security cameras over a billing dispute is unacceptable and costs us nothing (video never touches us). `runLiveScope` (token mint / view-log) and `runAgentScope` (snapshot push / heartbeat) are DELIBERATELY never read-only (impersonation-without-write still blocked). Only CONFIG writes freeze: `runConfigScope` honours `Society.status === READ_ONLY`.
+
+### View log & snapshots
+- `CameraViewLog` APPEND-ONLY (no `deletedAt`, no delete path anywhere). `mintView` writes the row BEFORE returning the token. `listViewLog`: a `cctv.view` viewer sees ALL rows (filter by camera/user); a plain member sees ONLY their own history.
+- Snapshots (`pushSnapshot`, agent-authenticated): the ONLY image data touching our storage. Rate-limited (1 per `snapshotIntervalSeconds`, default 60), 100 KB hard cap (`MAX_SNAPSHOT_BYTES`, checked pre-store), stored via `storeFile` (sniffed + quota-checked against `Society.maxStorageMb`). `linkLatestSnapshot(society, camera, entityType, entityId, reason)` attaches a recent snapshot to a GateEvent/EmergencyAlert/Complaint and degrades silently to null when CCTV is off (the event-integration hook; degrade-clean per spec).
+
+### Data / migration
+Migration `20260713430000_cctv`. Enums `CctvMode`(NONE|LINK|EMBED|AGENT), `AgentStatus`, `CameraClass`(COMMON|RESTRICTED|PRIVATE), `GrantSubject`, `SnapshotReason`. Models: `CctvIntegration`/`CctvSettings` (pass-through, `societyId` @id, Society back-relation), `CctvAgent`, `Camera` (@@unique[societyId,code], deletedAt), `CameraGroup`, `CameraAccessGrant`, `CameraViewLog` (append-only), `CameraSnapshot`. Society gains `cctvIntegration`/`cctvSettings` relations.
+
+### Endpoints (all spec-listed)
+`GET/PUT /api/cctv/integration` · `GET/PUT /api/cctv/settings` · `POST /api/cctv/agents/enroll` (committee → one-time enrolment code, only sha-256 hash stored) · `POST /api/cctv/agents/heartbeat` (bearer enrolment code → ONLINE) · `GET /api/cctv/view-log` · `GET/POST /api/cameras` · `PATCH/DELETE /api/cameras/:id` · **`POST /api/cameras/:id/token`** (mint — the security heart) · `POST /api/cameras/:id/snapshot` (agent bearer push) · `GET/POST /api/camera-groups` · `GET/POST /api/camera-grants` · `DELETE /api/camera-grants/:id` (revoke) · `GET /api/me/cameras`. Agent endpoints authenticate by `Authorization: Bearer <enrollCode>` (unscoped hash lookup → `runAgentScope`), not a user session.
+
+### RBAC / nav / ui-modes
+Perms `cctv.view`→cctv.core (COMMITTEE_MEMBER, MANAGER, GUARD — guard needs the gate tile), `cctv.manage`→cctv.core (MANAGER; admin via `*`). A resident's OWN access (see granted cameras, mint token, own view history) needs NO permission (`requireCctvMember`). Nav `cctv` (icon `Cctv` added to nav-icons, main group, NOT hidden on shared device). ui-module `cctv` (audience resident → default SIMPLE).
+
+### UI (`app/[locale]/app/cctv/page.tsx` + `components/cctv/cctv-client.tsx`)
+Simple (everyone): mobile-first camera WALL of snapshot tiles with class chip + live/offline badge + snapshot age → tap opens a watermarked live-view Modal that mints a token and embeds the society-edge stream (LINK mode opens the vendor URL in a new tab and logs the click). Pro (committee, `cctv.view`): tabs — Cameras (table + add-camera modal with MANDATORY classification + door-warning), Access/grants (list + add-grant modal + revoke; surfaces the safeguarding refusal), Agent (enrol + one-time code + health), View log (append-only audit + CSV export), Setup guide (honest LINK/EMBED/AGENT capability matrix + limits + current tier). Config actions disabled when READ_ONLY. Feature-off page → EmptyState, nothing else affected.
+
+### i18n
+en+ur `cctv.*` (99 keys) + `nav.cctv`. Genuine Urdu, RTL. Parity 0-diff (recursive key sets identical, verified).
+
+### Env
+`CCTV_TOKEN_PRIVATE_KEY`, `CCTV_TOKEN_PUBLIC_KEY` (optional PEM; dev ephemeral fallback), `CCTV_TOKEN_KEY_ID` (default `cctv-dev-1`). Added to `lib/env.ts` + `.env.example` (with a keygen one-liner).
+
+### Gates
+`pnpm prisma generate` ok. `pnpm lint` clean (fixed two `react/jsx-no-literals` in the client). `pnpm typecheck` clean (dropped `.default()` on optional schema fields so the parsed output type stays optional and the service's `?? default` owns the default). Pure token(7)+rules(7) vitest = 14 green locally. Integration test (`cctv.integration.test.ts`) is DB-gated (`skipIf(!DATABASE_URL)`) — the CONTROLLER runs it: proves (1) RESTRICTED/PRIVATE-to-resident refusal even for admin, (2) occupancy-end auto-revoke + ex-tenant zero-access + mint-denied, (3) signed single-camera/user token that verifies + society-edge URL + watermark, (4) view-log written/own-history, (5) snapshot rate + 100 KB cap + storage accounting, (6) no-media-lib architecture assertion. Did NOT run test:unit/test:e2e/build per standing rules.
+
+### Decisions recorded (autonomous, no approval gate)
+- Auto-revoke on occupancy-end is delivered as a DUAL guarantee (mint-time active-occupancy gate as the automatic mechanism + an explicit revoke helper wired best-effort into residents) rather than a new cron — stronger, self-contained, and testable without worker plumbing. A periodic sweep cron was deliberately NOT added.
+- Agent enrolment models the agent as bearer-authenticated (sha-256 of a one-time code); heartbeat/snapshot use that bearer. No user session for the edge box.
+- Signing uses one Rihaish Ed25519 key (rotatable via `publicKeyId`/`CCTV_TOKEN_KEY_ID`), not per-society keys — simpler, and the edge pins one public key. Per-camera public-key rotation is out of scope.
+- Full gate-pass/emergency/complaint WIRING of `linkLatestSnapshot` into those modules' flows was left to those modules' own call sites (the helper + link columns ship here, degrade-clean); this module adds no hard edge into them.
