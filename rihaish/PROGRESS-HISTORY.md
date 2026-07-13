@@ -2488,3 +2488,30 @@ WORK TYPE: FEATURE (branch feature/48-worker-stubs-notifications)
 **Gates:** `pnpm lint` ✔ (no warnings/errors) · `pnpm typecheck` ✔ (tsc --noEmit clean). Did not run test:unit/e2e/build per standing rules (controller runs full gates). No schema change → no prisma generate.
 
 **Files:** added lib/cctv/architecture.test.ts. No source changes (this step adds a guard; the guarantees it locks in were already implemented in steps 41/49).
+
+## 51 — lifts (feature/51-lifts) — DONE 2026-07-13
+
+**Spec:** /specs/51-lifts.md. Feature codes `lifts.core` (+ `lifts.maintenance`, `lifts.cargo_booking`).
+
+**Design decisions**
+- Booking REUSES the amenity engine (spec 35) rather than reimplementing concurrency-safe slot booking. Added `AmenityKind` enum (`FACILITY|CARGO_LIFT`) + `Amenity.liftId`, and `AmenityBooking.operatorStaffId/startedAt/endedAt`. The lift module owns registry + maintenance; a cargo lift is an Amenity bound to a lift. `amenities.core` off → registry/maintenance still work, booking absent (`ensureLiftBookingAmenity` throws `amenities_disabled`).
+- DAG edges are HARD deps only: `lifts.core → units.registry, complaints.core`; `lifts.maintenance → lifts.core`; `lifts.cargo_booking → lifts.core, amenities.core`. `expenses.core`/`staff.directory` are optional → runtime `isEnabled` checks, not edges.
+- Notifications reuse EXISTING categories (no new NOTIFICATION_CATEGORIES rollout): committee maintenance/breakdown warnings ride `complaints`; the out-of-service broadcast to the affected block rides `announcements`. Six new template codes added to the catalogue, each en+ur on every declared channel.
+- Breakdown files a `Ticket` (COMPLAINT) in an auto-ensured `LIFT` ServiceCategory, flips the lift `OUT_OF_SERVICE`, and — if `peopleTrapped` — raises an `EmergencyAlert` (kind `LIFT_TRAPPED`, `ignorePreferences`) instead of a mere maintenance ticket. Restore closes the open breakdown with computed downtime and notifies.
+- Walk-up refusals are first-class: new `LiftAccessRefusal` model; `startCargoBooking` refuses + LOGS (reason `no_booking|not_approved|outside_window`) then throws `booking_not_startable`.
+- Service cost mirrors to an `Expense` only when `expenses.core` is on AND an active head exists — best-effort, never throws; otherwise the cost lives on `LiftServiceLog.costMinor` alone.
+- Worker cron `lifts.service-warn` (daily 08:00 society time, gated by `lifts.maintenance`) warns the committee on overdue/imminent service and expiring/lapsed AMC.
+
+**Models/enums:** `Lift`, `LiftServiceLog`, `LiftBreakdown`, `LiftAccessRefusal`; enums `LiftKind`, `LiftStatus`, `ServiceKind`, `AmenityKind`. Migration `20260713130000_lifts`. `prisma generate` run.
+
+**Registration:** `lib/features.ts` (3 features), `lib/nav.ts` (feature-gated item, not hidden on shared device — operator console), `lib/rbac.ts` (perms `lifts.read/manage/operate/breakdown.report/maintenance.manage`; attached to COMMITTEE_MEMBER, MANAGER, GUARD; SOCIETY_ADMIN via `*`), `lib/worker/registry.ts` + `handlers.ts` (`runLiftServiceWarnings`), `lib/ui-modes/modules.ts` (committee → PRO default), `lib/notifications/templates.ts`.
+
+**Code:** `lib/lifts/{constants,rules,rules.test,actor,http,service,lifts.integration.test}.ts`; `schemas/lifts.ts`; API `app/api/lifts/route.ts`, `app/api/lifts/[id]/{route,service,breakdown,restore,refuse,booking-amenity}/route.ts`, `app/api/lift-bookings/[id]/{start,end}/route.ts`; UI `app/[locale]/app/lifts/page.tsx` + `components/lifts/lifts-client.tsx` (Simple status cards + operator Start/End console; Pro = DataTable kit over lifts via in-memory query). i18n `lifts` block added to en + ur.
+
+**Tests written:** `rules.test.ts` (service-due maths, AMC windows, start-guard decision, downtime). `lifts.integration.test.ts` covers all 6 acceptance criteria: (1) start guard + refusal log, (2) concurrency double-book asserted via amenity engine, (3) peopleTrapped → EmergencyAlert + opt-out ignored, (4) nextServiceDueAt computed + sweep warns committee, (5) breakdown→complaint→OUT_OF_SERVICE→restore, (6) expenses-off records cost on log with no Expense/no error.
+
+**Gates (agent-run):** `pnpm prisma generate` ok, `pnpm lint` clean (0 warnings), `pnpm typecheck` clean. Did NOT run test:unit/e2e/build (controller runs them).
+
+**UI self-check:** shadcn Button + design tokens; status/flag chips light+dark; logical props / `dir` passed through; EmptyState for feature-off + empty + empty-console; Simple + Pro (DataTable kit) both implemented; toasts (sonner), no alert(); operator console renders Urdu-first via the `ur` locale (dir=rtl). Follow-up: a dedicated lift-create/service-log form modal (form kit) and uptime charts were scoped for a later Pro pass; registry CRUD + maintenance logging are exposed via API now.
+
+**Notes:** `expenses.core` deliberately left OFF in the integration test to prove criterion 6; enabling the leaf features pulls their whole dependency subtree via `planEnable`.
