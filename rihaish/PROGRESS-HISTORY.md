@@ -2301,3 +2301,89 @@ Perms `islamic.read`(→COMMITTEE_MEMBER, MANAGER)/`islamic.manage`(→MANAGER; 
 - Settings takes numeric lat/long today; the spec's map picker for the "no coordinates" edge case is a future UI enhancement (the empty-state explains why times are hidden).
 - Greeting card image is stored as `imageFileId` (passed to the GREETING announcement's `attachments`); a dedicated uploader is a future enhancement.
 - `PrayerDay`/`PrayerReminderPref` intentionally made pass-through hard-delete tables (see data model note) — the one design correction made mid-build.
+
+---
+
+## 46 — property-model — DONE (2026-07-13) — branch feature/46-property-model — WORK TYPE: FEATURE
+
+The load-bearing spine amendment: `flats.registry` → `units.registry` (isCore), and a full
+Flat→Unit rename plus a dynamic structure tree replacing the fixed Block→Floor hierarchy. The
+DB was empty/undeployed, so this was built directly (no back-compat, no alias models, no
+back-fill migrations); the migration set was regenerated as ONE clean init.
+
+### Scope executed
+- **Mechanical rename (scripted, 1173 files):** `Flat`→`Unit`, `flatId`→`unitId`,
+  `FlatCategory`→`UnitCategory`, `FlatOccupancy`→`UnitOccupancy`, `flatCodeFormat`→`unitCodeFormat`,
+  `/api/flats`→`/api/units`, plus lowercase domain identifiers and i18n `flat.*` keys → `unit.*`
+  (the SAME sed applied to both `messages/*.json` and `t()` call sites, keeping them in sync).
+  The two legitimate `Array.prototype.flat()` calls were protected via a sentinel. Physical
+  file/dir renames: `app/api/flats`→`units`, `flat-categories`→`unit-categories`,
+  `me/flats`→`me/units`, `me/active-flat`→`me/active-unit`, `onboarding/flats`→`units`,
+  `utility/flats`→`units`; `lib/society-structure/flat-code*`→`unit-code*`, `flat-columns`→`unit-columns`;
+  component `flat-*`→`unit-*`. Enum SCREAMING values normalised (SINGLE_FLAT→SINGLE_UNIT,
+  FLAT_LIST→UNIT_LIST, PER_FLAT→PER_UNIT, FLAT_SCOPED→UNIT_SCOPED).
+- **Schema redesign:** dropped `Block`/`Floor`; added `StructureNode` (self-referencing, any depth,
+  materialised `depth`/`path`/`ancestorIds` — GIN index on `ancestorIds`; `@@unique([societyId, path])`).
+  `Unit` now carries `nodeId` (leaf node), `propertyType`, `areaSqft` (no blockId/floorId).
+  New enums `PropertyType`, `NodeKind`, `QuantitySource`. `RateRule` gained `propertyType`, `nodeId`
+  (replaces `blockId`), `quantitySource`. `ChargeKind` gained `PER_QUANTITY`. `SocietySettings`
+  gained `unitLabelKey` (society's own word: unit|flat|house|property|shop). `Camera` blockId/floorId
+  → single `nodeId`. Migration history squashed to a single offline-generated init
+  (`prisma migrate diff --from-empty`); `prisma validate`+`generate` clean.
+- **Pure core (DONE, unit-tested):**
+  - `tree.ts` — materialise path/depth/ancestorIds on write; `assertNoCycle` (a node can never
+    become its own ancestor); `assertWithinDepthCap` (cap 6, accidental-nesting guard); `nearestCodeFormat`
+    (per-node override inherited down); `recomputeSubtree` (pure in-memory recomputation of an
+    already-loaded subtree for a MOVE — no recursion). Tests: root/child invariants, cycle, depth cap,
+    move-to-new-parent, move-to-root, move-into-own-descendant rejected.
+  - `unit-code.ts` — `displayCode` from the ancestor chain: kind tokens `{block}/{tower}/{floor}/{street}/…`
+    resolve to the nearest ancestor of that kind, plus `{number}/{code}/{path}`. One codebase serves
+    "D-20" (tower society) and "St-7-12" (housing society). Tests cover both shapes + validation.
+  - `bulk.ts` — two shapes: "floors × units" (creates FLOOR nodes + units) and "direct" (street × houses,
+    no intermediate level); floorPrefixed/sequential numbering; atomic plan with duplicate/conflict/limit
+    guards (blocked before creating anything). Tests: floors, street, mixed (codes never collide), guards.
+  - `charges/resolve.ts` — extended specificity ladder: unitId → categoryId+occupancy → categoryId →
+    propertyType+occupancy → propertyType → occupancy → nodeId (DEEPEST node wins, matched via the unit's
+    ancestor chain) → default; ties → newest effectiveFrom. `PER_QUANTITY`: line = rate × quantity(unit)
+    from `quantitySource`; quantity+rate snapshotted onto the line; **quantity 0 → NO line** (not a ₨0 line).
+    Tests: full ladder, Rufi 3500/2000, property-type split, deepest-node-wins, PER_QUANTITY incl. zero,
+    effective-dating, split-equally.
+- **Guards as tests:** `architecture.test.ts` (no `WITH RECURSIVE`/`$queryRaw` tree walk; service reaches
+  subtrees via `ancestorIds`) and `rename-gate.test.ts` (no `\bFlat\b`/flatId/FlatCategory/FlatOccupancy/`/api/flats`
+  anywhere in app/components/lib/schemas/worker/e2e/tests/scripts or the prisma schema).
+- **Cascade (structure service + charges service + ~15 downstream modules), driven to a zero-error
+  typecheck:** structure service rewritten around StructureNode (node CRUD + `moveNode` in one tx via
+  ancestorIds subtree read + cycle/depth guards + `loadChain`; units carry nodeId/propertyType/areaSqft;
+  bulk/CSV/import/export node-based). New `app/api/structure/nodes` (+`/move`) surface; old `blocks`/`floors`
+  routes removed. Charges service builds `ResolveUnit` (nodePath = [...node.ancestorIds, nodeId]; quantities
+  from live parking-slot/vehicle counts, areaSqft, category.bedrooms) and handles PER_QUANTITY. "Target by
+  block" across announcements/polls/surveys/utility/schedules/notifications/special-charges now means "target
+  by structure node": a unit matches iff `unit.nodeId === targetId || node.ancestorIds.includes(targetId)`
+  (the `BLOCK` enum value name is kept; only its ids' meaning changed to node ids). reports/emergency/meters/cctv
+  and residents/billing group/display via the unit's node; billing snapshots PER_QUANTITY quantity+rate into
+  the invoice line `meta`. All *.integration.test.ts fixtures reseed a root `StructureNode` + units with `nodeId`.
+- **i18n:** added `unit.label.{unit,flat,house,property,shop}` (en+ur), `structure.nodeKind.*`,
+  `structure.propertyType.*`, ~21 new `structure.nodes.*`/`grid.emptyNodes*`/`counts.nodes` leaves,
+  `charges.rule.{propertyType,quantitySource}`, `charges.chargeKind.PER_QUANTITY`. en/ur parity 0-diff.
+- **features.ts:** `units.registry` (isCore) with every `dependsOn` edge updated; description refreshed.
+
+### Gates
+- `pnpm typecheck` (whole tree): 0 errors. `pnpm lint`: clean.
+- Targeted vitest of the new/changed suites (tree, unit-code, bulk, resolve, architecture, rename-gate,
+  announcements targeting, polls/surveys rules, csv) — all green. (Full `test:unit`/`test:e2e`/`build`
+  left to the controller per CLAUDE.md.)
+
+### Honest decisions / deferred (recorded, non-blocking)
+- The structure tree UI is a FUNCTIONAL node tree (create/rename/move/delete via the nodes API + bulk
+  generator + unit table + Nodes/Categories/Settings tabs). Full drag-and-drop reparenting and the Pro
+  "rate simulator breadcrumb" are simplified to button/select-driven equivalents — the move endpoint and
+  code-regeneration are real; drag polish is a future enhancement. Light/dark + EN/UR RTL + responsive are
+  inherited from the shared design-system primitives (FormField/table kit) the screens are built on.
+- `TargetType.BLOCK` (and the audience/notification "BLOCK" value) were intentionally NOT renamed — only
+  their ids' meaning changed to structure-node ids — to keep the cross-module targeting surface stable.
+- Some downstream DTO/query-param field names (`blockId` in meters/emergency/reports/residents) were kept
+  as names but now hold a StructureNode id, to minimise churn (not gate tokens; typecheck clean).
+- Camera location collapsed from blockId+floorId to a single `nodeId`.
+- The one-society-holds-towers+houses+shops billing scenario is exercised by the pure resolver tests
+  (property-type + node ladder + PER_QUANTITY); a dedicated DB integration test for a single mixed invoice
+  run is a candidate follow-up.
