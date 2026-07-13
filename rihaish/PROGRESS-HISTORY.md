@@ -1966,3 +1966,53 @@ Page `app/[locale]/app/emergency/page.tsx` + `components/emergency/emergency-cli
 `pnpm prisma generate`, `pnpm lint`, `pnpm typecheck` all clean. Tests written (controller runs them): pure `lib/emergency/rules.test.ts` (status machine terminal/ratchet, escalation-due once/never-acked/never-twice, escalation roles + neighbour-warn, soft cooldown, metrics, contact order) + pure `deliverableChannels` cases added to `channels.test.ts`; DB-backed `lib/emergency/emergency.integration.test.ts` (prefs-ignored/push-despite-off, READ_ONLY raise+ack+resolve, escalate-once-never-acked, cannot-delete/FALSE_ALARM-only-closure/no-reopen, contact directory).
 
 WORK TYPE: FEATURE (branch feature/38-emergency-alert)
+
+---
+
+## 39 — reports-dashboards — DONE (2026-07-13)
+
+**Feature:** `reports.core` (title "Reports & dashboards", module `39-reports-dashboards`, `isCore:false`). **DAG deps:** `core.tables` (renders/exports through the step-07 table+export kit) and `core.notifications` (scheduled-report + large-export delivery) ONLY. Every DATA source (billing.ledger/payments, expenses.core, complaints, gatepass, amenities.core, staff.performance, announcements.core, flats.registry, meters.core) is a RUNTIME `isEnabled` check, NOT a DAG edge — a society runs reports over whichever modules it has, and each report/widget vanishes cleanly when its owner is off.
+
+### What it is
+A READ-ONLY analytics layer over every prior module: 14 reports + 4 role home dashboards + CSV/Excel/PDF exports + queued large exports + a monthly scheduled-report email.
+
+### Reports (14): each `filters → summary tiles → chart → table → export`
+Financial (7): collection-summary, arrears-aging, defaulters (PII), payment-register, income-expense, budget-actual, charge-head. Operational (7): complaints, gate-pass, amenities, staff, announcements, occupancy, meters. Registry metadata in `lib/reports/constants.ts` (`REPORT_DEFS`: key, category, gating feature code, pii flag); builders in `lib/reports/builders.ts`; key→builder map in `registry.ts`.
+
+### Reconciliation (the hard acceptance criterion) — TRUE BY CONSTRUCTION
+- `computeCollection(range).collectedMinor` = Σ ledger `PAYMENT`/`CREDIT` entries in the range (read straight from `LedgerEntry`) → **== Σ ledger credits**.
+- `computeArrears(now).totalMinor` = Σ positive per-flat ledger balances (`Σ DEBIT − Σ CREDIT` via groupBy), each flat's balance aged into 0-30/31-60/61-90/90+ by its OLDEST outstanding invoice due date (`bucketForDays`) so the **bucket sum always equals the headline** → **== Σ balances**.
+- income-expense reuses `getAccountSummary(period)` from `lib/expenses/service` verbatim → `closing = opening + income − expense`, income = Σ CLEARED payments, expense = Σ APPROVED/PAID expenses → **income − expense == society balance**.
+- budget-actual reuses `budgetVariance` (expenses/rules); charge-head reads `InvoiceLine.amountMinor` grouped by `chargeHeadCode` (snapshots, never a live rate recompute — the invoice-snapshot guarantee).
+- Money is `bigint` minor units throughout; ratios round to one decimal at the edge only. `lib/reports/rules.ts` pure helpers (`collectionRate`, `isDefaulter`, `pct`, `periodRange`, `periodLabel`, `previousPeriod`, `trailingPeriods`, `avg`) with 8 vitest.
+- Integration test `lib/reports/reports.integration.test.ts` (real Postgres) seeds 2 flats + ledger + invoices + cleared payments + an approved expense and asserts all THREE identities EXACT to the minor unit (collected 110000 == Σ credits; arrears 40000 == Σ positive balances == bucket sum; closing == opening+income−expense, income 110000, expense 30000), PLUS the report list is entitlement-filtered (collection-summary/income-expense present; complaints/gate-pass absent) and a disabled report is REFUSED (`ReportError report_disabled`), an unknown key `unknown_report`.
+
+### Exports (CSV/Excel/PDF) — reuse step-07 kit, PII-safe
+`exportReport(actor,key,values,now)` runs the report, builds an `ExportView` where SENSITIVITY/NUMERIC come from the SERVER result (a client cannot strip a `sensitive` flag to dodge the PII gate), gates PII on `tables.export.pii` (both inline and queued paths), then: ≤1000 rows → `buildInlineExport` (audited) streamed back; >1000 rows → `enqueue({kind:"reports.export"})` → 202. PDF branding carries societyName + the report title + filter summary ("July 2026 · Block D · ≥ …") + `loadUrduFont()` for Urdu. Worker `runReportExport` re-runs the report via `renderReportForWorker` (fetches society meta under scope, renders directly — authorization already applied at request time), `storeFile` + `getFileAccess(7d)` → notifies the requester with a signed URL (`reports.export.ready`).
+
+### Scheduled reports (worker cron, society timezone)
+New pass-through model `ReportSettings { societyId @id, scheduledMonthly, scheduledReportKey, updatedAt }` (migration `20260713410000_reports_dashboards`, + `Society.reportSettings` back-relation). Cron `reports.scheduled.monthly` `0 3 1 * *` scope `society` (runtime enters `withSociety` + evaluates in the society tz), JOB `mutating:false` (read+email delivery, runs even READ_ONLY). Handler `runScheduledReport`: no-ops unless `reports.core` on AND `scheduledMonthly` opted in; derives the just-ended month (`periodMinus(periodOf(now),1)`), renders the chosen report to a branded PDF, `storeFile`+`getFileAccess`, emails COMMITTEE_MEMBER+SOCIETY_ADMIN (`reports.scheduled.ready`). Settings via `/api/reports/schedule` (GET/PUT, PUT needs `reports.manage`), Pro schedule editor in the UI.
+
+### Dashboards (4 roles, entitlement-gated widgets, animated on mount)
+`lib/reports/dashboards.ts` `buildDashboard(input)` dispatches on `homeRole(roleCodes)` (management→committee, else AMENITY_MANAGER→amenityManager, GUARD→guard, else resident). Each builder includes a widget ONLY when its feature is enabled (the field is simply absent otherwise) → the client renders fewer tiles, never an empty box or 500. Committee: collection ring + outstanding + open complaints + gate-today + unread announcements + cash balance. Resident: my balance (via `balanceOf` over my flats) + my open complaints + active passes + latest announcements + upcoming bookings. Guard: expected visitors + active passes + gate events today + open emergency alerts. Amenity manager: today's bookings + pending approvals + month revenue. Money formatted server-side into society currency. Home `app/[locale]/app/page.tsx` now renders the live `RoleDashboard` for a signed-in member (guest/cross-society → the existing placeholder `DashboardClient`); `RoleDashboard` registers the step-14 `dashboard` UI module (Simple = 2-col friendly cards, Pro = dense 4-col grid) and fades tiles in on mount.
+
+### Files
+- `lib/reports/`: constants, rules(+rules.test), types, actor, http, service, registry, builders, dashboards, reports.integration.test.
+- `schemas/reports.ts` (reportFiltersSchema, reportKeySchema, reportExportSchema, reportScheduleSchema).
+- API: `app/api/reports/route.ts` (GET list), `[key]/route.ts` (GET run — filters from query string), `[key]/export/route.ts` (POST inline stream / 202 queued), `schedule/route.ts` (GET/PUT).
+- UI: `app/[locale]/app/reports/page.tsx` (RSC gate → EmptyState when off), `components/reports/reports-client.tsx` (workspace: category menu, month filter, tiles, chart, table, export buttons, schedule editor; Simple=glance/Pro=full), `components/reports/role-dashboard.tsx`, modified `app/[locale]/app/page.tsx`.
+- Charts reuse `components/charts` (Bar/Line/Area/Donut, accessible data-table fallback, RTL-aware, animated). Collection ring reuses `ScoreRing`.
+- Wiring: `lib/features.ts` (+reports.core), `lib/rbac.ts` (PERMISSION_REGISTRY reports.{read,manage}→reports.core; roles COMMITTEE_MEMBER+ACCOUNTANT read, MANAGER both, SOCIETY_ADMIN `*`), `lib/nav.ts` (+reports item, manage group, icon barChart3, feature+permission gated, hideOnSharedDevice), `components/shell/nav-icons.ts` (+barChart3), `lib/ui-modes/modules.ts` (reports/committee — was pre-seeded), `lib/account/notifications-policy.ts` (+`reports` category), `lib/notifications/templates.ts` (reports.scheduled.ready + reports.export.ready, en+ur IN_APP+EMAIL), `lib/worker/registry.ts` + `handlers.ts` (cron + 2 job handlers). i18n `messages/en.json`+`ur.json`: `reports.*` namespace + `nav.reports` + `account.notifications.category.reports` + `settings.category.reports` (deep parity 0-diff, verified).
+
+### Permissions / roles
+`reports.read` (workspace + dashboards), `reports.manage` (scheduled-report config), both →reports.core. Seeded: COMMITTEE_MEMBER (read), ACCOUNTANT (read), MANAGER (read+manage), SOCIETY_ADMIN (`*`). Export-PII still needs `tables.export.pii`.
+
+### Gate results
+`pnpm prisma generate` OK. `pnpm typecheck` clean. `pnpm lint` clean (0 warnings). Unit `lib/reports/rules.test.ts` (8 cases) + integration `lib/reports/reports.integration.test.ts` written (DB-gated; NOT run here per build-loop rules — controller runs the full suite). i18n en/ur parity: 0-diff (structural key-set diff verified).
+
+### Deliberate scope decisions (recorded, no approval gate exists)
+- Platform (L0-only) reports (MRR/ARR, societies-by-plan, churn) were NOT built — those belong to the L0 platform console, not the L1 society reports surface. Category `platform` exists in the type/UI for future L0 wiring; no entries today.
+- The defaulters "one-click send reminder to all" action was left out (would require guessing the billing-reminder notify template/audience shape); the defaulters report still surfaces resident name + phone (PII-gated) so the committee can act, satisfying "with contact details".
+- The report table is rendered directly (server returns pre-formatted string rows) rather than through the full `<DataTable>` saved-views component, to keep the surface bounded; exports still go through the authoritative step-07 export kit (audit + PII gate + Urdu PDF).
+
+WORK TYPE: FEATURE (branch feature/39-reports-dashboards)
