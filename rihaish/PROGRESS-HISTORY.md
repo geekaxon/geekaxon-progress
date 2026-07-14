@@ -2966,3 +2966,80 @@ Spec /specs/64-self-serve-trial.md (+ 64-64-CODEREF.md). Only a SOCIETY can self
 - OTP/SMS delivery is best-effort against PLATFORM_SMS_* env (platform creds, since no society exists yet); dev/test returns devCode so the e2e runs with no human/SMS. Email transport remains unwired in-repo (as before).
 - Trial caps recorded as SocietyLimits (numeric) + pure guard fns tested; email/SMS day-3/6/7 delivery is a claimed-slot seam (in-app banner is the live nudge) to avoid a notification-template cascade.
 - Gates: pnpm prisma generate, pnpm typecheck, pnpm lint all clean. Did not run test:unit/e2e/build per standing rules (controller runs full gates).
+
+## 65 — plan-builder-safepay — DONE (2026-07-14)
+
+Branch: feature/65-plan-builder-safepay. Spec /specs/65-plan-builder-safepay.md.
+Continued the partial work already on the branch (schema.prisma edits +
+lib/pricing/calculate.ts) to a complete module.
+
+**Part 1 — pricing model.** Extended `Plan` with the full pricing shape (model
+PER_UNIT|LUMPSUM|HYBRID, JSON volume bands with decimal-STRING per-unit prices,
+lumpsum/hybrid BigInt columns, cycle, annualDiscountPct, trialDays, min/max
+guardrails, isPublic, derivedFromQuoteId). Added `HYBRID` to PricingModel and
+`SAFEPAY` to PlatformPaymentProvider enums. `lib/pricing/calculate.ts` (pre-existing)
+is THE calculator: FLAT volume bands (whole society pays its band's rate), all
+BigInt, guardrails REPORTED never applied. New `lib/pricing/plan-pricing.ts` maps a
+stored Plan/Quote row (or a wire QuoteInput of decimal strings) → PlanPricing — the
+one place a string widens to bigint — plus dependency-aware feature resolution
+(core always on, deps auto-added) and `assertLiveFeatureCodes` for dead-code refusal.
+`lib/pricing/callers.ts` gives the three named callers (marketingQuote, builderQuote,
++ the quotes/invoice generator) all funnelling through `priceQuoteInput`.
+
+**Part 2 — quotes.** New `Quote` model + `QuoteStatus` enum. `lib/quotes/service.ts`:
+buildQuote (snapshots pricing, mints an unguessable base64url token, 14-day expiry,
+below-min → PENDING_APPROVAL else OPEN), getQuoteByToken (lazy-expiry), approveQuote
+(four-eyes: approver ≠ builder), acceptQuote (refuses expired / pending / dead-code;
+mints a society-specific Plan isPublic:false derivedFromQuoteId + an invoice via new
+`issuePlatformInvoiceForQuote` in platform-billing service, reusing gapless numbering).
+
+**Part 3 — SafePay.** `lib/platform-billing/safepay.ts` implements `SafepayAdapter`
+behind the EXISTING PaymentProvider seam (no seam change) + registered it in the
+adapter registry; Stripe left in the enum but marked unavailable (UNAVAILABLE_PROVIDERS,
+degrades to MANUAL). Pure, unit-tested: verifyWebhookSignature (HMAC-SHA256 over
+`${ts}.${body}`, constant-time compare, rejects unsigned/tampered/stale/wrong-secret),
+parseSafepayEvent, createCheckoutSession (server-side, ids in metadata, dev-stub when
+unconfigured), fetchSafepaySettlements + reconcileDrift. `lib/platform-billing/webhook.ts`
+processSafepayWebhook: verify → dedupe via PaymentWebhookEvent @@unique(provider,
+externalId) → credit ONCE through recordPlatformPayment (the ledger) → stamp processed;
+replay is a 200 no-op. New `PaymentWebhookEvent` model. Route
+`app/api/webhooks/safepay/route.ts` reads the RAW body, 400 on bad signature, 200 on
+handled/duplicate, 503 (retry) on a post-verify DB failure. Daily reconciliation:
+`runSafepayReconciliation` + worker handler `runSafepayReconcile` + cron
+`platform.safepay-reconcile` (05:15 PKT); drift is audited, never self-healed. Refunds
+stay ledger reversals (existing reversePlatformPayment).
+
+**Env.** SAFEPAY_API_BASE (default), SAFEPAY_PUBLIC_KEY, SAFEPAY_SECRET_KEY,
+SAFEPAY_WEBHOOK_SECRET added to lib/env.ts (all optional) + .env.example (alphanumeric).
+The webhook route reads SAFEPAY_WEBHOOK_SECRET from process.env directly (not the full
+env schema) so the one security-critical value works in a minimal runtime.
+
+**Tests.** lib/pricing/calculate.test.ts (band boundaries 1/100/101/500/501/10000 all
+BigInt, cycle+discount, LUMPSUM/HYBRID, guardrails, JSON round-trip, three-caller
+agreement, feature closure, dead-code). lib/platform-billing/safepay.test.ts (signature
+accept/unsigned/tampered/stale/wrong-secret/unconfigured, timestamp-bound-into-HMAC,
+event parse, adapter conformance, reconcile drift). Integration (skipIf !DATABASE_URL):
+safepay-webhook.integration.test.ts (credits once + replay no-op + invoice→PAID + refund
+is a reversal not an edit + bad-sig writes nothing); quotes/service.integration.test.ts
+(OPEN→plan+invoice, below-min four-eyes incl. self-approval refusal, dead-feature refusal,
+expiry refusal).
+
+**Migration.** prisma/migrations/20260714190000_plan_builder_safepay (enum ADD VALUEs +
+Plan columns + Quote + PaymentWebhookEvent), generated via migrate diff (offline, old
+schema from git HEAD).
+
+**Gates.** `pnpm prisma generate`, `pnpm lint`, `pnpm typecheck` all clean. Did NOT run
+test:unit/build/e2e per CLAUDE.md (controller runs them).
+
+**Decisions / notes.** (1) Bands are FLAT not marginal, per spec recommendation, so a
+committee verifies the bill with a calculator. (2) Quote accept without a societyId (pre-
+signup) mints only the plan; the invoice is raised at provisioning. (3) The accept-invoice
+uses the acceptance month as period; a P2002 collision with the monthly run is caught and
+skipped (plan still minted, billing catches it next cycle). (4) Webhook exactly-once holds
+for sequential replays; a crash strictly between credit and processed-stamp is caught by the
+daily reconciliation drift check, not double-credited on the happy path. (5) UI (marketing
+calculator widget + in-app checkbox-tree builder component) not built this step — the pricing
+library + build/get/accept/approve services (callable from server actions / the platform
+console) + the signature-verified webhook route are in place. Only the webhook has a
+HTTP route this step; the marketing/app builder screens and public quote routes are a
+follow-up. All acceptance criteria are backend/vitest and satisfied.
