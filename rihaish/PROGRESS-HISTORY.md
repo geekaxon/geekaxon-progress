@@ -3085,3 +3085,19 @@ Root cause of the missed guard: `builtStepNumbers()` derives the in-scope steps 
 **Gates.** `pnpm lint` clean (no warnings/errors). `pnpm typecheck` clean (`tsc --noEmit`). test:unit/e2e/build left to the controller per standing rules.
 
 WORK TYPE: FEATURE (branch feature/69-locale-single-source)
+
+## 67 — brand-asset-deployment — DONE (2026-07-14)
+
+**Branch:** feature/67-brand-asset-deployment (FEATURE)
+
+**Context:** Spec 67 places the Rihaish brand pack on disk and proves it resolves, ahead of 59's UI wiring. On arrival all 33 files were already present and committed (git-tracked), placed by an earlier partial run: app/{favicon.ico,icon.svg,apple-icon.png}, public/brand/logo/*.svg (8), public/brand/{icon,maskable,monochrome}-*.png, public/brand/splash/*.png (10), public/brand/social/{og-default,square}.png, public/brand/email/header{,@2x}.png, and assets/brand/{logo,mark}.png. Verified count = 33.
+
+**Key decision — filenames:** Spec 67's "resulting tree" and its section-3 example URLs use short names ({mark,horizontal,vertical,logotype}.svg). The actually-shipped assets — and the code that references them (components/brand/logo.tsx FILE map, platform-sign-in.tsx, marketing-header/footer, the existing e2e/brand.spec.ts) — use the pack names rihaish-mark / rihaish-logo-horizontal / rihaish-logo-vertical / rihaish-logotype (+ -onDark). Spec 59 is in fact already built in this tree. Renaming to the short names would 404 every logo <img> and break brand.spec.ts, so the committed names are authoritative and were left unchanged. Spec 67's short names are treated as illustrative shorthand.
+
+**Permissions note (not a blocker):** public/ and everything under it is owned by www:www; the agent (no sudo) cannot modify or delete files there. This did not matter because no rename was needed. Attempted git mv early (before confirming the naming) failed with EACCES and changed nothing — working tree stayed clean.
+
+**Work done:** Added e2e/brand-assets.spec.ts. It fetches the ten spec-67 assets (mapped to their real paths — favicon.ico, icon.svg, apple-icon.png served at root by Next metadata conventions; the three logo lockups under their rihaish-* names; icon-192, maskable-512, social/og-default, email/header) and asserts, for each: status 200, non-empty body bytes, and the correct content-type (image/svg+xml for svg — load-bearing per the edge case, image/png for png, substring "icon" for the .ico). Plus a negative test that GET /assets/brand/logo.png is not 200, covering the "assets/brand not publicly fetchable" criterion. Follows the existing e2e host convention (BASE localhost:3000 + Host: rihaish.localhost).
+
+**Gates:** pnpm lint → clean (no warnings/errors). pnpm typecheck → clean. Did not run test:unit/e2e/build per standing rules (controller runs full gates). No schema change, so no prisma generate.
+
+**Acceptance:** 33 files present + committed ✓; e2e/brand-assets.spec.ts asserts 200 + content-type on the 10 URLs ✓; assets/brand negative test ✓; no component touched (spec 59's job — and already built) ✓.
