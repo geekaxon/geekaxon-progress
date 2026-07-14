@@ -2541,3 +2541,56 @@ Built the NOC system (spec 52, feature `noc.core` + sub-features `noc.sale`, `no
 **Gates:** `pnpm prisma generate`, `pnpm lint`, `pnpm typecheck` all clean. (test:unit/e2e left for the controller.)
 
 **Decisions:** fee posts as a SCHEDULED SpecialCharge (rides the next billing run) rather than an immediate standalone invoice, avoiding a risky reimplementation of the invoice+sequence transaction; `invoiceId` spec field realised as `feeChargeId`. Vehicle registration on completion is a no-op (the model captures only `vehicleCount`, no plate data). Certificate renders EN labels with the Urdu font embedded so Urdu content (society/party/conditions) renders; locale-UR labels are available in certificate.ts if needed later.
+
+## 53 — settings-taxonomy-framework — DONE (2026-07-13)
+
+**Type:** FEATURE (branch feature/53-settings-taxonomy-framework)
+
+**Decision — registry OVER the typed models, not a JSON blob.** Kept all 14 typed
+settings models (+ NocSettings). Added a declarative `SettingDef` registry that
+DESCRIBES each field (key, model, field, scope, type, default, validate, requiresFeature,
+dependsOn, danger, templatable, docs). The unified settings UI, validation, audit and
+(future) templates/docs are generated from it.
+
+**Files created**
+- lib/settings/types.ts — SettingDef/SettingDoc/SettingView (DB-free so client can import the type).
+- lib/settings/modules/*.ts — one declaration file per module (society, billing+payments+platform-billing,
+  gate-pass, complaints, cctv, chat, emergency, expenses, meters, islamic+hijri-sync, reports, noc).
+  Per-field validators reuse the EXISTING zod schemas via `.shape` where the field exists; inline zod otherwise.
+- lib/settings/registry.ts — aggregation + DMMF integrity helpers (fieldExists, configurableFieldsOf,
+  enumOptionsFor from DMMF, isBigIntField) + pure gating (isVisible/dependenciesMet/isFeatureEnabledFor).
+- lib/settings/service.ts — generic get/set BY KEY → typed model+field. Feature-gate reject, zod validate,
+  optimistic concurrency (updatedAt token), automatic AuditLog old→new. Society vs platform-singleton key
+  strategy; platform scope guarded off the society surface. actorType SOCIETY_USER vs PLATFORM (spec §3).
+- lib/settings/{actor,http}.ts — auth + read/write scope + error mapping (mirrors lib/noc).
+- lib/settings/registry.test.ts — every entry maps to a real model+field; none orphaned; enum options resolve;
+  defaults validate; dependsOn/keys sane; gating pure tests (feature-off absent, dependsOn hide).
+- lib/settings/settings.integration.test.ts — DB-backed: write applies to typed model + audits old→new;
+  feature-off setting absent AND rejected; stale token loses.
+- lib/taxonomy/rules.ts — pure materialised-path (buildPath, materialise, normaliseCode, assertNoCycle,
+  recomputeSubtree), same discipline as spec 46. NO recursive query.
+- lib/taxonomy/{service,constants,actor,http}.ts — namespace seed + term CRUD/move/deactivate; in-use term
+  (has children) never hard-deleted → deactivate; soft-delete via scoping layer.
+- lib/taxonomy/architecture.test.ts (no recursive SQL) + rules.test.ts (pure invariants) +
+  taxonomy.integration.test.ts (path/depth/ancestorIds on insert/rename/move, cycle rejected, in-use not deleted).
+- schemas/settings.ts, schemas/taxonomy.ts.
+- app/api/settings/route.ts (GET surface / PUT by key); app/api/taxonomy/** (namespaces, terms, term move/delete).
+- components/settings/setting-field.tsx (renders any SettingDef via the Form kit) +
+  settings-registry-panel.tsx (searchable, module-grouped, Simple/Pro, dependsOn hide, persists via PUT).
+- prisma: Taxonomy + TaxonomyTerm models (+ migration 20260713150000_settings_taxonomy). Both carry deletedAt
+  so the scoping layer auto-pins them (a deliberate, safe superset over the spec's Taxonomy shape).
+
+**Files changed**
+- app/[locale]/app/settings/page.tsx — renders the generated SettingsRegistryPanel above the existing panels.
+- prisma/schema.prisma — appended the two taxonomy models.
+
+**Deferred (noted, not blocking):** the existing per-module settings MODALS
+(billing/complaints/payments/notifications) were NOT physically refactored to consume the
+registry in this pass — the generated surface is added alongside them to avoid a risky
+multi-modal rewrite in one step; the substrate they will consume is in place. Full i18n
+(EN/UR strings) of the new panel is partial (English literals); registry docs are English.
+
+**Gates:** `pnpm prisma generate` OK · `pnpm typecheck` clean · `pnpm lint` clean (0 warnings).
+DB-backed *.integration.test.ts run under the controller's Postgres.
+
+WORK TYPE: FEATURE (branch feature/53-settings-taxonomy-framework)
