@@ -2851,3 +2851,31 @@ WORK TYPE: FEATURE (branch feature/59-brand-integration)
 - Audit object names are resolved for Society/User/Plan; other entity types render as their humanised type label (id on hover) rather than a bespoke query per type — keeps resolution batched and avoids ~30 per-type lookups.
 
 **Gates:** `pnpm lint` clean, `pnpm typecheck` clean. Did not run test:unit/e2e/build (controller runs them). Guard + N+1 + humaniseKey unit tests written; no-slugs e2e written (env-gated).
+
+## 61 — form-validation-ux — DONE (2026-07-14) — branch feature/61-form-validation-ux
+
+Spec /specs/61-form-validation-ux.md (+ CODEREF 61-61). Feature `core.forms` (extends 06/07).
+
+**The three faults, addressed centrally.**
+
+1. *Validation on mount.* `useZodForm` already defaulted `mode: "onBlur"`; added `reValidateMode: "onChange"` (spec's stated contract) — never validates on mount, re-checks touched fields on change.
+
+2. *Raw Zod messages reaching users.* Built a central error map:
+   - `lib/validation/error-map.ts` — pure `createZodErrorMap(t)` mapping every Zod issue code (invalid_type / invalid_string / too_small / too_big / invalid_enum_value / invalid_date) to plain, translated copy that names what to do and never mentions a type. min-1 string/array reads as "required", not "at least 1". Also exports `englishZodErrorMap` (module-load fallback) + `interpolate`.
+   - `lib/validation/use-zod-error-map.ts` ("use client") — installs the locale map globally via `z.setErrorMap`; an English map is set at import so nothing raw leaks pre-hydration; the effect swaps to the user's locale on mount. Called from `useZodForm`, so EVERY kit form gets it without per-schema repetition.
+   - `messages/{en,ur}.json` gained a top-level `validation` namespace (13 keys). Messages are single-file per locale here, NOT `messages/{en,ur}/validation.json` as the CODEREF snapshot guessed — followed the real structure.
+   - DECISION: relied on the GLOBAL error map as the mechanism for "no Zod default reaches a user" rather than hand-editing every `z.string()` across ~35 schema files. The global map guarantees it for all schemas at once (strictly stronger than per-field edits that would miss cases). Field-specific copy added only where the acceptance test demands it (sign-in: "Enter your email" / "Enter your password", via `platform.signIn` keys emailRequired/emailInvalid/passwordRequired/codeRequired and an in-component useMemo schema).
+
+3. *Forms bypassing the kit.* A repo scan found exactly ONE `<form` — the kit's own `components/form/form.tsx`. Sign-in, plans modal, societies modal and the marketing lead form were already on the kit (built that way in later specs). Added `lib/forms/contract.test.ts`: static fs+regex guard that fails the build if any `<form` appears in components/ or app/ outside an allowlist (only the kit wrapper, with a reason). Strips comments/strings to avoid false hits; tripwire on file count.
+
+**Tests.**
+- `lib/validation/error-map.test.ts` — drives 13 real schemas (one per issue code) through the map for BOTH en and ur, asserts every produced message is non-empty and contains none of the Zod-default fragments ("must contain", "character(s)", "element(s)", "Expected", "received", "Invalid enum value", …); plus exact-copy checks for English. This is the guard for acceptance "no Zod default in any rendered output, either locale".
+- `e2e/form-validation.spec.ts` — loads `/en/platform` sign-in, asserts NO role="alert" and no raw Zod text before interaction; submits empty → "Enter your email" / "Enter your password" visible, still no Zod default. Uses `rihaish.localhost` (loopback) so `page.goto` sends the right Host.
+
+**A11y/RTL:** unchanged — `FieldShell` already wires `aria-invalid`, `aria-describedby`, `role="alert"`, `<Label htmlFor>` and logical (RTL-safe) classes. Axe criteria satisfied by the kit.
+
+**Files:** created lib/validation/{error-map.ts,error-map.test.ts,use-zod-error-map.ts}, lib/forms/contract.test.ts, e2e/form-validation.spec.ts. Edited components/form/form.tsx (install map + reValidateMode), components/platform/platform-sign-in.tsx (messaged schema), messages/{en,ur}.json (validation namespace + signIn keys).
+
+**Gates:** `pnpm typecheck` clean (fixed one noUncheckedIndexedAccess spot), `pnpm lint` clean. Did not run test:unit/e2e/build (controller runs full gates).
+
+WORK TYPE: FEATURE (branch feature/61-form-validation-ux)
