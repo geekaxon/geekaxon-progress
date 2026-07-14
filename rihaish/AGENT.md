@@ -16,8 +16,7 @@ Build-loop mechanics live in `CLAUDE.md` (controller-managed). This file is **wh
 11. **CNIC and other sensitive PII**: encrypted at rest, masked in UI (last 4), never in logs, never exported without an audit entry.
 12. **Cross-tenant reads are impossible.** A tenant host can never reach a platform route, and vice versa — including via the screenshot token.
 13. **Never assert exact equality against a growing global registry** (cron, features, nav, templates, permissions). Assert that required entries are present, plus invariants (uniqueness, validity, handler exists). Registries are append-only by design; a test that forbids appending is a broken test.
-<<<<<<< HEAD
-14. **Society-scoped work runs inside `withSociety`.** Any worker handler, job or script that touches society data must run inside `withSociety(societyId, …)`. `db.unscoped()` is for platform-level and cross-society work **only**. If you find yourself reaching for `unscoped()` inside a society handler, you have the wrong `societyId` — not the wrong scope. *(This exact mistake was made three times: worker, lifts, taxonomy.)*
+14. **Society-scoped work runs inside `withSociety(societyId, …)`.** Any worker handler, job or script that touches society data must run inside `withSociety`. `db.unscoped()` is for platform-level and cross-society work **only** — platform/worker code that must cross societies enumerates them with `db.unscoped()` and wraps each one; a worker entry point (a `sweep*`) owns its scope and the worker's request scope is NOT ambient. If you find yourself reaching for `unscoped()` inside a society handler, you have the wrong `societyId` — not the wrong scope. This exact mistake was made three times (worker, lifts, taxonomy); `lib/architecture-scope.test.ts` + `lib/worker/architecture.test.ts` enforce it, not good intentions.
 15. **A user never sees a machine value.** Enums, slugs, feature codes, job kinds, audit actions and roles all render through the label registry (`lib/labels/`), in **en and ur**. Every ID shown to a human is replaced by that entity's **name**, anchor-linked. A missing label **fails the build** — never fall back to the raw slug.
 16. **No hex colour outside `app/globals.css`.** The brand is `#023029` / `#d8a03e`, defined once. A literal hex in a component fails `lib/design/tokens.test.ts`.
 17. **Never issue a session before 2FA is verified.** The platform login is: password → challenge token (not a session) → TOTP code → session. No platform route opens without `totpVerifiedAt`.
@@ -25,9 +24,6 @@ Build-loop mechanics live in `CLAUDE.md` (controller-managed). This file is **wh
 19. **A payment webhook is the source of truth, never the browser redirect** — and it must verify its signature (constant-time) and be **idempotent**. A replayed webhook credits exactly once.
 20. **A metric with no data renders "—", never a number.** A dashboard that reports 100 % collection on an empty database will be believed, and it is a lie.
 21. **Residents can never self-signup.** Societies self-provision (spec 64); residents are invited or imported by their society (spec 04). This is asserted by a test, not by convention.
-=======
-14. **Society-scoped models are only ever touched inside `withSociety(societyId, …)`.** Platform/worker code that must cross societies enumerates them with `db.unscoped()` and wraps each one. This rule has been broken three times — the architecture test (`lib/architecture-scope.test.ts` + `lib/worker/architecture.test.ts`) is what enforces it, not good intentions. A worker entry point (a `sweep*`) owns its scope; the worker's request scope is NOT ambient.
->>>>>>> origin/staging
 
 ## 2. Per-module workflow
 **The build loop, branch naming (`feature/<NN-slug>` / `fix/<slug>`), the mandatory `WORK TYPE:` line, the no-self-merge rule and the PROGRESS-file update rules all live in `CLAUDE.md`. Follow it — do not re-derive them from here.** This section only adds what is specific to Rihaish:

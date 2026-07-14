@@ -3043,3 +3043,25 @@ library + build/get/accept/approve services (callable from server actions / the 
 console) + the signature-verified webhook route are in place. Only the webhook has a
 HTTP route this step; the marketing/app builder screens and public quote routes are a
 follow-up. All acceptance criteria are backend/vitest and satisfied.
+
+## 66 — housekeeping — DONE (2026-07-14)
+
+Seven small audit defects from specs 57–65, each a real bug. Branch `feature/66-housekeeping`.
+
+**1. Unregistered feature codes (the L0-gate bypass).** Specs 55 & 56 shipped their modules but never registered a feature, so six codes they cite — `docs.core`, `docs.help_center`, `docs.admin_guide`, `platform.ops`, `platform.roles`, `platform.guardrails` — were absent from `lib/features.ts`: not toggleable, not priceable, silently past the gate. Registered all six with titles, module slugs, dependency edges and Urdu labels (`FEATURE_LABELS_UR`). Also registered `platform.handbook`: spec 56 cites it as a sub-feature, so once module 56 is in scope the completeness guard demands it too — it is a real ops-console feature, so registering it (not exempting it) is the honest fix. Grouped in spec 58's feature tree by adding the `docs` and `platform` namespaces to `DOMAIN_OF_NAMESPACE` (foundation).
+
+Root cause of the missed guard: `builtStepNumbers()` derives the in-scope steps FROM the registry, so a module that ships without registering a feature has no built step, its whole spec is skipped, and the guard cannot see the very codes it exists to guard — false confidence, the exact pattern already noted on the `settings.core` entry. Fix in `lib/features.test.ts`: (a) a step-66 regression lock asserting the six are registered; (b) a NEW registry-INDEPENDENT guard that scans `lib/`, `app/`, `components/` source for every `requireFeature`/`hasFeature`/`requiresFeature:` feature-code literal and asserts each resolves — it owes the registry nothing, so it fails the day an unregistered code is first used. Verified all 24 code-gated codes resolve against the now-106-code registry.
+
+**2. Help Centre read a directory it never checked existed.** `lib/docs/service.ts` swallowed missing files per-file (`.catch(() => null)`), so a missing `content/help/` rendered a blank shell with no error. Added `HelpContentMissingError` + `assertHelpContentPresent()` (stat the dir, throw loudly if absent), called at the top of `buildHelpCenter`. Added en+ur articles for the topics the spec lists: enriched `society` (getting started, adding units, inviting residents), created `payments`, `complaints`, `islamic` (prayer); `billing` and `gate-pass` already existed. New tests in `lib/docs/docs.test.ts`: throws on a missing dir, passes on the real dir, renders overviews from disk.
+
+**3. Tombstone spec.** Deleted `specs/50-property-model.md` ("SUPERSEDED — delete this file").
+
+**4. ARCHITECTURE.md.** Already carried rows 57–66, the corrected `#023029`/`#d8a03e` tokens (§5) and the "no test suite runs here" deploy.sh note (§7) from a prior run — no change needed.
+
+**5. OPERATIONS.md.** Already committed at the repo root with the trials/team/SafePay/quotes sections — no change needed. `lib/platform/handbook.ts`'s "syncs with OPERATIONS.md" claim is therefore now true.
+
+**6. AGENT.md was a committed merge conflict.** Lines 19–30 held unresolved `<<<<<<< / ======= / >>>>>>>` markers. Resolved keeping the HEAD side's golden rules 14–21 (tenant scope, label registry, no-hex, 2FA, no raw Zod, webhook idempotency, metric "—", no resident self-signup) and folding the staging side's architecture-test enforcement detail (`lib/architecture-scope.test.ts` + `lib/worker/architecture.test.ts`, sweep* owns its scope) into rule 14.
+
+**7. Bootstrap ghost.** `supplied@geekaxon.com` was auto-created by an early bootstrap run. Added `suspendBootstrapGhost()` to `lib/bootstrap.ts` — idempotent, wired into `runBootstrap()` (runs safe on every deploy): finds the platform user, moves it to SUSPENDED, revokes its sessions and writes a SYSTEM audit row; NEVER deletes it (audit rows must still resolve to a name). Added `ghostSuspended` to the summary + a CLI line, and DB-gated tests (suspends-not-deletes, idempotent, absent→no-op).
+
+**Gates:** `pnpm lint` clean, `pnpm typecheck` clean (fixed a `ReturnType<typeof readdirSync>` mis-inference → `string[]`). No schema change, so no `prisma generate`. Unit/e2e run by the controller.
