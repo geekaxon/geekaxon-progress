@@ -2302,3 +2302,33 @@ Branch `feature/54-brand-config-vendor-fixes` (WORK TYPE: FEATURE + FIX). Spec `
 
 ### Do-NOT-break check
 Tenant white-label priority preserved (platform mark is fallback only). EN+UR + RTL on the five non-vendor surfaces intact; vendor deliberately EN-only + parity-excluded. API auth response shapes + lockout semantics untouched (presentation-only). 51's BYOK encryption seam kept (now genuinely fail-closed). `any` sweep behaviour-neutral. Baseline `seed.ts` untouched. 53 resolver precedence unchanged (vendor host is a map entry, not a new resolver).
+
+---
+
+## 55 — Vendor Oversight — DONE (2026-07-14) — branch `feature/55-vendor-oversight`
+
+**Goal (spec 55):** give the vendor TOTAL operational control WITHOUT the medical-data bomb — audit viewer, honest support impersonation, global search, per-tenant + platform analytics, dashboard v2. Zero clinical data on the console except the ONE impersonation path.
+
+**Schema/migration (`20260714000000_vendor_oversight`, additive):**
+- `audit_log.impersonated_by TEXT?` + index `(tenant_id, impersonated_by)` — stamps every row an impersonated action writes.
+- NEW `impersonation_grants` (platform-scope RLS via the 46 `apply_platform_rls`): vendorAdminId, tenantId, targetUserId, targetRole, reason, startedAt, expiresAt, endedAt, endedReason. A tenant reads ZERO and can never forge one.
+
+**Flags:** added `platform.impersonation` (group platform, defaultOn TRUE, tenant-revocable) to `@mp/shared` FLAGS; added it to BASIC + STANDARD ceilings (premium/grandfather already wildcard) so a package can never strip a tenant's consent toggle. Boot reconcile (`SubscriptionService.onBoot`) upserts ceilings from SEED_PACKAGES, so the change propagates to existing package rows with no migration edit.
+
+**Impersonation (the honest way):** `TokenService.signImpersonation()` mints a SHORT-LIVED staff token (`typ:'access'`, `imp:<grantId>`, `impBy:<vendorAdminId>`, no refresh) scoped to the impersonated ROLE — it flows through the exact staff JwtAuthGuard + tenant RLS, reaching only what that role reaches. `Principal`/`AccessClaims` gained `impersonatedBy`/`impersonationGrantId`. `ImpersonationService.start` enforces: VENDOR_OWNER only, tenant ACTIVE (never suspended/archived), consent flag on (else REFUSED), target ACTIVE; clamps duration to [1min..2h] default 30min; writes a two-sided START audit (platform vendor_audit_logs + the tenant's own audit_log stamped impersonatedBy) and queues the owner email (logged now; 60 delivers). `end()` is idempotent + two-sided.
+
+**Two-sided per-action audit:** `AuditContext`/`AuditInterceptor` carry `impersonatedBy` from the principal; `AuditService.write/record` stamp it AND mirror a METADATA-ONLY row to `vendor_audit_logs` (new `AuditRepo.insertPlatformMirror`). So an impersonated action yields TWO rows (tenant stamped + platform mirror); an ordinary action yields none extra.
+
+**Destructive allow-list:** `@BlockedUnderImpersonation()` decorator + global `ImpersonationRestrictionGuard` (registered after JwtAuthGuard in AuthModule) — throws 403 for a decorated route only when the principal carries an impersonation stamp; a no-op otherwise. Applied to the bulk CSV export endpoint. RBAC already blocks escalation; this covers the rest.
+
+**Audit viewer + search + analytics:** `OversightService.searchAudit` reads the 06 tenant audit read-window (`runAsPlatform`) + vendor stream, EXPLICIT ALLOW-LIST select (NO summary/reason ever — a clinical summary can't leave tenant scope) merged most-recent-first; CSV export (metadata columns only). `.search` spans tenants/admins/listings/domains/packages/settlement-runs — the SearchHit union has NO patient member. `VendorAnalyticsService` computes per-tenant bookings-by-source / revenue / AI spend / active users / balance / monthly series under `runWithTenant` (never a cross-tenant join), assembled platform-side with a 60s cache; churn flag fires when bookings drop >30% period-over-period; platform totals include commission earned (48 receivable) + churn count.
+
+**Wiring:** VendorModule imports AuthModule (for TokenService); new providers OversightService, VendorAnalyticsService, ImpersonationService; new `VendorOversightController` (`/vendor/audit/search`, `/audit/export.csv`, `/search`, `/analytics`, `/analytics/tenants/:id`, `/impersonation` [start/end/list/targets]).
+
+**Web (subagent):** dashboard v2 (KPIs + deltas + charts + attention strip), `/vendor/audit` viewer, `/vendor/analytics` (charts dynamically imported), ⌘K global-search palette in VendorChrome, impersonation start dialog on tenant detail + a persistent non-dismissable countdown banner in the staff AppShell (Exit → end grant + clear staff session → /vendor). Nav + EN/UR key-parity entries added. Vendor stays EN-only (54).
+
+**Tests:** `apps/api/.../vendor-oversight.spec.ts` (impersonation start/end incl. VENDOR_STAFF/suspended/consent-off/missing-target refusals, token scoped to target role + stamp, duration clamp, two-sided mirror, restriction guard, redacted metadata-only viewer + CSV header, search-never-patient, analytics churn+source split); `packages/db/.../vendor-oversight-isolation.spec.ts` (impersonation_grants platform-only + WITH-CHECK forge test + audit impersonated_by tenant-own + sibling-invisible). Updated 06 audit fakes/specs for the new field.
+
+**Gates:** `pnpm prisma generate` + `pnpm lint` + `pnpm typecheck` green (only the pre-existing unrelated doctor-portal eslint-disable warning). test:unit/e2e/build left for the controller.
+
+**Judgement calls:** (1) impersonation token is `typ:'access'` (the real staff type) not a new `typ:'staff'` — the spec's "staff token" is conceptual; using the real type is what makes it flow through the unchanged guard/RLS with the role's exact reach. (2) Audit viewer redaction = simply never selecting summary/reason (metadata allow-list) — strongest possible: the field can't leak because it's not projected. (3) `platform.impersonation` placed in every ceiling (consent is not sellable). (4) Grant mid-session revoke relies on the short JWT TTL as the hard stop (no per-request grant check) — matches acceptance (auto-expire → 401, no refresh).
