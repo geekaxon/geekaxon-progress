@@ -2594,3 +2594,35 @@ multi-modal rewrite in one step; the substrate they will consume is in place. Fu
 DB-backed *.integration.test.ts run under the controller's Postgres.
 
 WORK TYPE: FEATURE (branch feature/53-settings-taxonomy-framework)
+
+## FIX — locale routing hand-rolled; next-intl middleware removed (2026-07-14)
+
+Root cause (bisected on the live box): with next-intl's `createMiddleware`
+bypassed, `GET /en` returned 200 HTML; with it enabled every page 404'd.
+next-intl 3.26.5 targets Next 14 — under Next 15.5.20 its locale rewrite is
+emitted as an `x-middleware-rewrite` header Next 15 does not consume. The header
+leaked to the client, the request 404'd, and behind nginx Next self-proxied the
+localhost rewrite so the apex guard 404'd the whole site. A total outage shipped
+undetected because no test loaded the marketing home.
+
+Fix: removed `createMiddleware` from `middleware.ts` and implemented locale
+routing directly. next-intl is STILL used for translations (`useTranslations`,
+`getTranslations`, `i18n/request.ts`) and the `[locale]` layout resolves the
+active locale from the URL segment via `setRequestLocale`, so translations never
+depended on the middleware rewrite.
+
+DELIBERATELY DO NOT re-add next-intl's middleware. Behaviour now:
+  - locale-prefixed page → `NextResponse.next()`, NO rewrite header, SEO
+    alternate `Link` header + fresh `NEXT_LOCALE` cookie;
+  - unprefixed page → resolve locale (`NEXT_LOCALE` cookie → `Accept-Language` →
+    `routing.defaultLocale`), 307 redirect to `/<locale><path>`, stamp cookie;
+  - `rehostLocalRedirect` still repairs a localhost `Location` behind nginx;
+  - `rehostLocalRewrite` DELETED — with no rewrite emitted there is nothing to
+    repair, and it was causing Next to self-proxy.
+Locales driven from `i18n/routing.ts`; `lib/tenant-host.ts` already sources its
+`LOCALES` set from `routing.locales`.
+
+Tests: rewrote `tests/unit/middleware-redirect.test.ts` (guards, no-rewrite
+guard, redirect/localhost-repair, Accept-Language + cookie precedence, SEO Link
+header) and added an e2e site-up smoke test in `e2e/home.spec.ts` asserting the
+marketing home returns 200 + text/html. `pnpm lint` + `pnpm typecheck` green.
