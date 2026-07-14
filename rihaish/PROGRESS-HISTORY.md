@@ -2626,3 +2626,29 @@ Tests: rewrote `tests/unit/middleware-redirect.test.ts` (guards, no-rewrite
 guard, redirect/localhost-repair, Accept-Language + cookie precedence, SEO Link
 header) and added an e2e site-up smoke test in `e2e/home.spec.ts` asserting the
 marketing home returns 200 + text/html. `pnpm lint` + `pnpm typecheck` green.
+
+## 54 — template-library — DONE (2026-07-14)
+
+**Branch:** feature/54-template-library (WORK TYPE: FEATURE)
+
+**What:** Society archetypes & module presets (spec 54). L0 authors versioned `Template`s carrying settings + taxonomy + config seeds; a society picks one and its whole config is pre-filled from a mandatory before→after preview. Apply is transactional + audited (`TemplateApplication`), revert restores settings/taxonomy, and a no-leak guard is the headline safety property.
+
+**Prisma:** `Template`, `TemplateApplication` + enums `Archetype`, `TemplateScope`, `TemplateStatus`, `TemplateVisibility` were already in schema.prisma; wrote migration 20260714120000_template_library and ran prisma generate. Both are NON-tenant-scoped infra models (Template: no societyId/deletedAt; TemplateApplication: societyId but no deletedAt) so they pass through the enforced `db` untouched and the service filters visibility EXPLICITLY.
+
+**lib/templates/**: payload.ts (strict zod payload + types), validate.ts (registry validation at PUBLISH + `assertNoLeak` deep scanner: banned key tokens userId/residentId/unitId/invoiceId/amountMinor/phone/cnic/email/secret AND PII-shaped VALUES via CNIC/phone/email regex), apply.ts (computeApplyPlan diff/skip — customised values protected by default with a global+per-key overwrite toggle; transactional applyTemplate through the audited settings service + taxonomy seeding; revertTemplate restores settings and DEACTIVATES seeded terms, seeds never deleted), service.ts (CRUD, publish=validate-first, versioning via createNextVersion/supersedesId, visibility 403 in templateForSociety, savePrivateTemplate snapshotting templatable settings, promoteToPlatform with recorded consent), http.ts, archetypes/index.ts (the six day-one archetypes) + seed.ts (idempotent publish).
+
+**Tests:** rules.test.ts (pure: registry validation rejects unknown/non-templatable/invalid; six archetypes publishable; jsonEq), leak.test.ts (THE test — archetypes + injected userId/residentId/amountMinor/PII-value cases), templates.integration.test.ts (skipIf no DB: reject-at-publish, customised-protection + exact diff/skip, PRIVATE 403 by id, v2 does not alter v1, revert restores settings + deactivates term + keeps application row).
+
+**API:** app/api/templates/** (society: list, [id]/preview, [id]/apply, applications/[id]/revert, save) reusing the spec-53 settings actor (society.settings.read/update) + requireFeature(templates.core|custom); app/api/platform/templates/** (L0: list+create, [id]/publish, [id]/deprecate, [id]/apply-to-society stamped actorType PLATFORM — no impersonation) behind requirePlatform(platform.entitlement.manage).
+
+**UI:** components/templates/apply-diff.tsx (the preview — before→after change list, skip list with reasons, overwrite switch, apply) + templates-console.tsx (L0 authoring list w/ publish/deprecate) + app/[locale]/platform/templates/page.tsx. i18n `templates` namespace added to en.json + ur.json. e2e/templates.spec.ts (auth-boundary asserts, seed-dependent flows skip).
+
+**Feature registry:** spec 53 declared `settings.core`(isCore)/`settings.taxonomy`/`settings.advanced` but NEVER registered them in lib/features.ts, so the spec↔registry completeness guard was skipping step 53 entirely. Registered all three now (they were needed so step 54's `settings.core` dependency edge resolves — otherwise the completeness test on spec 54's `Depends on: settings.core` line fails), plus `templates.core -> settings.core`, `templates.custom`/`templates.marketplace -> templates.core` per the CODEREF.
+
+**Decisions (autonomous, no approval):**
+- Seeds beyond taxonomy (chargeHeads, serviceCategories, expenseHeads, documentFolders, roles, notificationTemplates, structureShape) are carried in the payload, validated leak-free, and SUMMARISED into the application diff/preview, but their domain rows are created by each owning module's own seeding — applyTemplate actively applies SETTINGS + TAXONOMY only (the two things spec §4 makes revertible). This keeps apply typesafe without reaching into 5 other modules' create signatures. Preview text ("N charge heads added") reflects the summary.
+- Revert deactivates (isActive=false) template-seeded taxonomy terms rather than deleting them — non-destructive, consistent with "seeds are never deleted".
+- Archetype settings use only confirmed real+templatable spec-53 keys with safe values (gatePass.* bools, society.cnicCaptureEnabled) so every archetype passes publish validation.
+- Onboarding wizard (spec 21) archetype-picker placement is NOT wired here (that is spec 21's surface); the apply-diff component is the embeddable piece it will use. Recorded as a follow-up integration point.
+
+**Gates:** pnpm prisma generate ✓, pnpm lint ✓ (0 warnings), pnpm typecheck ✓. Did not run test:unit/e2e/build (controller runs them).
