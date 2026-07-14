@@ -2678,3 +2678,67 @@ marketing home returns 200 + text/html. `pnpm lint` + `pnpm typecheck` green.
 **Gates:** `pnpm typecheck` clean; `pnpm lint` clean (fixed jsx-no-literals on `:` label text → template strings; added `locale` to the panel memo deps). Did NOT run test:unit/e2e/build per CLAUDE.md — controller runs full gates. No schema change (no prisma generate).
 
 WORK TYPE: FEATURE (branch feature/55-settings-documentation)
+
+## 56 — platform-ops-console — DONE (2026-07-14)
+
+Branch: feature/56-platform-ops-console (FEATURE). Spec /specs/56-platform-ops-console.md.
+
+**Part 1 — least-privilege L0 roles.** Added two platform roles and reshaped
+support in lib/rbac.ts against the same PERMISSION_REGISTRY/effectivePermissions
+the guards already use (platform users pass null entitlements, so the ∩ rule is
+a no-op and a role's effective set == its grants — enforced server-side by every
+requirePlatform gate):
+- PLATFORM_BILLING — billing.read/manage + society.read + ops.read/checklist; NO
+  entitlement, society.manage, or impersonation.
+- PLATFORM_ONBOARDER — society.read/manage, template.apply, onboarding.*,
+  impersonate + impersonate.write (to run the wizard); NO billing/entitlement/
+  readonly.flip/role.manage.
+- PLATFORM_SUPPORT (default) — reads everything, read-only impersonate,
+  reports.run, invite.resend; NO write of any kind.
+New ungated permissions: platform.ops.read, checklist.record, role.manage,
+impersonate.write, readonly.flip, template.apply, invite.resend, reports.run.
+Role.permissions is String[] re-asserted idempotently by syncPlatformRoles on
+deploy — no migration for the roles themselves.
+
+**Part 2 — guardrails.** lib/platform/guardrails.ts: pure assertTypedConfirmation
+(whitespace-forgiving, case-sensitive) + assertReason, a DANGEROUS_ACTIONS
+registry, flipSocietyReadOnly (manual READ_ONLY: type the society name + reason,
+reports affected residents, audited, reason prefixed "platform-manual" to stay
+distinct from dunning), and featureUsageCounts for the disable confirmation.
+Off-plan guardrail wired into entitlements.enableFeature: enabling a feature not
+on the plan (and not core) without a validUntil throws OffPlanRequiresExpiryError
+(new 409 error); upsertOverride now persists validUntil. Impersonation write-mode
+now loads the OPERATOR behind the session and requires platform.impersonate.write
+(assertCanEnableImpersonationWrite) — support 403s, admin/onboarder pass.
+Four-eyes role promotion: lib/platform/platform-roles.ts + PlatformRoleChange
+model — requestRoleChange (blocked when <2 admins), approve/reject by a DIFFERENT
+admin (FourEyesError), the grant lands only on approval. New errors:
+OffPlanRequiresExpiryError, GuardrailError, FourEyesError (all 409).
+Structural impossibility: lib/platform/no-financial-delete.test.ts scans lib/app/
+worker/components for .delete/.deleteMany on ledgerEntry/invoice/receipt/payment/
+platformInvoice/platformPayment/auditLog — zero offenders today, gate keeps it so.
+
+**Part 3 — handbook.** OPERATIONS.md authored (source of truth). Mirrored as
+bilingual structured data in lib/platform/handbook.ts (7 sections + the ten-ticket
+support playbook), searchable + contextual (screen→section, root /platform matches
+exact only). UI: /platform/handbook page + HandbookClient (search over sections &
+tickets), ContextualGuidance in the shell (dismissible per-section), ChecklistWidget
+on the dashboard reading live worker heartbeat / dead-letter / overdue / failed-
+notification health (backup = explicit "confirm", no fake tick). PlatformDailyCheck
+records who ticked + the snapshot + an audit row; todaysCheckSummary shows "checked
+by <email>". New API routes: societies/[id]/readonly, roles (+[id]), checklist.
+Nav gains Handbook. i18n platform.{handbook,checklist,guidance,nav.handbook} added
+to en+ur at full parity (4907 keys each).
+
+**Part 4 — "what did we do".** The existing cross-society /platform/audit viewer
+(lib/platform/audit.ts) already filters by actor/society/action/date and answers
+"who changed this society's rate" in one filter; playbook ticket #4 points there.
+
+**Gates:** pnpm prisma generate ✓; typecheck ✓; lint ✓ (0 warnings). Ran the four
+new pure test files directly (targeted, not test:unit): 23/23 pass incl. the
+architecture no-delete scan. entitlements-offplan.integration.test.ts is
+skipIf(!DATABASE_URL) — runs under the controller's full gate.
+
+Migration: prisma/migrations/20260714160000_platform_ops_console (PlatformRoleChange
++ PlatformDailyCheck + PlatformRoleChangeStatus enum). Hand-written to match the
+repo's `prisma migrate` SQL style (no DB available in the build env).
