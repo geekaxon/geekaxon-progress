@@ -2794,3 +2794,30 @@ The Data-Table kit already implements the working card/table toggle and active-f
 "Powered by Rihaish": `components/branding/powered-by.tsx` converted to a client component that returns null on `/platform` routes (apex-only), so the console — our own product — no longer carries the white-label badge; society sites keep it (data-testid preserved for existing tests). Contextual guidance: inspected `contextual-guidance.tsx` + `handbook.ts` screen mapping — `contextualSections` already resolves the most-specific screen correctly (dashboard→daily-checks, societies→onboarding, billing→billing, audit→do-not, jobs→incidents); found no reproducible off-by-one, so no change (changing it risked breaking the spec-56 completeness test). CODEREF line numbers are snapshots; the live mapping is correct.
 
 WORK TYPE: FEATURE (branch feature/58-platform-console-repairs)
+
+## 59 — brand-integration — DONE (2026-07-14)
+
+**Spec:** /specs/59-brand-integration.md (+ 59-59-CODEREF.md). Branch: feature/59-brand-integration. Gates: `pnpm typecheck` clean, `pnpm lint` clean (0 warnings). test:unit/e2e/build left to the controller.
+
+### Tokens (§1)
+- `app/globals.css`: `--primary` 168 79% 21% → **168 96% 9%** (#023029), `--accent` 40 68% 55% → **38 68% 55%** (#d8a03e); fixed the accent-foreground hue, `--ring`, and the dark pairings (dark primary/ring lifted to 168 70% 42% so the deep green is visible on dark). Added brand-derived `--sidebar-*` tokens (light+dark) and `--font-ur-line-height: 2`.
+- New `lib/design/tokens.ts` = the ONE JS/TS home for brand hex (`BRAND` + `BRAND_RGB` for pdf-lib float channels). Every non-CSS surface now imports it: manifest default theme, `next/og` OG card, `lib/pwa/images.ts` defaults, the society colour-picker default/placeholder, `product-preview.tsx`, and the four pdf-lib generators (invoice/receipt/NOC/admin-guide `PRIMARY`).
+- Guard test `lib/design/tokens.test.ts`: asserts BRAND follows the logo, globals.css carries the matching HSL, and **no brand-palette hex (current + retired emerald/gold) appears anywhere under app/components/lib/i18n/styles except globals.css + tokens.ts** (test fixtures that exercise hex parsers are exempt; structural #000/#fff are not brand colours so not forbidden). Interpretation of "no hex outside the token file" documented in the test.
+
+### Logo (§2)
+- New `components/brand/logo.tsx` — the single source of truth. Variant (mark/horizontal/vertical/logotype), theme-aware (emits light + `-onDark` art, CSS `dark:` toggles → no pre-hydration flash), society-override-aware (`societyLogoUrl`), 404 → wordmark text (never a broken image), no animation (reduced-motion safe by construction). It is the ONLY place `/brand/logo/*.svg` is referenced.
+- Wired in: platform sign-in (vertical lockup), platform shell (horizontal in the sidebar, mark in the mobile header), marketing header + footer (horizontal), and the society shell — `BrandMark` now delegates to `<Logo variant="mark">` showing the society's own logo when uploaded else Rihaish (no more invented initial tile). Threaded `society.logoUrl` through `ShellData` → sidebar/mobile-nav/top-bar/more-drawer; the app layout fills it from `branding.logoFileId` via the existing host-scoped icon route.
+- Manifest (`app/manifest.webmanifest/route.ts`): default `theme_color` now `BRAND.primary`; split the single `any maskable` icon into distinct `any` + `maskable` entries (the spec's crop warning) and added a `monochrome` entry.
+- OG: added `openGraph.images` to the root metadata (real absolute card → silences the `metadataBase` warning).
+- PDFs now carry a logo: new `lib/brand/pdf-logo.ts` loads `assets/brand/logo.png` (pdf-lib cannot embed SVG). Invoice header draws it at the far edge; receipt falls back to the Rihaish mark when the society has no logo. NOC already embedded the society logo.
+
+### Urdu font (§3) — decision recorded
+- Jameel ships ONLY as a **7.07 MB un-subsetted WOFF** (no WOFF2 in the source repo; no fonttools/pyftsubset in this environment). That is ~30× any 2.5 s-on-3G LCP budget, so per the spec's own fallback rule: **Noto Naskh stays the Urdu UI/body font; Jameel is headings + logo only** (`.font-nastaliq`). Both faces are now **self-hosted via `next/font/local`** (Naskh from the existing TTF, Jameel from the vendored WOFF) — the `next/font/google` Urdu faces are gone, nothing hotlinks GitHub. Jameel is `display: swap` **and `preload: false`** so it is never on the critical path; both faces are `unicode-range`-scoped to Arabic (via `declarations`) so Latin never pays. Line-height 2 applied to every `[dir="rtl"]`. Rationale captured in `styles/fonts.css`.
+- Vendored font lives in `assets/fonts/` (not `public/fonts/`): **`public/` is owned by `www` and not writable by the agent** — `assets/` is agent-writable and `next/font/local` fingerprints/serves the file from anywhere in the repo, so it is genuinely self-hosted. `styles/fonts.css` documents this.
+- PDF/email: PDFs keep the embedded Noto Naskh TTF — Jameel has no TTF and pdf-lib can't read WOFF, and Jameel's redistribution licence is unclear. Email templates in this repo are **plain-text** (no HTML layout), so there is no header-image slot; email keeps the system stack. Both stated in `styles/fonts.css`.
+
+### Deferred / notes
+- Edge case "transparent dark society logo disappears on dark theme → warn + offer a background plate on upload" is an upload-pipeline feature (branding upload) and is NOT implemented this step; the runtime side (404 → wordmark, theme-aware Rihaish art) is handled by `<Logo>`.
+- TODO(infra): once a subsetting toolchain exists, subset Jameel + convert to WOFF2 (<300 KB expected) and drop `preload: false`; and (optionally) vendor the font under `public/fonts/` once that dir is agent-writable.
+
+WORK TYPE: FEATURE (branch feature/59-brand-integration)
