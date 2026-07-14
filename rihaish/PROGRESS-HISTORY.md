@@ -2930,3 +2930,39 @@ WORK TYPE: FEATURE (branch feature/62-e2e-ci-gate)
 - Pricing calculator still uses the spec-40 bands; wiring it to the spec-65 per-unit bands + custom plan builder is spec 65's job.
 
 WORK TYPE: FEATURE (branch feature/63-public-website)
+
+## Step 64 — self-serve-trial (feature/64-self-serve-trial) — DONE 2026-07-14
+
+Spec /specs/64-self-serve-trial.md (+ 64-64-CODEREF.md). Only a SOCIETY can self-signup; the spec-04 resident rule stands (residents are invited/imported, never self-served).
+
+### Data model (prisma + migration 20260714180000_self_serve_trial)
+- Society += `source` (enum SocietySource PLATFORM|SELF_SIGNUP, default PLATFORM), `trialEndsAt`, `trialExtendedBy`, `verifiedPhone`, `riskScore`.
+- New `SignupAttempt` (phone/email/ip/city/societyName/contactName/unitsEstimate/slug/status/riskScore/codeHash/expiresAt/verifiedAt/societyId) — NOT tenant-scoped (exists before any society; written via raw prisma, filtered by hand). Enum SignupStatus PENDING|VERIFIED|CLAIMED|PROVISIONED|SUSPENDED.
+- New `TrialReminderLog` unique(societyId,day) — claim-before-send idempotency for day-3/6/7 nudges.
+
+### Signup pipeline (lib/signup/*)
+- reserved-slugs.ts — SLUG_RE + a RESERVED set covering host/infra names, every app/[locale] + platform route head, marketing sections, auth/billing surfaces, brand, minimal profanity. reserved-slugs.test.ts ENUMERATES the real route tree on disk (readdirSync) and asserts every top-level segment is reserved — a slug can never collide with a platform route; goes red if a future route head isn't reserved.
+- risk-score.ts — disposable-email blocklist (hard signal, rejected), free-mail allowed-but-scored, IP/phone-prefix velocity, phone-verified trust; 0..100 clamped, RISK_FLAG_THRESHOLD 60. Pure + tested.
+- service.ts — startSignup (server-side Turnstile via verifyTurnstile, disposable-email reject, global+IP hourly caps, risk score, create/RESUME by verified phone, OTP send best-effort via platform SMS env, devCode returned only when Turnstile off), verifySignup (OTP via lib/otp primitives; idempotent once verified), checkSlugAvailability/claimSlug, provisionFromAttempt (IDEMPOTENT/retryable: reuses createSociety + seedSocietyRoles, stamps trial + setSocietyLimits(maxUnits 50, maxUsers 3), mints the sole SOCIETY_ADMIN under withSociety using scoped db, marks attempt PROVISIONED, enqueues provision.society for the rest), finishProvisioning (deferred, self-scoping, idempotent). assertPlatformSignup(host) is the testable spec-04 guard. signupHttpStatus maps errors.
+- API app/api/signup/{start,verify,claim,provision}/route.ts — platform-host only (society host 404s = resident rule), honeypot+time-trap, JSON envelopes, provision mints a cross-subdomain session cookie and returns landingUrl.
+
+### Trial mechanics (lib/trial/*)
+- service.ts — TRIAL_DAYS 7, TRIAL_CAPS (50 units, 3 admins, no custom domain, no bulk SMS), isOnTrial/isTrialExpired/trialDaysLeft, reminderDayFor (3/6/7 + last day), cap checks + TrialCapError. Pure + tested (trial.test.ts).
+- expiry.ts — platform sweep (raw prisma, cross-society): sweepTrialExpiry flips expired-unconverted trials to READ_ONLY (same mechanism as spec-22 non-payment; reason prefix "trial:" so it never clobbers billing/manual read-only), restores a trial-frozen society once it converts (active plan); sweepTrialReminders claims day slots; runTrialSweep composes. expiry.test.ts (DB) covers flip/idempotent/converted-never-expire/restore/reminder-once.
+
+### Worker
+- lib/worker/handlers.ts: runProvisionSociety (society-scoped, enqueue-only; delegates to finishProvisioning — no unscoped in the handler body so architecture.test passes) + runTrialSweep (platform). Registered in registry.ts (JOB_REGISTRY + CRON_REGISTRY trial.sweep "30 4 * * *" platform).
+
+### Platform Trials console
+- lib/platform/trials.ts — listTrials (runPlatformList over SELF_SIGNUP societies + activation signals from audit entities/user count + day-of-trial + risk), extendTrial (first-class audited; restores if trial-frozen), suspendTrial (freezes + blocks the phone's attempts, audited). API app/api/platform/trials + [id]/{extend,suspend}. Page app/[locale]/platform/trials + components/platform/trials-table.tsx (DataTable kit).
+
+### UI + i18n
+- components/marketing/{signup-wizard,slug-claim}.tsx + app/[locale]/(marketing)/signup/page.tsx (4-step wizard: details+Turnstile -> OTP -> live slug -> provision -> land). /trial redirects to /signup (keeps spec-63 TRIAL_HREF valid).
+- In-app trial countdown: TrialBanner in components/shell/banners.tsx, wired via ShellData.trial (resolveTrialCountdown in lib/shell-data.ts). Expired state already surfaced by ReadOnlyBanner (reason "trial:...").
+- messages/{en,ur}.json += marketing.signup, platform.trials, society.trialBanner/trialChoosePlan.
+
+### Decisions / notes
+- Society row + admin created quickly in provision (so the committee lands the moment it's usable); the WORKER job finishes the rest — matches "provisioning is a worker job, land them immediately." Half-built = at worst an empty, retryable society; never a second society (idempotent by attempt + verified phone).
+- OTP/SMS delivery is best-effort against PLATFORM_SMS_* env (platform creds, since no society exists yet); dev/test returns devCode so the e2e runs with no human/SMS. Email transport remains unwired in-repo (as before).
+- Trial caps recorded as SocietyLimits (numeric) + pure guard fns tested; email/SMS day-3/6/7 delivery is a claimed-slot seam (in-app banner is the live nudge) to avoid a notification-template cascade.
+- Gates: pnpm prisma generate, pnpm typecheck, pnpm lint all clean. Did not run test:unit/e2e/build per standing rules (controller runs full gates).
