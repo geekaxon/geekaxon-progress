@@ -3101,3 +3101,53 @@ WORK TYPE: FEATURE (branch feature/69-locale-single-source)
 **Gates:** pnpm lint → clean (no warnings/errors). pnpm typecheck → clean. Did not run test:unit/e2e/build per standing rules (controller runs full gates). No schema change, so no prisma generate.
 
 **Acceptance:** 33 files present + committed ✓; e2e/brand-assets.spec.ts asserts 200 + content-type on the 10 URLs ✓; assets/brand negative test ✓; no component touched (spec 59's job — and already built) ✓.
+
+## 68 — ci-capacity — DONE (2026-07-14)
+
+**Type:** FEATURE (infrastructure) · branch feature/68-ci-capacity · Depends on 62.
+
+**Problem.** The repo had already exhausted GitHub's 2,000 free Actions minutes in a
+month (a finished step sat undeployed), and spec 62 added a Playwright e2e suite to CI,
+making the minute pressure strictly worse.
+
+**Fix (code portion).** Split `.github/workflows/ci.yml` into two jobs:
+- `static` on `ubuntu-latest` (GitHub-hosted) — pnpm install, prisma generate, lint,
+  typecheck. Kept on GitHub deliberately so a self-hosted-runner outage cannot block
+  the cheap gates. Uses only non-secret env placeholders (no DB access).
+- `test` on `[self-hosted, rihaish]` — the minute-hungry unit + build + e2e work, now
+  run on the free Oracle ARM box for zero Actions minutes.
+
+**Safety gate.** The `test` job's first step, "Assert CI database (never staging/
+production)", parses the DB name from `DATABASE_URL` (last path segment, minus any
+?query) and hard-fails unless it is exactly `rihaish_ci`; a belt-and-braces `case`
+also rejects anything matching `*staging*|*production*|*rihaish_prod*`. This satisfies
+the acceptance criterion that a truncating test run can never reach staging data.
+`DATABASE_URL` comes from a new repo secret `CI_DATABASE_URL` (points at the box's own
+`rihaish_ci` Postgres); the service-container Postgres from the old single-job CI is
+dropped since the runner uses its local DB.
+
+**Caching.** pnpm via setup-node `cache: pnpm`; Playwright browsers via actions/cache on
+`~/.cache/ms-playwright`, keyed on OS+arch+hash(pnpm-lock.yaml) with a prefix restore-key,
+so an uncached ~2-minute `playwright install` doesn't run every push. Critical suite stays
+chromium-only, one locale (the full en+ur/mobile/axe matrix remains a staging+nightly
+concern, not changed here). Build keeps NODE_OPTIONS=--max-old-space-size=6144 and
+APP_ENV=production override.
+
+**Docs.** Created `DEPLOYMENT.md` recording: the runner topology (which job runs where),
+the one-time install steps (dedicated unprivileged `ghrunner` user, systemd svc.sh,
+labels `self-hosted,linux,arm64,rihaish`, own `rihaish_ci` DB), the security rules
+(private-repo only, disable fork-PR workflows, repo-scoped not org-level, ghrunner has no
+sudo/no deploy-key/does not own /www/wwwroot), and — as the spec demands — the explicit
+"if this repo is ever open-sourced, remove the runner FIRST" rule. Also records the minute
+budget (only `static` consumes GitHub minutes now → well under 200/month).
+
+**[HUMAN_REQUIRED] boundary (not blocking — recorded per CLAUDE.md).** The physical runner
+registration cannot be done in code: the GitHub registration token cannot be self-issued,
+and the systemd install / `ghrunner` user / `rihaish_ci` database / `CI_DATABASE_URL` secret
+/ "disable fork-PR workflows" toggle are host + GitHub-settings actions. The code artefacts
+(workflow split, DB guard, caching, DEPLOYMENT.md) are complete and merge-ready; a human
+must perform the host-side install for the `test` job to find a runner.
+
+**Gates.** Docs + workflow YAML only — no TypeScript or schema.prisma touched, so lint/
+typecheck have nothing to evaluate (skipped per the docs-only rule in CLAUDE.md §6).
+Controller runs the full gates.
