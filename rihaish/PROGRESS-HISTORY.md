@@ -2901,3 +2901,32 @@ WORK TYPE: FEATURE (branch feature/61-form-validation-ux)
 **Gates:** `pnpm lint` clean, `pnpm typecheck` clean, `bash -n deploy.sh` OK, ci.yml YAML valid, guard-logic simulation: 0 offenders / 0 stale. Did not run test:unit/test:e2e/build (controller runs full gates).
 
 WORK TYPE: FEATURE (branch feature/62-e2e-ci-gate)
+
+## 63 — public-website — DONE (2026-07-14)
+
+**Spec:** /specs/63-public-website.md · CODEREF /specs/63-63-CODEREF.md. Redesign of the spec-40 marketing scaffold: brand, real content, a self-serve trial CTA, a Turnstile-protected contact form, and company/legal specifics.
+
+**Work type:** FEATURE (branch feature/63-public-website — note: continued on the pre-existing feature/62-e2e-ci-gate working branch as delivered by the controller).
+
+### Decisions
+- **Interactive hero, honestly cheap.** Read "award-winning" as one thing done well, not WebGL everywhere. Hand-rolled a Canvas-2D isometric building (slow sway + pointer parallax, floors pulsing gold as "data" flows up) — zero library, a few KB, so the ≤150 KB budget is trivially met and three.js never touches the critical path (CODEREF "Do NOT ship three.js"). A static inline-SVG poster is ALWAYS rendered and is the LCP element; the canvas is code-split (`ssr:false`), imported after first paint, and mounted OVER the poster only when capable.
+- **Capability gate for the fallback** (`hero-visual`): withholds the canvas for prefers-reduced-motion, screens < 768 px, `hardwareConcurrency <= 4`, and no-2d-context — the mid-range Android on 4G gets the fast poster. Canvas also pauses off-tab (visibilitychange) and hands back to the poster on `contextlost` (never a black rectangle).
+- **"Request a demo" retired.** `Start free trial` (→ /trial, owned by spec 64) is the primary CTA in the header (desktop + mobile), hero, home CTA band, features and pricing (plan cards + footer). The `/demo` route now redirects to `/contact` so old links and the sitemap don't 404 or double-index; nav/sitemap swapped demo→contact.
+- **Contact form + Turnstile, server-side.** New `lib/turnstile.ts` verifies the token against Cloudflare siteverify with the secret; fails CLOSED when enforced (missing token → no network call, reject), dev-bypasses only when no secret is configured; never throws (provider/network error → fail closed). Fetch is injectable → `lib/turnstile.test.ts` covers enforce/bypass/pass/reject/network/non-200. New `contactFormSchema` (shared client+server), new `POST /api/contact` (apex-only, per-IP rate limit, honeypot + time-trap, Turnstile verify, createLead + best-effort email to `SALES_EMAIL`, 503 degrade). The old `/api/leads` challenge path is left intact (its tests untouched). The form reworked to render the Turnstile widget, require a token only when the widget is configured and not blocked, and degrade to email/phone/WhatsApp if Turnstile is blocked or the DB is down.
+- **Company + legal specifics.** Real Geek Axon (Pvt) Ltd block (3 offices, phones, sales@rihaish.pk, WhatsApp click-to-chat) added to `constants.ts` (`COMPANY`/`CONTACT`) and surfaced in the footer (all three offices) and the Contact page. Legal pages rewritten to be product-specific in both locales: privacy names CNIC, gate-pass photos INCLUDING of children, sub-processors, retention, residents' rights, PECA 2016; terms cover society-vs-resident roles, "a record not a payment rail", read-only suspension with no deletion; data-protection covers at-rest encryption of society credentials, hosting, breach notification, deletion on request. Full Urdu translations (translated, not transliterated) for the contact block, company block, about offices, and all legal sections.
+- **SEO.** `marketingJsonLd()` now emits SoftwareApplication + Organization + LocalBusiness ×3 (embedded on Home). Sitemap swapped demo→contact. `robots.ts` now returns `disallow: /` for any non-production `APP_ENV` (staging = noindex) and only advertises the sitemap in production. OG image (`public/brand/social/og-default.png`) already present; per-route `opengraph-image.tsx` and `metadataBase` already set.
+- **"Light/dark mode" de-boasted.** Removed from the pricing plan feature note and softened the preview caption; the toggle stays, the boast is gone.
+
+### Files
+- New: `lib/turnstile.ts` (+ `.test.ts`), `app/api/contact/route.ts`, `app/[locale]/(marketing)/contact/page.tsx`, `components/marketing/hero-canvas.tsx`, `hero-poster.tsx`, `hero-visual.tsx`.
+- Edited: `lib/public-site/constants.ts` (CONTACT/COMPANY/TRIAL_HREF/turnstile helpers, nav demo→contact), `lib/public-site/seo.ts` (company + local-business JSON-LD), `lib/public-site/leads.ts` (notifySalesOfLead), `schemas/public-site.ts` (contactFormSchema/contactFields), `lib/env.ts` + `.env.example` (SALES_EMAIL, NEXT_PUBLIC_TURNSTILE_SITE_KEY, TURNSTILE_SECRET_KEY), `components/marketing/{marketing-header,marketing-footer,lead-form}.tsx`, `app/[locale]/(marketing)/{page,features/page,pricing/page,about/page,demo/page}.tsx`, `app/sitemap.ts`, `app/robots.ts`, `messages/{en,ur}.json`, `e2e/marketing.spec.ts`.
+
+### Gates
+- `pnpm typecheck` — clean. `pnpm lint` — no warnings/errors. Did not run test:unit/test:e2e/build per the loop rules (controller runs full gates).
+
+### Follow-ups / notes
+- `Start free trial` points at `/trial`, which spec 64 (self-serve trial) builds; until then it is a forward reference and may 404. The e2e marketing spec deliberately tests only the 8 existing marketing pages (+ the demo→contact redirect and the CTA text), not `/trial`.
+- Product screenshots: no screenshot pipeline exists and staging tokens must never be embedded, so `product-preview.tsx` remains the honest token-free mock rather than "real screenshots".
+- Pricing calculator still uses the spec-40 bands; wiring it to the spec-65 per-unit bands + custom plan builder is spec 65's job.
+
+WORK TYPE: FEATURE (branch feature/63-public-website)
