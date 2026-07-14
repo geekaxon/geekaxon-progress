@@ -16,7 +16,6 @@ Build-loop mechanics live in `CLAUDE.md` (controller-managed). This file is **wh
 11. **CNIC and other sensitive PII**: encrypted at rest, masked in UI (last 4), never in logs, never exported without an audit entry.
 12. **Cross-tenant reads are impossible.** A tenant host can never reach a platform route, and vice versa — including via the screenshot token.
 13. **Never assert exact equality against a growing global registry** (cron, features, nav, templates, permissions). Assert that required entries are present, plus invariants (uniqueness, validity, handler exists). Registries are append-only by design; a test that forbids appending is a broken test.
-14. **Society-scoped models are only ever touched inside `withSociety(societyId, …)`.** Platform/worker code that must cross societies enumerates them with `db.unscoped()` and wraps each one. This rule has been broken three times — the architecture test (`lib/architecture-scope.test.ts` + `lib/worker/architecture.test.ts`) is what enforces it, not good intentions. A worker entry point (a `sweep*`) owns its scope; the worker's request scope is NOT ambient.
 
 ## 2. Per-module workflow
 **The build loop, branch naming (`feature/<NN-slug>` / `fix/<slug>`), the mandatory `WORK TYPE:` line, the no-self-merge rule and the PROGRESS-file update rules all live in `CLAUDE.md`. Follow it — do not re-derive them from here.** This section only adds what is specific to Rihaish:
