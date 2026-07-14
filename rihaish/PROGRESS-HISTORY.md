@@ -2821,3 +2821,33 @@ WORK TYPE: FEATURE (branch feature/58-platform-console-repairs)
 - TODO(infra): once a subsetting toolchain exists, subset Jameel + convert to WOFF2 (<300 KB expected) and drop `preload: false`; and (optionally) vendor the font under `public/fonts/` once that dir is agent-writable.
 
 WORK TYPE: FEATURE (branch feature/59-brand-integration)
+
+## 60 — human-readable-ui — DONE (2026-07-14)
+
+**Spec:** /specs/60-human-readable-ui.md · **CODEREF:** 60-60-CODEREF.md · **Feature:** core.labels (isCore, dependsOn core.tables) · **Branch:** feature/60-human-readable-ui
+
+**Rule enforced (AGENT.md §1.15):** a user never sees a value written for a database. Every enum/slug/feature-code/job-kind/audit-action/role/status renders through a label registry (en+ur); every id shown to a human becomes the entity's current name, anchor-linked.
+
+**Created:**
+- `lib/labels/registry.ts` — the label data. Static maps for audit.action (41), job.kind (24), role (13), status (21), actor.type, entity.type; feature labels derived `{ en: FeatureDef.title, ur }` with a per-code Urdu map (all 99 codes). No DB import — safe to pull into client tables.
+- `lib/labels/index.ts` — `label(kind, key, locale)` + `humaniseKey()` (last-resort `Notifications · Retry`, never the raw dotted slug) + `entityHref(type, id)` (Society/User/Plan/PlatformRoleChange are linkable).
+- `lib/labels/labels.test.ts` — the architecture guard: every FEATURES code, every cron+job registry kind, every ROLE_SEEDS code and every registry entry has a non-empty en AND ur. Missing = build failure.
+- `components/ui/entity-link.tsx` — id→name→anchor, with a suspended/deleted chip, an optional role chip, and a copy-id button (raw id lives in `title=`/clipboard, never in visible text).
+- `lib/platform/audit-resolve.ts` + `audit-resolve.test.ts` — pure batched name resolver: `collectAuditRefs` groups unique ids by kind, `resolveAuditRows` calls one loader per kind (users/societies/plans). Test asserts a 50-row page = exactly one call per kind and the actor loader sees 7 (deduped) ids, not 50 — the no-N+1 acceptance.
+- `e2e/no-slugs.spec.ts` — greps `main` innerText on /platform/{audit,jobs,societies,plans} in en+ur for a dotted slug or a cuid; asserts zero. Env-gated on E2E_PLATFORM_*.
+
+**Edited:**
+- `lib/platform/audit.ts` — `listAudit` now resolves via `platformNameLoaders()` (one findMany per kind; users include their platform role, highest wins the chip; society/user suspended = SUSPENDED or deletedAt). Names resolved at read time (renamed society shows current name). AuditRow re-exported from audit-resolve.
+- `components/platform/audit-table.tsx` — rebuilt: actor→EntityLink (or actor-type label for SYSTEM), action→label, object→EntityLink (unresolved types show the humanised entity-type label, id on hover), society→EntityLink, actorType kept as a hidden enum filter, a "details" dialog holds the JSON payload (monospace, copyable). Card view reads as a sentence.
+- `lib/worker/console.ts` + `components/platform/jobs-table.tsx` — job kind + status → labels; society → EntityLink (added societyName to JobListRow).
+- `components/platform/feature-tree.tsx` — dropped the raw `font-mono {f.code}` line (a dotted-slug leak); shows the feature description instead.
+- `app/[locale]/platform/plans/page.tsx` — featureOptions label is now `label("feature", code, locale)`, never `title (code)`.
+- `lib/features.ts` — registered `core.labels`.
+- `messages/en.json` + `messages/ur.json` — added `platform.audit` (object, platformScope, details*, detailsTitle/Subtitle) and a new `platform.labels` block (deletedEntity, copyId, copied, suspended, deleted, copyPayload).
+
+**Decisions / deviations:**
+- Labels live in a TS registry, not `messages/*/labels.json` as the CODEREF sketched — the repo uses single-file next-intl messages and TS registries (features.ts, rbac.ts) are the idiom here; a TS registry is client-safe, DB-free and makes the completeness guard trivial and exact.
+- Did NOT add `group`/`subgroup` to features.ts — the CODEREF wanted them "also to feed spec 58's tree", but spec 58 already shipped and its feature-tree groups by namespace; adding them now would be dead data.
+- Audit object names are resolved for Society/User/Plan; other entity types render as their humanised type label (id on hover) rather than a bespoke query per type — keeps resolution batched and avoids ~30 per-type lookups.
+
+**Gates:** `pnpm lint` clean, `pnpm typecheck` clean. Did not run test:unit/e2e/build (controller runs them). Guard + N+1 + humaniseKey unit tests written; no-slugs e2e written (env-gated).
