@@ -3065,3 +3065,23 @@ Root cause of the missed guard: `builtStepNumbers()` derives the in-scope steps 
 **7. Bootstrap ghost.** `supplied@geekaxon.com` was auto-created by an early bootstrap run. Added `suspendBootstrapGhost()` to `lib/bootstrap.ts` — idempotent, wired into `runBootstrap()` (runs safe on every deploy): finds the platform user, moves it to SUSPENDED, revokes its sessions and writes a SYSTEM audit row; NEVER deletes it (audit rows must still resolve to a name). Added `ghostSuspended` to the summary + a CLI line, and DB-gated tests (suspends-not-deletes, idempotent, absent→no-op).
 
 **Gates:** `pnpm lint` clean, `pnpm typecheck` clean (fixed a `ReturnType<typeof readdirSync>` mis-inference → `string[]`). No schema change, so no `prisma generate`. Unit/e2e run by the controller.
+
+## 69 — locale-single-source — DONE (2026-07-14)
+
+**Spec:** /specs/69-locale-single-source.md · **Feature code:** core.i18n (extends 03) · **Branch:** feature/69-locale-single-source · **Work type:** FEATURE
+
+**Problem.** The supported locale fact `["en","ur"]` was written down in several places (routing config, plus derived/literal copies), a scheduled failure: the day a third locale is added, routing accepts `/ps/...` where host/route resolution doesn't, producing a silent per-host 404 misdiagnosed as a tenancy bug.
+
+**Fix — single source.**
+- `i18n/routing.ts` now exports `LOCALES = ["en","ur"] as const` and `DEFAULT_LOCALE = "en" as const`; `defineRouting` consumes them; `Locale` derives from `LOCALES`. This is the ONLY place either is written.
+- `lib/tenant-host.ts` imports `LOCALES` (was a local `new Set(routing.locales)`; renamed internal set to `LOCALE_SET`) — now has zero locale literals (asserted by the guard).
+- Removed the literal locale list from other files and pointed them at the source: `components/onboarding/steps/profile-step.tsx` (was `const LOCALES = ["en","ur"]`); `lib/notifications/templates.ts` `TEMPLATE_LOCALES = LOCALES`; `schemas/notifications.ts` `TEMPLATE_LOCALE = LOCALES`; and every `z.enum(["en","ur"])` locale field → `z.enum(LOCALES)` in `schemas/account.ts`, `app/api/platform/societies/route.ts`, `app/api/platform/societies/[id]/route.ts`, `components/platform/societies-table.tsx`.
+- `middleware.ts` untouched: it already drives off `routing.locales`/`routing.defaultLocale` (no literal), still hand-rolled, `createMiddleware` still absent, still Edge-safe.
+
+**Guard test — `lib/i18n/locales.test.ts`.** Two proofs. (1) Static fs scan of shipping `.ts/.tsx` (tests/specs + node_modules/.next/etc excluded): a locale-list literal `["en","ur"…]`/`new Set(["en"…])` may appear in exactly one file (`i18n/routing.ts`); `DEFAULT_LOCALE =` likewise; and `lib/tenant-host.ts` must contain no `"en"`/`"ur"` literal at all. A second declaration turns the array assertion red. (2) The fix itself: `vi.mock("@/i18n/routing")` adds Pashto (`ps`) to `LOCALES` and asserts — with NO other file changed — that `routeAreaFor`/`isRouteAllowed`/`isMarketingPath` immediately accept `/ps/...` (and still block a `/ps/platform` platform route on a society host, the leak this forecloses), while `resolveHostContext` is unaffected.
+
+**Notes.** `z.enum` accepts the `readonly` const tuple in zod 3.24.1 (same pattern already used by `z.enum(CHANNELS)`), so no tuple-mutability shim was needed. `RTL_LOCALES = ["ur"]` is a single-element RTL flag list, not a copy of the locale set, and is intentionally not scanned.
+
+**Gates.** `pnpm lint` clean (no warnings/errors). `pnpm typecheck` clean (`tsc --noEmit`). test:unit/e2e/build left to the controller per standing rules.
+
+WORK TYPE: FEATURE (branch feature/69-locale-single-source)
