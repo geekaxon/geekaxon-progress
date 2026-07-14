@@ -119,21 +119,27 @@ Every UI module must ship: shadcn components only · light **and** dark · **RTL
 | 55 | `/specs/55-settings-documentation.md` | Docs on every setting (en+ur, build-enforced), help centre, admin guide | [CHECKPOINT] |
 | 56 | `/specs/56-platform-ops-console.md` | L0 team roles, guardrails, in-app handbook, activity view | [CHECKPOINT] |
 
-### Steps 57–66 — the "we used it" set
+### Steps 57–69 — the "we used it" set
 Everything below came from **operating the deployed product**, not from reading the code. **The table is in build order, not numeric order.**
 
-| Build order | # | Spec | Module | Checkpoint |
+| Build order | # | Spec | Module | Status |
 |---|---|---|---|---|
-| 1st | 60 | `/specs/60-human-readable-ui.md` | 🔴 Label registry — no slug, no ID, ever (en+ur). Audit log reads as sentences. **58 depends on this.** | [CHECKPOINT] |
-| 2nd | 57 | `/specs/57-platform-identity-team.md` | 🔴 **P0 SECURITY** — TOTP is enrolled and then **never checked at login**. Enforce it. Plus platform team management (add admin, change password, four-eyes promotion, suspend). | [CHECKPOINT] |
-| 3rd | 58 | `/specs/58-platform-console-repairs.md` | 🔴 **P0** — "New Society" throws a client-side exception · plans have **no price field** · feature checkbox tree · dashboard lies (100 % collection on zero invoices) · billing on the Data-Table kit · Templates/Activity/Team in nav | [CHECKPOINT] |
-| 4th | 62 | `/specs/62-e2e-ci-gate.md` | 🔴 `pnpm test:e2e` is **absent from `ci.yml`** and has never run. 12 critical browser specs + a deploy-blocking gate. Build it early — every later step is then verified in a real browser. | [CHECKPOINT] |
-| 5th | 59 | `/specs/59-brand-integration.md` | Logo wired everywhere · tokens fixed to `#023029`/`#d8a03e` · Jameel Urdu font self-hosted · favicon/PWA/splash/OG | [CHECKPOINT] |
-| 6th | 61 | `/specs/61-form-validation-ux.md` | Raw Zod errors ("String must contain at least 1 character(s)") shown **on mount** → Form kit + plain-language bilingual messages | [CHECKPOINT] |
-| 7th | 66 | `/specs/66-housekeeping.md` | 6 unregistered feature codes · Help Centre reads a directory that does not exist · tombstone spec · `OPERATIONS.md` never committed | [CHECKPOINT] |
-| 8th | 63 | `/specs/63-public-website.md` | One perf-budgeted hero (≤150 KB, static fallback) · Features/Pricing/About · real Privacy/Terms/Data-Protection · **Contact + Turnstile replaces "Request a demo"** · Geek Axon company details | [CHECKPOINT] |
-| 9th | 65 | `/specs/65-plan-builder-safepay.md` | Per-unit volume bands · shareable quotes · custom plan builder (site **and** in-app) · **SafePay** · webhook signature + idempotency | [CHECKPOINT] |
-| 10th | 64 | `/specs/64-self-serve-trial.md` | Society self-signup → phone OTP → subdomain → 7-day trial → read-only at expiry. **Residents still cannot self-signup.** | [CHECKPOINT] |
+| — | 57 | `/specs/57-platform-identity-team.md` | 🔴 P0 SECURITY — TOTP enforced **at login** (it was enrolled and never checked) + platform team management | ✅ **DONE** |
+| — | 58 | `/specs/58-platform-console-repairs.md` | 🔴 P0 — "New Society" crash · plans had **no price field** · feature checkbox tree · dashboard truth · billing on the Data-Table kit · Templates/Activity/Team in nav | 🔵 **IN PROGRESS** |
+| next | 60 | `/specs/60-human-readable-ui.md` | 🔴 Label registry — no slug, no ID, ever (en+ur); audit log reads as sentences. **58 shipped before this, so its feature tree and tables still render raw codes — 60's CODEREF already lists those files. Run it next.** | [CHECKPOINT] |
+| then | 62 | `/specs/62-e2e-ci-gate.md` | 🔴 `pnpm test:e2e` is **absent from `ci.yml`** and has never run. 12 critical browser specs + a deploy-blocking gate. Everything after this is verified in a real browser. | [CHECKPOINT] |
+| then | 68 | `/specs/68-ci-capacity.md` | Self-hosted ARM runner on the Oracle box. **62 adds a browser suite to a CI budget that has already run out** — fix the budget in the same breath. *(Runner token = `[HUMAN_REQUIRED]`.)* | [CHECKPOINT] |
+| then | 67 | `/specs/67-brand-asset-deployment.md` | Unpack `rihaish-brand-v2.zip` to the exact paths; prove all 10 URLs return 200. **Blocks 59** — without it, 59 ships `<img>` tags pointing at 404s. | [CHECKPOINT] |
+| then | 59 | `/specs/59-brand-integration.md` | Logo wired everywhere · tokens fixed to `#023029`/`#d8a03e` · Jameel Urdu font self-hosted · favicon/PWA/splash/OG | [CHECKPOINT] |
+| then | 61 | `/specs/61-form-validation-ux.md` | Raw Zod errors ("String must contain at least 1 character(s)") shown **on mount** → Form kit + plain-language bilingual messages | [CHECKPOINT] |
+| then | 66 | `/specs/66-housekeeping.md` | 6 unregistered feature codes · Help Centre reads a directory that does not exist · tombstone spec · `OPERATIONS.md` never committed | [CHECKPOINT] |
+| then | 69 | `/specs/69-locale-single-source.md` | `lib/tenant-host.ts` declares the locale list **twice**; `i18n/routing.ts` declares it again. Nothing breaks today — it breaks the day a third locale is added, and it will look like a tenancy bug. | [CHECKPOINT] |
+| then | 63 | `/specs/63-public-website.md` | One perf-budgeted hero (≤150 KB, static fallback) · Features/Pricing/About · real Privacy/Terms/Data-Protection · **Contact + Turnstile replaces "Request a demo"** · Geek Axon company details | [CHECKPOINT] |
+| then | 65 | `/specs/65-plan-builder-safepay.md` | Per-unit volume bands · shareable quotes · custom plan builder (site **and** in-app) · **SafePay** · webhook signature + idempotency | [CHECKPOINT] |
+| last | 64 | `/specs/64-self-serve-trial.md` | Society self-signup → phone OTP → subdomain → 7-day trial → read-only at expiry. **Residents still cannot self-signup.** | [CHECKPOINT] |
+
+**Remaining order: `58 (running) → 60 → 62 → 68 → 67 → 59 → 61 → 66 → 69 → 63 → 65 → 64`.**
+67 must precede 59. 68 should follow 62 immediately. 65 must precede 64 — a trial has to convert *into* a priced plan.
 
 **Checkpoints are progress markers, not approval gates.** The build is fully autonomous: every step ends `[CHECKPOINT]`, auto-approves, and continues. There is no `[FIXED_CHECKPOINT]` and no operator approval anywhere. The **only** stop is `[HUMAN_REQUIRED]` — a missing spec, or infra the agent cannot do in code (DNS, wildcard/custom-domain SSL, Oracle firewall ports, aaPanel site config, credentials).
 
