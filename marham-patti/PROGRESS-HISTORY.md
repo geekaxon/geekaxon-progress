@@ -2398,3 +2398,112 @@ WORK TYPE: FEATURE (branch feature/56-advanced-rbac)
 **Tests written (controller runs them).** packages/shared 57 pure core (chooseRouting incl. fallback/degrade/BYOK, prompt assembly, projectCorrectionForVendor withhold/reveal, flatAiFeePosting balance/idempotency, masks); ai-command service+adapter specs over the in-memory repo + real CnicCipher (vault encrypt/mask/fail-closed/rotate/validate/disable; routing set + test-run; prompt versioning + rollback; correction opt-in stamp; vendor-queue withholding; promote→few-shot→next assembled prompt + PROMOTED; quality aggregate; adapter MANAGED/fallback/degrade/BYOK/legacy-null). Updated ai.e2e + subscriptions.spec for the new seams.
 
 **Gates.** `pnpm prisma generate` ok; `pnpm typecheck` green (29/29); `pnpm lint` 0 errors (1 pre-existing unrelated warning in doctor-portal). Did not run test:unit/e2e/build per standing rules — controller runs the full gates.
+
+---
+
+## 58 — Consented Patient Directory & Reception Invites — DONE (2026-07-14)
+
+**Branch:** `feature/58-patient-directory-invites` · WORK TYPE: FEATURE. The most privacy-sensitive step since 46; the directory exposes identity, never records, never affiliations.
+
+### What shipped
+- **Schema (additive migration `20260714300000_patient_directory_invites`).**
+  - `PlatformUser` gains the self-declared directory identity (`gender`, `dob`, `city`) + opt-in consent (`directoryConsent` default **false**, `directoryConsentAt`). These live on the platform account so the lookup is a PURE platform-scope projection — it never reads a tenant Patient row.
+  - New enums `DirectoryMatchBy {PHONE, NAME_DOB}`, `InviteChannel {QR, SMS, WHATSAPP}`.
+  - New link tables `DirectoryLookup` (tenant_id, actor_user_id, platform_user_id, matched_by) and `PatientInvite` (tenant_id, patient_id, token, channel, sent/installed/claimed timestamps). Both carry tenant_id ⇒ REUSE 46's `apply_platform_link_rls`: a tenant reads only its own rows, writes are platform-scope-only (a tenant can never forge a lookup log or an invite), the platform scope reads all (the patient's "who looked me up").
+- **Flag:** `platform.directory` added to the shared catalog (PLATFORM group). Premium-only by omission — absent from BASIC/STANDARD ceilings, granted only by the wildcard (Premium) ceiling; not in any preset, so it is opt-in even for Premium. Gates ONLY the clinic side; the patient's consent/transparency is always available.
+- **API — new `directory` module** (`apps/api/src/directory/`).
+  - `DirectoryService` invariants: the lookup is a platform-scope projection of `platform_users` filtered to `directoryConsent`, shaped by the shared allow-list `buildDirectoryResult` (six identity keys only). A non-consenting account is invisible — a miss writes nothing, so miss-vs-miss is indistinguishable (no enumeration; timing identical on the no-write path). Every MATCHED lookup writes a `DirectoryLookup` (dual-read: tenant + patient) AND a tenant audit row, and matched lookups are rate-limited per tenant (DB-window counter, 20/60s — identity harvesting is the abuse; misses reveal nothing).
+  - "Add to our clinic" = find-or-create the tenant Patient by phone via the EXISTING `PatientService.findOrCreateByPhone` (marketplace seam), pre-fill gender/dob/city on a newly created row only, then link via 46's `PlatformAccountService.ensureMarketplaceLink` (idempotent, never duplicates). Refuses if she has revoked consent.
+  - Reception invites: always create the invite (web renders a QR from the token locally, no external service); for SMS/WhatsApp attempt the `InviteMessenger` port and degrade cleanly (default `NoopInviteMessenger` — 60 wires the real 09 transport). Funnel `invites()` reconciles `claimedAt` from the PatientLink (an invited patient who signed up + claimed is counted, no coupling to 46); public `POST /directory/invites/opened` stamps `installedAt`.
+  - Controllers: `DirectoryController` (`/directory`) — lookup/add gated by `@RequireFeature('platform.directory')` (404 when off) + `@RequirePermission`; invites are NOT flag-gated (growth loop, every clinic); the install-ping is `@Public`. `DirectoryMeController` (`/platform/me/directory`) — platform-authenticated (46's exported `PlatformAuthGuard`): consent GET/PATCH + "who looked me up".
+- **Shared:** `packages/shared/src/directory.ts` — the hard privacy contract as a pure function: `DIRECTORY_ALLOWLIST_KEYS`, `DIRECTORY_DENYLIST_KEYS`, `buildDirectoryResult`, `directoryDenyListViolations`.
+- **Web:** reception `(app)/patients/directory` (flag-gated entry `DirectoryLink` on the patients page → no UI surface when off) — phone / name+DOB search, identity result cards, add-to-clinic, QR/SMS/WhatsApp invite, funnel counts. Patient `(platform)` gains a **Directory** tab (`DirectoryConsentTab`): plain-language default-OFF toggle spelling out exactly what is / is never shared, the self-declared profile, and the "who looked me up" list; PlatformClient also pings `installed` when arriving via `?invite=`. EN+UR + RTL, skeletons/empty states.
+
+### Tests
+- `apps/api/src/directory/directory.service.spec.ts` (in-memory world): consent OFF ⇒ empty identical to nonexistent (no lookups written); consent ON ⇒ found; revoke ⇒ immediately unfindable; allow-list proven (serialized payload asserted against the deny-list AND to exactly the six identity keys + matchedBy); hit ⇒ tenant audit + appears in "who looked me up"; rate limit fires; add-to-clinic pre-fills + links, second attempt no duplicate patient/link; invite degrades with no provider + funnel sent/installed/claimed; app-user badge.
+- `packages/db/src/directory-isolation.spec.ts` (real 01→58 migrations in pglite): tenant reads only its own directory_lookups/patient_invites; the Ganatra floor (T1 cannot learn a patient was also looked up by T2, even filtering by platform_user_id); platform scope reads all (who-looked-me-up); forge blocked (WITH CHECK) on both tables; fail-closed with no context.
+
+### Decisions / judgement calls
+- **Identity fields on PlatformUser, not read cross-tenant.** The DTO needs gender/dob/city; putting them on the platform account (self-declared) keeps the lookup a pure platform-scope read with ZERO tenant Patient access — the strongest possible form of the privacy wall. `city` maps to the tenant Patient `address` on prefill (no `city` column on Patient).
+- **Rate limit counts matched lookups only.** Misses harvest nothing and are indistinguishable from nonexistent; the limited resource is the consenting identity. Timing indistinguishability holds because the miss path performs no write.
+- **`claimedAt` reconciled from the link, not written by 46's claim flow.** Avoids coupling the sensitive 46 claim path to 58; the tenant can read its own patient_links under RLS, so the funnel derives "joined" without a cross-module hook. Same for the "app user" badge.
+- **Invites NOT flag-gated.** Only the directory LOOKUP is the premium capability; converting a walk-in into an app user is the marketplace growth loop and should work for every clinic.
+- **Messaging via a Noop port.** Keeps the step self-contained and truly "graceful no-op if no provider"; 60 swaps the transport with no service change (mirrors 46's StubPlatformOtpTransport).
+
+### Gates
+- `pnpm prisma generate` ✅ · `pnpm typecheck` ✅ (all packages) · `pnpm lint` ✅ (0 errors; fixed one unused-import warning) · EN/UR key parity verified. Did not run test:unit/build per the build loop (controller runs full gates).
+
+---
+
+## 59 — Tenant Self-Service Personalization & Change Approvals — DONE (2026-07-14)
+
+**Branch:** `feature/59-tenant-personalization-approvals` · WORK TYPE: FEATURE · Phase 6, item 6/10.
+Spec `specs/59-tenant-personalization-approvals.md` (+ CODEREF 54–63). Gates run: `pnpm prisma generate`, `pnpm typecheck`, `pnpm lint` — all green (lone pre-existing warning in doctor-portal, unrelated). Did NOT run test:unit/e2e/build per loop rules.
+
+### What shipped
+A **two-copy brand model** that lets each tenant make the product theirs while the platform keeps control of what the public sees.
+
+- **Schema (additive, migration `20260714400000_tenant_personalization_approvals`):**
+  - `BrandAsset(tenantId, variant, mode, audience='all', url, checksum, mimeType, createdBy)` — the tenant's full white-label library, unique per (tenant,variant,mode,audience). RLS: `apply_marketplace_rls` (tenant R/W own, platform reads all).
+  - `BrandChangeRequest(tenantId, type, payload Json, status PENDING|APPROVED|REJECTED, submittedBy, reviewedBy, reason, createdAt, reviewedAt)` — the proposed change held off to the side. RLS: `apply_marketplace_rls`. Approval WRITE runs under the tenant's own `runWithTenant` (console supplies tenantId) exactly like the 50 listing-approve; queue read is `runWithPlatformScope`.
+  - `ChangeApprovalPolicy(type unique, mode AUTO|REVIEW)` — the GLOBAL vendor override of the built-in classification. RLS: `apply_platform_rls` (platform-only).
+  - `Tenant.autoApproveBranding Boolean=false` — per-tenant TRUST escape hatch.
+  - New enums `ApprovalMode`, `BrandChangeStatus` re-exported from `@mp/db`.
+
+- **Shared (`@mp/shared/personalization.ts`, pure + browser-safe, unit-tested):** the change-type catalog (15 types) + `DEFAULT_CHANGE_MODE` (public-facing → REVIEW: displayName/legalName/tagline/footer/poweredBy/publicLogo/patientLogo/palettePublic/customDomain/listing; internal → AUTO: staffLogo/paletteStaff/themeDefault/localeDefault/contactBlock); `resolveApprovalMode(type,{tenantTrusted,policyOverride})` (trust → policy → default, unknown→REVIEW fail-safe); `PREMIUM_CHANGE_TYPES`/`isPremiumChange`; asset vocabulary + guards; `sanitizeSvg` (strips `<script>`, `on*=` handlers, `javascript:`, external `href`/`xlink:href`, `<foreignObject>`, reports what it removed); `validateAssetUpload` (mime/size/real-SVG). New flag `platform.fullPersonalization`.
+
+- **API module `apps/api/src/personalization/`:** repository (asset upsert/list, request create/list/pending/getById, **`approveInTx`** = ONE tenant transaction that upserts live `branding_profile` AND flips the request to APPROVED, plus reject, policy, trust), tenant `PersonalizationService` (upload→sanitise→store→checksum→BrandAsset; submit→premium-gate→contrast-block→classify→AUTO applies via `BrandService.updateProfile`/REVIEW queues), vendor `PersonalizationApprovalService` (queue, approve with re-run contrast guard + `BrandService.invalidate` cache-bust, reject-with-mandatory-reason, bulk approve, policy, trust). `AssetStore` port + `LocalAssetStore` (data:-URL fallback, no R2/FS needed on staging). Added `BrandService.invalidate(tenantId)`. Controllers: tenant `/personalization/*` (staff auth + `brand.manage`; assets also `@RequireFeature('platform.fullPersonalization')`), vendor `/vendor/change-requests/*` + `/vendor/change-policy` + `/vendor/tenants/:id/brand-trust` (VendorAuthGuard). Every submit/apply/upload/approve/reject audited. Registered `PersonalizationModule` in AppModule.
+
+- **Web:** extended `settings/PersonalizationClient.tsx` (identity + tagline submit-for-review, palette submit-for-review, theme-default AUTO apply, logo uploader with sanitisation feedback, a "Pending review" panel showing status + the vendor's rejection reason) and added vendor `vendor/approvals/page.tsx` (unified queue: before/after preview, approve, reject-with-reason, bulk approve) + nav entry. Used `@mp/ui` `Input`/`NativeSelect` to pass the design-drift gate. EN+UR parity added for all new keys.
+
+- **Tests:** `personalization-helpers.spec.ts` (classifier + SVG sanitiser + upload validation, pure) and `personalization.service.spec.ts` (AUTO applies live/no row, REVIEW stays pending/live untouched, trusted-tenant auto-apply, contrast blocks at submit AND on approve, premium gating, SVG sanitised on upload, atomic approve + double-approve conflict, reject-with-reason keeps live untouched, cross-tenant queue).
+
+### Judgement calls (recorded per loop rules)
+- **Flags:** reused the existing `platform.customDomain` for the domain gate (spec's "brand.customDomain") since the 53 domain flow is already vendor-activation-gated end-to-end; added ONE new flag `platform.fullPersonalization` (spec's "brand.fullPersonalization") for the premium tier (custom marks, custom public accent, poweredBy removal). Both default-OFF premium (absent from BASIC/STANDARD ceilings), matching `platform.directory`. Branding stays a NEVER_FLAG; only the sellable slots are gated.
+- **Domain self-service (Acceptance §5):** already fully implemented in 53+50 (PENDING→VERIFIED by tenant, VERIFIED→ACTIVE vendor-gated in the console, package-gated). Not rebuilt — the new approvals surface is the brand-change source; the domain-activation page and the 50 listing-approval page keep their own screens. The three together are the "one place" the platform controls public-facing identity; listing semantics untouched (Do-NOT-break honoured).
+- **Contrast guard:** reused `@mp/brand.checkBrandContrast` but treated a non-empty warning list as a hard BLOCK (400 on submit, 409/400 refusal on approve) per spec — the 07 advisory path is unchanged.
+- **Asset storage:** no upload infra existed; chose a base64-JSON envelope (no multer) + a `data:`-URL local store behind an `AssetStore` port so staging works with no object store; an R2 adapter drops in behind the same token.
+- **Per-audience marks:** `BrandAsset` is the full library; the live public/patient pointers stay `BrandingProfile.logoKey`/`iconKey` (resolver unchanged) — staff/field marks live in the library for preview without a resolver rewrite.
+
+[CHECKPOINT]
+
+---
+
+## Build-step 60 — Notifications: Email Provider, Templates & Automated Alerts (2026-07-14)
+
+**Branch:** `feature/60-notifications-email`. **WORK TYPE: FEATURE.** Extends the 09 engine with the EMAIL channel; the 09 contract is untouched (every send still flows queue → adapter → delivery log).
+
+### What shipped
+- **Pure core (`@mp/notifications`)** — new `src/email.ts` (re-exported from index):
+  - `EmailProvider` transport port (send/sendBatch/verifyWebhook) — mirrors 48's PaymentProvider pattern; `EmailMessage`/`EmailResult`/`EmailWebhookEvent`.
+  - `NotifChannel += EMAIL`; `NotifDeliveryStatus += BOUNCED|COMPLAINED|OPENED`; `OutboundMessage` gains optional `subject/html/idempotencyKey`; `WebhookEvent += bounced|complained|opened` + `isSuppressingEvent`; `webhookNextStatus` handles the new terminal/soft states.
+  - Categories + transactional rule: `NotifCategory`, `TRANSACTIONAL_CATEGORIES` (SECURITY/ACCOUNT/CLINICAL/ORDER/MONEY/VENDOR), `isTransactional`/`canUnsubscribe`/`respectsQuietHours`.
+  - Preference resolution: `evaluatePreferences` (transactional bypass; muted→blocked; quiet-hours→deferred) + `isWithinQuietHours` (wrap-around aware).
+  - Idempotency: `idempotencyKey(event,recipient)` + `scheduleIdempotencyKey(kind,recipient,window)` — deterministic, no time/random.
+  - Rendering: `renderEmail` → subject + branded responsive HTML (brand colour/logo/appName/poweredBy) + always a plain-text part; UR renders `dir=rtl lang=ur`; `escapeHtml` prevents injection.
+  - Seed catalog `EMAIL_TEMPLATES` — the full §2.3 catalog (auth/security, clinical/patient, money, ops, vendor), EN+UR, clinical keys carry a POINTER only; `categoryForKey`/`getEmailTemplate`/`isEmailTemplateKey`.
+  - Clinical deny-list: `CLINICAL_DENY_LIST` + `clinicalLeaks` (guards template copy + report-ready bodies).
+  - Unit tests: `src/email.spec.ts` (categories, prefs, quiet hours, idempotency, rendering incl. RTL + escaping, deny-list, catalog EN/UR parity, webhook suppression).
+- **Schema + migration `20260714500000_notifications_email`** (additive):
+  - `Channel += EMAIL`; `DeliveryStatus += BOUNCED|COMPLAINED|OPENED`.
+  - `notification_logs` += `category`, `subject`, `idempotency_key` + UNIQUE `(tenant_id, idempotency_key)` (NULLs distinct ⇒ pre-60 rows fine).
+  - New tables (all `apply_tenant_rls`, like the 09 tables): `email_templates` (+ `email_template_versions` history), `notification_preferences` (muted categories + quiet hours + platformUserId), `notification_suppressions` (BOUNCE|COMPLAINT|MANUAL), `scheduled_notifications` (unique `(tenant, window_key)` ⇒ idempotent per window). New enums `SuppressionReason`, `ScheduledNotifStatus` re-exported from `@mp/db`.
+- **API (`apps/api/src/notifications`)**:
+  - `notifications.email.ts` — `NoOpEmailProvider` (console default), `SmtpEmailProvider` (injected `SmtpSink`, degrades to console if unwired), `ApiEmailProvider` (Resend/SES slot via fetch), `buildEmailProvider(config)`, `EmailChannelAdapter` (wraps EmailProvider as a 09 NotificationProvider so EMAIL rides the same queue/retry/log loop).
+  - `notify()` reworked: opt-in idempotency dedupe (explicit key only — OTP/ad-hoc never dedupe), email suppression check, preference gate (transactional bypass; deferred→scheduled), EMAIL renders subject/html/text, FAILED prior log re-used on retry. New: `sendEmail`, `handleEmailWebhook` (bounce/complaint→`addSuppression`), email-template CRUD (+versioning + clinical-leak reject), `previewEmail`, preference get/update (strips transactional from mutes), suppression list/add, `runScheduled` (idempotent claim→send).
+  - Controller endpoints (all `notifications.manage`, audited where mutating): `GET/PUT email/templates`, `POST email/preview`, `POST email/webhook`, `GET/PUT preferences`, `GET/POST suppressions`. Recipients/addresses masked on read.
+  - Repo + `__fakes__` + `FakeEmailProvider` extended; DI token `NOTIFICATION_EMAIL_PROVIDER` wired in the module (registry built with the email provider).
+- **Config**: `EMAIL_PROVIDER` (noop|smtp|api, default noop), `EMAIL_FROM` (placeholder `.local`), `EMAIL_REPLY_TO`, `SMTP_*`, `EMAIL_API_*`, `EMAIL_WEBHOOK_SECRET` + `.env.example`.
+- **Isolation**: extended `packages/db/src/notifications-isolation.spec.ts` to prove the 4 new tenant-scoped tables (own-rows-only, WITH CHECK blocks cross-tenant write, no-context⇒zero rows).
+
+### Judgement calls
+- **Notifications stays always-on infra (NO gating flag).** The spec's flag note calls email "always-on infra by default"; per-channel toggles are per-tenant preferences (implemented as `notification_preferences`), not sellable flags. So no `NEVER_FLAGS` violation and no new catalog flag.
+- **Idempotency is OPT-IN.** Auto-deriving `event:recipient` for every send would wrongly dedupe repeated OTPs / ad-hoc sends. Callers pass a stable key only for logical events that must fire once (reminders, receipts, scheduled windows). 09 behaviour preserved for keyless sends.
+- **New tables are tenant-scoped (`apply_tenant_rls`), including suppression + preferences.** Keeps the Ganatra test pure (no cross-tenant table). "Preferences follow the platform account across clinics" is modelled by the `platform_user_id` link + a per-link `runWithTenant` write (46 pattern), NOT a shared cross-tenant row. Suppression is per-tenant (a tenant suppresses addresses it messaged).
+- **SMTP/API adapters are structural (no vendor SDK in repo).** Real transport drops behind `SmtpSink` / the fetch endpoint; unconfigured always degrades to no-op so a deploy without an email account boots cleanly (Acceptance §1). Provider-agnostic invariant 11 honoured.
+- **Quiet-hours deferral schedules, never drops.** A deferred message claims a `scheduled_notifications` window (idempotent) for the worker to re-fire after quiet hours.
+- **Web console UI deferred.** The API preview/template/preference/suppression surface is complete and previewable via endpoints; no new web component this step (CODEREF §B.60 mandates the package/API/registry, not a specific screen). No i18n keys added ⇒ EN/UR parity gate unaffected; the vendor console stays EN-only.
+- **Email webhook raw-body caveat.** The gated staging webhook re-serialises the JSON body for HMAC verification (accepts unsigned when no secret set); a real provider verifies its own signature over the raw bytes inside its adapter.
+
+### Gates
+- `pnpm prisma generate` ✅ · `pnpm typecheck` ✅ (29/29) · `pnpm lint` ✅ (0 errors; 1 pre-existing unrelated warning in doctor-portal). Did NOT run test:unit/e2e/build per builder rules (controller runs full gates).
