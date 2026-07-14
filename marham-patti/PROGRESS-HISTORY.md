@@ -2332,3 +2332,36 @@ Tenant white-label priority preserved (platform mark is fallback only). EN+UR + 
 **Gates:** `pnpm prisma generate` + `pnpm lint` + `pnpm typecheck` green (only the pre-existing unrelated doctor-portal eslint-disable warning). test:unit/e2e/build left for the controller.
 
 **Judgement calls:** (1) impersonation token is `typ:'access'` (the real staff type) not a new `typ:'staff'` — the spec's "staff token" is conceptual; using the real type is what makes it flow through the unchanged guard/RLS with the role's exact reach. (2) Audit viewer redaction = simply never selecting summary/reason (metadata allow-list) — strongest possible: the field can't leak because it's not projected. (3) `platform.impersonation` placed in every ceiling (consent is not sellable). (4) Grant mid-session revoke relies on the short JWT TTL as the hard stop (no per-request grant check) — matches acceptance (auto-expire → 401, no refresh).
+
+---
+
+## 56 — Advanced RBAC (feature/56-advanced-rbac) — DONE 2026-07-14
+
+**Goal (spec 56):** make custom roles ASSIGNABLE to users (04 built the catalog + custom-role tables but no user could carry one), add real user management, login history, and give the vendor console cross-tenant reach — all without rewriting a single endpoint guard.
+
+**Schema (additive migration `20260714100000_advanced_rbac`):**
+- `User.customRoleId?` (FK → app_roles, ON DELETE SET NULL; index) — set ⇒ permissions resolve from the custom role instead of the `role` enum (the enum STAYS as the coarse role every `@Roles` guard + routing still use). `User.name?` (display name — the model had none) and `User.mustResetPassword` (force-reset flag; the email link is queued by 60).
+- `AppRole.description?` (matrix summary).
+- New `LoginEvent` (`login_events`, `apply_tenant_rls`) + `LoginOutcome` enum (SUCCESS/BAD_PASSWORD/LOCKED/DISABLED/MFA_FAILED/NO_USER). Written by the auth service on every attempt; read per-user, per-tenant, and cross-tenant by the vendor (per-tenant runWithTenant, never a join).
+
+**Permission resolution — the choke point:** `PermissionService.permissionsFor(principal)` resolves system-enum keys OR custom-role keys (cached by role id). `RolesGuard` now calls it instead of `roleHasPermission`, so custom roles need NO per-endpoint change. Flag/ceiling precedence is UNTOUCHED — the FeatureGuard (05) still gates the capability before the permission check, so an out-of-plan key is already unreachable; the intersection is a presentation concern only. The access token carries `crid` (custom-role id) so the guard resolves without a DB hit; it refreshes from the user row on rotation.
+
+**@mp/shared:** `PERMISSION_FLAG_REQUIREMENTS` maps a permission → its governing flag (conservative; unmapped = always in-plan) + `flagForPermission`/`isPermissionInPlan`. Drives the matrix's "not in your plan" upsell and keeps the flag→ceiling→permission order visible.
+
+**Role manager (extended `PermissionService` + `RbacController`):** clone a role (system or custom) into a new custom role (the standard build path), escalation-bounded edit (`setRoleKeys` now takes the actor's own keys — you cannot grant a permission you lack), delete (system-immutable + role-in-use → reassign-then-delete). New `AdminRbacService.matrixFor` projects the TENANT-scope catalog with per-key `inPlan` from the tenant's effective flags.
+
+**User management (new `admin` module):** `AdminUserService` — create/edit/deactivate/reactivate, reset 2FA (clears TOTP + revokes sessions ⇒ re-enrol next login), force password reset, resend invite, sign out all devices (revoke the refresh family via 03's `revokeAllSessions`), login history (own/tenant). Guardrails: last active TENANT_OWNER can never be removed or demoted; privilege-escalation blocked on every role assignment; branch scope via `branchId` (all = null). Every mutation audited via the 06 trail (two-sided automatically under a 55 impersonation). `AdminController` = tenant-admin surface; `me/login-history` + `me/sign-out-all` open to any signed-in user.
+
+**Vendor reach (new `VendorRbacController` + `VendorRbacService`):** the console manages roles + users for ANY tenant under `/vendor/tenants/:tenantId/...`, reusing the SAME tenant services (46 pattern — never a widened token, never a join). The vendor acts with platform authority (full tenant key set, so escalation never limits it) and every action is two-sided-audited (tenant trail + platform `vendorAuditLog`).
+
+**Web (EN+UR, RTL):** extended `(app)/admin/roles` matrix with clone/delete/description + out-of-plan disabled hint; new `(app)/admin/users` (create + lifecycle + per-user login history table); nav entry `navUsers`; `patchJson` helper; ~35 new i18n keys in both en.json + ur.json (parity kept).
+
+**Design decisions / judgement calls:**
+- Permission→flag map is intentionally conservative and additive; unmapped permissions stay permission-gated only (the endpoint FeatureGuard remains authoritative). Kept the guard OFF the flag-intersection hot path — precedence is already enforced by the FeatureGuard, so intersecting again in the guard would be redundant work; the intersection lives where flags are cheap (matrix + web hide).
+- Force-password-reset / invite: no mailer yet (60), so we flag `mustResetPassword` + revoke sessions and record the audit row (the durable record the owner sees today). Noted for 60.
+- Branch scope is single-branch (`User.branchId`) — the existing model; multi-branch would need a join table (out of scope), so "specific branches" = one branch or all.
+- User "removal" = deactivate (never hard delete) to preserve the audit trail — matches healthcare norms and the last-owner guard.
+
+**Gates:** `prisma generate` ✓, `pnpm typecheck` ✓ (29/29), `pnpm lint` ✓ (0 errors; 1 pre-existing unrelated warning in doctor-portal). Tests written (not run per loop rules): `permission.service.spec` (permissionsFor, clone, delete, escalation, cross-tenant isolation), `admin-user.service.spec` (escalation, last-owner, lifecycle, session revocation), `admin-rbac.service.spec` (plan-gated matrix, NON_TENANT excluded), `auth.service.spec` (login-history SUCCESS/BAD_PASSWORD/LOCKED/NO_USER); updated existing permission/guard/auth fakes + specs for the new signatures.
+
+WORK TYPE: FEATURE (branch feature/56-advanced-rbac)
