@@ -2652,3 +2652,29 @@ marketing home returns 200 + text/html. `pnpm lint` + `pnpm typecheck` green.
 - Onboarding wizard (spec 21) archetype-picker placement is NOT wired here (that is spec 21's surface); the apply-diff component is the embeddable piece it will use. Recorded as a follow-up integration point.
 
 **Gates:** pnpm prisma generate ✓, pnpm lint ✓ (0 warnings), pnpm typecheck ✓. Did not run test:unit/e2e/build (controller runs them).
+
+## 55 — settings-documentation — DONE (2026-07-14)
+
+**Spec:** /specs/55-settings-documentation.md (+ 55-55-CODEREF.md). Feature `docs.core` (+ `docs.help_center`, `docs.admin_guide`). Depends on settings.core (spec 53).
+
+**The rule made real:** `SettingDoc` (lib/settings/types.ts) was replaced from the minimal `{ summary, help? }` to the spec-55 rich, bilingual shape: required `title/what/effect/example/impact` each `{ en, ur }`, optional `warning` (localized), `related: string[]`, `learnMore: string`. Added `LocalizedText` + `pickText(text, locale)` helper (DB-free, client-safe). `docs` stays REQUIRED on `SettingDef`.
+
+**The gate (whole point):** lib/docs/docs.test.ts — every one of the 95 `SettingDef`s must have all five required fields in BOTH locales (non-empty; `ur` must actually be Urdu script, not an English placeholder); every `related` key must resolve; no self-reference; `learnMore` must be a rooted `/help/` path. A setting without complete bilingual docs fails the build.
+
+**All 95 settings migrated** across the 12 module files (billing 24, islamic 13, gate-pass 12, complaints 11, noc 8, cctv 7, society 5, emergency/expenses 4, chat 3, meters/reports 2) — genuine Urdu translations, concrete-number examples, blunt `warning`s on the spec-named dangerous ones (child-exit photo storage, resident CCTV access, public-complaint visibility, NOC dues override, opening-balance lock, auto read-only). Authored in parallel by 12 subagents against a fixed interface + writing standard; billing's last 2 platform settings finished by hand. Static-verified: 147 related refs all resolve, 0 self-refs, 0 non-Urdu `ur:` values, all learnMore rooted at /help/.
+
+**Surfaces, all generated from the registry (no second copy):**
+- Contextual `?` — components/settings/help-popover.tsx: popover with what→effect→example, blunt warning, related chips, Learn-more link, active locale, RTL via the panel's DirectionProvider. Wired into setting-field.tsx (now renders `docs.title` + `docs.what` in locale, drops old summary/help); panel + settings page thread `locale` + a `titleFor(key)` related-title resolver.
+- Help Centre — app/[locale]/help/page.tsx (index, public catalogue for signed-out; role-aware = feature-gated for signed-in) + app/[locale]/help/[...slug]/page.tsx (per-module, /help/setting/<key> with siblings, /help/dangerous; removed setting → graceful notFound()). components/docs/help-center.tsx: searchable, grouped by module, overview prose. lib/docs/service.ts buildHelpCenter (feature/scope/simple filtering), getSettingHelp, dangerousSettings (derived from `danger !== none`, drift-proof), settingsChangeLog.
+- Admin Guide PDF — lib/docs/admin-guide.ts (pdf-lib, multi-page flow, word-wrap, RTL, reuses Noto Naskh via loadUrduFont) + app/api/docs/admin-guide/route.ts (SETTINGS_READ gate, `?locale=ur`, streams the society's CURRENT values grouped by module).
+- Change log — app/api/docs/change-log/route.ts (JSON, SETTINGS_READ) reading `setting.*` AuditLog rows into plain-language before→after.
+- lib/docs/registry-docs.ts — DB-free doc types + HELP_MODULES metadata (bilingual titles/slugs/order) + moduleMeta/moduleBySlug.
+- content/help/*.md — hand-written module overviews (billing, gate-pass, society) en+ur; missing → null gracefully.
+- messages/en.json + ur.json — added identical `help` chrome namespace (parity kept).
+- e2e/help-center.spec.ts — admin-guide (en+ur) and change-log require auth (401); Help Centre page renders publicly in both locales.
+
+**Consumers fixed for the new shape:** setting-field.tsx, settings-registry-panel.tsx (search now over localized title+what; +locale/titleFor props; memo dep), settings page passes locale. No other references to docs.summary/docs.help remained.
+
+**Gates:** `pnpm typecheck` clean; `pnpm lint` clean (fixed jsx-no-literals on `:` label text → template strings; added `locale` to the panel memo deps). Did NOT run test:unit/e2e/build per CLAUDE.md — controller runs full gates. No schema change (no prisma generate).
+
+WORK TYPE: FEATURE (branch feature/55-settings-documentation)
