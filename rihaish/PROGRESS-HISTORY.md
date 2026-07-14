@@ -2879,3 +2879,25 @@ Spec /specs/61-form-validation-ux.md (+ CODEREF 61-61). Feature `core.forms` (ex
 **Gates:** `pnpm typecheck` clean (fixed one noUncheckedIndexedAccess spot), `pnpm lint` clean. Did not run test:unit/e2e/build (controller runs full gates).
 
 WORK TYPE: FEATURE (branch feature/61-form-validation-ux)
+
+## 62 — e2e-ci-gate — DONE (2026-07-14)  (branch feature/62-e2e-ci-gate)
+
+**Feature code:** core.testing (isCore). **Spec:** /specs/62-e2e-ci-gate.md.
+
+**The problem this fixes.** 1,315 unit tests were green while every page 404'd; `pnpm test:e2e` had never run in CI and only 3 of 38 e2e specs ever loaded a page over HTTP. This step turns e2e into a real CI gate against the *built* app and makes the "unit test in a Playwright costume" failure mode impossible to reintroduce silently.
+
+**What shipped.**
+- **.github/workflows/ci.yml** — after Build: `playwright install --with-deps chromium`, a CI-only `bootstrap:admin` (throwaway creds against the ephemeral service Postgres, never deploy.sh), then `pnpm test:e2e` with APP_ENV=production, and an `upload-artifact@v4` (playwright-report/ + test-results/) `if: failure()`. A red e2e run fails the job → blocks deploy. Chromium only, no matrix, to stay inside the free-minutes budget. Job-level env gained non-secret E2E_PLATFORM_EMAIL/PASSWORD placeholders.
+- **playwright.config.ts** — CI now serves the *built* app (`pnpm start`, not `pnpm dev`: the 404 was a prod-routing bug dev hid). Added `screenshot: only-on-failure`, `video: retain-on-failure`, html reporter in CI, per-test 60s timeout and a 6-min `globalTimeout` (the spec's budget cap).
+- **tests/unit/e2e-goto-guard.test.ts** — the page.goto guard. Every e2e `*.spec.ts` must call `page.goto` unless it's on an explicit, justified API-level allowlist. Three assertions: no un-allowlisted offender, no stale allowlist entry (file gone or now calls goto), every entry has a justification. Resolves the e2e dir off `process.cwd()` (no __dirname under esnext).
+- **e2e/critical-routes.spec.ts** — critical spec #1 (every route 200 HTML: `/`, `/en`, `/ur`, `/platform`, plus an env-gated society subdomain) and #10 (Urdu flips to dir=rtl with no horizontal overflow).
+- **deploy.sh** — step 11 post-deploy homepage smoke: after the JSON health gate, fetch the real marketing homepage over HTTP (Host: APEX_HOST, follow the locale redirect) and require BOTH a 200 AND `/brand/logo/` in the returned HTML. Refactored the health loop to break-on-success so the smoke runs after it.
+
+**Decisions (recorded, not gated).**
+- The allowlist currently carries all 36 pre-existing non-goto specs. Most are genuine API/worker-level (bootstrap, charge-engine, ledger, payments, worker-scheduler, tenancy, auth), but a chunk are legacy import-level "unit tests in a Playwright costume" and are marked "convert later". Converting 36 specs to real page loads is out of scope for one module; the guard ships green with real teeth for every NEW spec, and the debt is tracked in the allowlist comments. This is a deliberate scope call, not a gap in the gate.
+- Critical specs #2–#9 and #12 are covered by existing specs (platform-create-society/plan, brand, no-slugs, form-validation, home, app-shell, pwa); #1 and #10 are the new critical-routes.spec.ts. #11 (self-serve trial signup) depends on spec 64 which is not yet built — no passing e2e can exist for it until then; deferred to that step rather than [HUMAN_REQUIRED] (the 62 spec itself is complete).
+- CI exercises the platform TOTP flow for real: `bootstrap:admin` mints an un-enrolled admin, and e2e/platform-auth.ts enrols TOTP inline via the enrol endpoint (which returns the secret), so no TOTP secret is stored in CI.
+
+**Gates:** `pnpm lint` clean, `pnpm typecheck` clean, `bash -n deploy.sh` OK, ci.yml YAML valid, guard-logic simulation: 0 offenders / 0 stale. Did not run test:unit/test:e2e/build (controller runs full gates).
+
+WORK TYPE: FEATURE (branch feature/62-e2e-ci-gate)
