@@ -2616,3 +2616,23 @@ A **two-copy brand model** that lets each tenant make the product theirs while t
 **Gates:** `pnpm lint` ✅ (16 tasks green, incl. @mp/db) · `pnpm typecheck` ✅ (29 tasks green). Full unit/e2e left to the controller.
 
 WORK TYPE: FIX
+
+---
+
+## FIX — Demo seed Token upsert not idempotent on re-run (P2002 on daily queue number) — 2026-07-15
+
+**Branch:** `fix/billing-migration-rls-seed` (continued on the current fix branch; WORK TYPE: FIX).
+
+**Symptom (staging):** first `SEED_DEMO=1 seed:demo` on a fresh DB succeeds; the SECOND consecutive run throws `prisma.token.upsert() → P2002` (meta `modelName: 'Token', target: null`) inside the persist transaction (`packages/db/prisma/seed-demo.ts`).
+
+**Root cause (confirmed, not just hypothesised):** the generic `persist()` helper upserts every plan table by `where: { id }`. `Token`'s real unique key is NOT its id — it is the composite `@@unique([tenantId, doctorId, branchId, dayKey, number])` (a doctor's daily queue number). Crucially there is a COMPETING WRITER: the app's `createWalkIn` (`apps/api/src/appointments/appointments.repositories.ts:475`) issues tokens with its own cuid ids on that SAME composite. So on a live tenant a cuid-id token already owns the (doctor, day, number) slot the demo wants; the demo's id-keyed upsert looks up `d_tok_*`, misses the cuid row, tries to CREATE, and collides on the composite → P2002. This is the exact pattern of the earlier Account regression (app `ensureAccounts` mints cuid-id accounts on `(tenantId, code)`).
+
+**Why the demo's OWN rows never tripped it (proved empirically):** built the plan twice with different `now` — token ids are fully deterministic (`id('tok', vk)`, 0 drift across runs), there are 0 internal composite duplicates, and same-day re-runs produce 0 composite drift. So an id-keyed re-run against ONLY demo rows IS idempotent. The bug needs the app's cuid-id token to pre-own the slot — which is why a static/self-only audit missed it and why the plain twice-run test could not have caught it.
+
+**Fix (minimal, mirrors `persistAccounts`):** new `persistTokens()` in `seed-demo.ts` upserts on the real composite `tenantId_doctorId_branchId_dayKey_number` (create the demo row on a fresh DB; update appointmentId/patientId/issuedAt/clientActionId in place on a DB that already owns the slot). Dispatched from the persist loop (`model === 'token'`). No remap needed: token.id is referenced by NOTHING (no FK, no soft ref in the plan — verified by grep across apps/ + packages/). Updated the persist-loop header comment to name BOTH special tables (account, token) and their competing writers.
+
+**Re-audit of every other upsert/create for RE-RUN idempotency (spec item 2):** other secondary uniques — `journalEntry (tenantId,source,sourceRefId)`, `sample (barcode)`, `stock (tenantId,branchId,medicineId)`, `commissionEntry (tenantId,doctorId,sourceType,sourceRefId)`, `sale/payment (clientActionId)`, `invoice (id only; number is not a DB unique)`. All are DEMO-SOLE-WRITERS with stable `d_*` ids for this tenant on staging, so the id-keyed upsert re-finds and updates them in place → rerun-safe. Only `account` and `token` have an app writer that mints its own cuid ids on the secondary unique, so only those two need composite-key upserts. Kept the fix targeted (no data restructuring) per spec item 4.
+
+**Test (spec item 3) — `packages/db/src/demo-seed-idempotency.spec.ts`:** (a) added `token` to `TENANT_TABLES` so its count is asserted stable across the twice-run deep-equal; (b) added a focused regression test `adopts an app-issued (cuid-id) token on a demo queue slot without P2002` that, after run #1, DELETES one `d_tok_*` row and recreates it verbatim so Prisma assigns a fresh cuid id (reproducing the app owning the slot), then re-seeds and asserts zero throw + zero row-count drift. The old id-keyed upsert throws P2002 here; the composite upsert adopts the row. Both real-DB tests early-return with a warning when no `DATABASE_URL` is reachable (unit gate stays green).
+
+**Gates:** `pnpm typecheck` → 29/29 pass; `pnpm lint` → 16/16 pass. (Did NOT run test:unit/e2e/build per standing rules — controller runs full gates.)

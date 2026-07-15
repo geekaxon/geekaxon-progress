@@ -21,9 +21,9 @@
 - **Branch state:** `feat/01`…`feat/39` + `feature/40`…`feature/53` complete and merged to `staging` (staging deploy green; demo seed loaded). Phase 6 stacks `feature/54-brand-config-vendor-fixes` onward.
 
 ### Recent steps (one-liners — FULL detail in PROGRESS-HISTORY.md)
+- **fix — demo seed token re-run** ✅ (2026-07-15) — second demo seed hit P2002 on the daily queue-number because the app also mints those tokens with its own ids; now upsert tokens on the real per-doctor-per-day composite (like accounts), and the twice-run test seeds a clashing app-style token so it would catch it.
 - **fix — billing migration RLS seed** ✅ (2026-07-14) — the 61 migration seeded after fail-closed RLS was forced on, so it rolled back on staging; moved seeds ahead of RLS and ran them under an explicit platform scope (fee backfill hits an already-RLS table); 62 audited clean; gates green.
 - **63 — Design System v3** ✅ (Phase 6, 2026-07-14) — one shared control anatomy + password show/hide on every login + logins on a neutral page (teal wall gone) + chrome-only glass with fallbacks + a lint-gate drift guard that bites on hand-rolled controls; presentation-only, gates green.
-- **62 — Privacy & Compliance** ✅ (Phase 6, 2026-07-14) — patient data export (per-link bundle, single-use expiring link, both-sided audit) + honest two-tier erasure (platform immediate; per-clinic anonymise/retain task; unpaid/in-flight blocks) + session/device list with revoke-one/others + new-device email + consent ledger + public status page that renders with the API down + declared, enforced retention that never touches clinical records.
 
 ---
 
