@@ -2661,3 +2661,19 @@ Conclusion: `token` is the only table that can hit the cross-DAY P2002 collision
 **Test.** Extended `packages/db/src/demo-seed-idempotency.spec.ts` with a CROSS-DAY case: seed with a fixed `day1` (2026-06-01), re-seed with the clock advanced one day (`day2` = 2026-06-02, which shifts every `dayKey`), assert the second run resolves (zero throw) and the whole row-count snapshot is unchanged (no accumulation). The existing same-day twice-run test and the app-issued-cuid-token adoption test both stay.
 
 **Gates.** `pnpm typecheck` green (fixed one TS2339: `createMany`'s arg is optional so the data-type extraction needed `NonNullable<Parameters<...>[0]>['data']`). `pnpm lint` green for `@mp/db` (the only warning is a pre-existing unused eslint-disable in apps/api/doctor-portal.repositories.ts, untouched here). Did not run test:unit/e2e/build (controller runs full gates). Branch: fix/billing-migration-rls-seed (continuing the in-flight demo-seed fix chain).
+
+## 63 — Design System v3 — re-issued build request (2026-07-15): no work performed (already complete)
+The controller re-fired "Build step 63 — design-system-v3". On inspection, step 63 is already fully
+implemented and merged to `staging`:
+- Commit 4965166 (2026-07-14) = the real pass: unified control anatomy (packages/ui/src/components/control.ts
+  + control.spec.tsx), password-input.tsx + (auth)/login/PasswordField.tsx, redesigned staff/vendor/reset
+  login forms (centred, bordered inputs, show/hide toggle), drift guard (packages/ui/src/lib/drift-guard.ts
+  + apps/web/scripts/design-drift-check.mjs), globals.css token fixes, /ui showcase additions, i18n keys, and
+  migrations of admin/prescriptions/patient screens to the shared controls. All deliverables verified present
+  in the working tree; tree clean.
+- Commit c921217 (2026-07-15) added the six approved vendor-console mockups under specs/mockups/ (reference
+  art for the next phase, not the 63 pass itself).
+Decision: did NOT rebuild 63 (would duplicate already-merged work) and did NOT start 64 (task scoped to 63).
+The only change made this session: corrected PROGRESS.md's Next pointer, which stale-read "none specced
+beyond 63" — the Phase 7 vendor-console-finish specs (64–69) + specs/64-69-CODEREF.md now exist on disk
+(currently untracked) and are the genuine next work. No app code touched; no gates needed (docs-only).

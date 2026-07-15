@@ -17,7 +17,7 @@
 - **THE GANATRA TEST — the hard gate on every step:** no tenant may ever see another tenant's records **or relationships**. Cross-tenant assembly happens ONLY as a per-link `runWithTenant` orchestration under platform scope — never a cross-tenant join. **The vendor console holds NO clinical data** (metadata/money/audit only); 55's impersonation is the single exception and works by *becoming* a tenant user (reasoned, time-boxed, banner, tenant-revocable, two-sided audit). The 46–53 isolation suites stay green and are EXTENDED by every new step.
 - **Last completed build-step:** **63 — Design System v3.** ✅ DONE (2026-07-14) — one shared control anatomy (input/select/date/textarea/combobox identical bar their glyph), password show/hide on every login, logins float on a neutral page (teal wall gone), chrome-only glass with fallbacks, drift guard in the lint gate that bites on hand-rolled controls.
 - **Current build-step:** **63 — Design System v3** (the final specced step). Phase 6 complete.
-- **Next-step pointer:** → **none specced beyond 63.** A missing spec is a hard stop — do not guess the next module.
+- **Next-step pointer:** → **64 — vendor-redesign-foundation** (Phase 7: vendor console professional finish; specs 64–69 + `specs/64-69-CODEREF.md`).
 - **Branch state:** `feat/01`…`feat/39` + `feature/40`…`feature/53` complete and merged to `staging` (staging deploy green; demo seed loaded). Phase 6 stacks `feature/54-brand-config-vendor-fixes` onward.
 
 ### Recent steps (one-liners — FULL detail in PROGRESS-HISTORY.md)
