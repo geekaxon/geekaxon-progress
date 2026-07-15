@@ -2594,3 +2594,25 @@ A **two-copy brand model** that lets each tenant make the product theirs while t
 **Files:** `packages/ui/src/components/{control.ts,input.tsx,date-field.tsx,search-select.tsx,password-input.tsx}`, `packages/ui/src/components/control.spec.tsx`, `packages/ui/src/lib/{drift-guard.ts,drift-guard.spec.ts}`, `packages/ui/src/index.ts`; `apps/web/app/globals.css` (neutral auth backdrop, `.mp-glass`, `.mp-pw*` toggle); `apps/web/app/(auth)/login/{PasswordField.tsx,StaffLoginForm.tsx,reset/ResetForm.tsx,vendor/VendorLoginForm.tsx}`; `apps/web/scripts/design-drift-check.mjs` (raw-control rule); migrations in RoleManager/PatientClient/PrescriptionsClient/UserManager/ImportWizard/BrandManager; `apps/web/app/ui/UiShowcase.tsx`; i18n en/ur `showPassword`/`hidePassword`.
 
 **Gates:** `pnpm typecheck` green (29/29). `pnpm lint` green (design-drift check ✓; one pre-existing unrelated api warning in doctor-portal.repositories.ts, untouched). Did not run test:unit/e2e/build per CLAUDE.md — wrote the tests (control.spec, drift-guard.spec) for the controller to run. Do-not-break honoured: behaviour/props/handlers/routes/test contracts unchanged; 45 theme engine + AA guard intact (extended, not relaxed); vendor stays EN-only; EN+UR parity kept.
+
+---
+
+## FIX (2026-07-14) — Migration 20260714600000_billing_automation: RLS seed-order violation on staging
+
+**Symptom:** `prisma migrate deploy` on staging failed with `42501: new row violates row-level security policy for table "dunning_policies"`. The migration had never applied to any DB (applied_steps_count = 0, transaction rolled back), so editing it in place causes no drift.
+
+**Root cause:** The migration created the new billing tables, then called `apply_platform_rls(...)` / `apply_platform_link_rls(...)` (which run `ALTER TABLE ... FORCE ROW LEVEL SECURITY` + a fail-closed `platform_only` policy: writable ONLY under `app.platform_scope='on'`), and only THEN ran the seed DML — the `dunning_default` INSERT with no platform context set. Fail-closed → INSERT blocked.
+
+**Second, latent bug found while fixing:** the seed block also `UPDATE`s `subscription_packages.monthly_fee`. That table ALREADY carries platform RLS from migration 20260712200000_subscriptions_ai_modes, so under fail-closed RLS the UPDATE saw zero rows and silently no-op'd (0 rows, no error) regardless of its position in this migration — `monthly_fee` would never have been seeded, so the billing run would charge nothing. Pure reordering could not fix this one because that table's RLS predates this migration.
+
+**Fix (both bugs, one mechanism):**
+- Matched the repo convention (20260712200000 seeds `subscription_packages`/`tenant_subscriptions` BEFORE calling `apply_platform_rls`): moved the entire seed block to after AddForeignKey and before the RLS section.
+- Prefixed the seed block with `SELECT set_config('app.platform_scope', 'on', true);` — the same context `runWithPlatformScope` installs at runtime. `is_local=true` scopes it to this migration's transaction; it clears at commit and does not leak into the next migration's transaction. This admits the `dunning_policies` INSERT AND the already-RLS `subscription_packages` UPDATE. (Reordering alone fixes dunning; the platform scope is what fixes the fee backfill.)
+
+**Audit of 20260714700000_privacy_compliance (task item 4):** read in full — it contains ONLY DDL (ALTER/CREATE) followed by the RLS helper calls; there are NO seed INSERT/UPDATE statements. The seed-after-RLS bug is NOT present. It "never applied" only because migrations apply in filename order and 61 rolls the chain back before 62 runs. No change made.
+
+**Not touched:** no already-applied migrations edited; no schema.prisma change (no `prisma generate` needed).
+
+**Gates:** `pnpm lint` ✅ (16 tasks green, incl. @mp/db) · `pnpm typecheck` ✅ (29 tasks green). Full unit/e2e left to the controller.
+
+WORK TYPE: FIX
