@@ -2636,3 +2636,28 @@ WORK TYPE: FIX
 **Test (spec item 3) — `packages/db/src/demo-seed-idempotency.spec.ts`:** (a) added `token` to `TENANT_TABLES` so its count is asserted stable across the twice-run deep-equal; (b) added a focused regression test `adopts an app-issued (cuid-id) token on a demo queue slot without P2002` that, after run #1, DELETES one `d_tok_*` row and recreates it verbatim so Prisma assigns a fresh cuid id (reproducing the app owning the slot), then re-seeds and asserts zero throw + zero row-count drift. The old id-keyed upsert throws P2002 here; the composite upsert adopts the row. Both real-DB tests early-return with a warning when no `DATABASE_URL` is reachable (unit gate stays green).
 
 **Gates:** `pnpm typecheck` → 29/29 pass; `pnpm lint` → 16/16 pass. (Did NOT run test:unit/e2e/build per standing rules — controller runs full gates.)
+
+## fix — demo seed cross-day token re-run (2026-07-15)
+
+**Symptom.** After yesterday's first successful demo seed, today's re-run failed on staging with P2002 on `Token` — now thrown INSIDE the composite-keyed `persistTokens` (seed-demo.ts ~496/509), not the generic persist. The previous fix (upsert tokens on the real composite instead of by id) held for a SAME-DAY re-run but not across a calendar boundary.
+
+**Root cause (confirmed by reading the code, per the spec's hypothesis).**
+- `buildDemoPlan` computes each token's `dayKey = dayKeyOf(daysAgo(NOW, dAgo))` (plan.ts ~495-524); `NOW = opts.now`, and `runDemoSeed` passed `now: new Date()`. So `dayKey` (part of the queue-number unique key `(tenantId, doctorId, branchId, dayKey, number)`) is DERIVED FROM THE CURRENT DATE — the demo dates float on purpose so the data always looks fresh.
+- `token.id` is `id('tok', vk)` = `d_tok_v<n>` (plan.ts ~514) — STABLE across runs, date-independent.
+- That mismatch is the bug. Same-day re-run: both id and composite unchanged → composite-upsert re-finds the row → fine (this is why the earlier "0 composite drift" same-day verification passed). A re-run on ANY LATER day recomputes a different `dayKey` → the composite lookup MISSES yesterday's row → upsert takes the CREATE path → collides on the still-stable `d_tok_*` PRIMARY KEY → P2002 thrown inside `persistTokens`.
+
+**Fix (minimal, robust on any later date).** Rewrote `persistTokens` (packages/db/prisma/seed-demo.ts) from a per-row composite-upsert to delete-then-recreate: inside `runWithTenant`, `deleteMany({ where: { id: { startsWith: 'd_tok_' } } })` then `createMany({ data: rows, skipDuplicates: true })`.
+- Delete is scoped to `d_tok_*` ids, so the app's own walk-in tokens (cuid ids, minted by `createWalkIn`) are NEVER touched — the whole point of the earlier composite work.
+- `skipDuplicates: true` preserves the app-token-adoption guarantee: if the app already owns a queue slot on the same composite, we leave its real token in place instead of colliding on the composite (this keeps the existing "adopts an app-issued cuid token" test green — the app row survives the delete and the demo insert for that one slot is skipped, so the row count is unchanged).
+- Safe because nothing references `token.id` (no FK, no soft ref in the plan) — verified in the earlier step and re-confirmed.
+- Also added an optional `now: Date = new Date()` parameter to `runDemoSeed` (defaults to real clock, so CLI behaviour is identical) purely so the spec can inject a shifted clock deterministically without mocking `Date`/timers (which would risk Prisma's async internals).
+
+**Audit — do other date-derived tables share this collision pattern?** The P2002 collision requires a persist path that upserts BY THE COMPOSITE (so a drifted date field makes it miss and take CREATE, colliding on the stable id). Only two tables use composite-keyed upsert: `account` (composite `(tenantId, code)` — NOT date-derived, safe) and `token` (the bug). EVERY other date-derived table goes through the generic `persist()`, which upserts by stable `id` — a drifted date field is simply updated in place, never collides:
+- `commissionEntry` — id `d_ce_sal_<doc>` (no period) + unique `sourceRefId = salary:YYYY-MM`; id-upsert re-finds and updates the row's `sourceRefId`. No collision.
+- `commissionPayout` — id `d_cp_<doc>_<YYYY-MM>` EMBEDS the period, so id and `periodKey` drift together; a cross-MONTH re-run would create a new row (accumulation drift, NOT a P2002 throw); a cross-DAY re-run stays in-month → no effect.
+- `scheduledNotification` (windowKey), `aiBudget`/`platformInvoice` (periodKey) — not written by the demo plan.
+Conclusion: `token` is the only table that can hit the cross-DAY P2002 collision; the delete-recreate fix closes it and no other table needs changing.
+
+**Test.** Extended `packages/db/src/demo-seed-idempotency.spec.ts` with a CROSS-DAY case: seed with a fixed `day1` (2026-06-01), re-seed with the clock advanced one day (`day2` = 2026-06-02, which shifts every `dayKey`), assert the second run resolves (zero throw) and the whole row-count snapshot is unchanged (no accumulation). The existing same-day twice-run test and the app-issued-cuid-token adoption test both stay.
+
+**Gates.** `pnpm typecheck` green (fixed one TS2339: `createMany`'s arg is optional so the data-type extraction needed `NonNullable<Parameters<...>[0]>['data']`). `pnpm lint` green for `@mp/db` (the only warning is a pre-existing unused eslint-disable in apps/api/doctor-portal.repositories.ts, untouched here). Did not run test:unit/e2e/build (controller runs full gates). Branch: fix/billing-migration-rls-seed (continuing the in-flight demo-seed fix chain).
