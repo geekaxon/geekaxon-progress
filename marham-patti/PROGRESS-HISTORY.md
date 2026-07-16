@@ -2730,3 +2730,48 @@ Gates: `pnpm --filter @mp/ui typecheck` clean; `pnpm --filter @mp/ui build` (dec
 **Tests** — packages/ui/src/components/stat-card.spec.tsx extended: spark supersedes trend/caption; Sparkline draws a path for ≥2 points and nothing for <2. No apps/web unit runner and NO Playwright/e2e infra exists in this repo (no playwright config, no test:e2e turbo task) — the acceptance-6 page.goto e2e could not be added; the no-fake-% guarantee is covered at the StatCard component-contract level instead. Flagged for whoever stands up e2e infra.
 
 **Gates** — pnpm lint (incl. design-drift: no retired .mp-* atoms, no hex) green for @mp/ui, @mp/i18n, @mp/web; pnpm typecheck green for all three (rebuilt @mp/ui dist so web sees the new Sparkline/spark exports). Did not run test:unit / build / e2e (controller gates).
+
+## 66 — vendor-redesign-tables — DONE (2026-07-16)
+
+**Branch:** feature/66-vendor-redesign-tables. **WORK TYPE: FEATURE.** Presentation-only (spec 66, CODEREF 64–69 §D). No service/repository/guard/policy/RLS/migration/permission/DTO change.
+
+**What shipped.** Moved every vendor list screen onto the shared polished `DataTable` (data-list), matching `specs/mockups/tenants.png`:
+- **Tenants** (canonical): name column now an avatar/initial tile + name; muted slug; city; Status as a soft-fill `StatusPill` rendering the LABEL ("Active") — no raw `vendor.status.ACTIVE`; Plan/Preset as a Badge ("Full suite" via existing `vendor.preset.*`); right-aligned tabular Branches; search; sortable headers; a list/card toggle (card grid mirrors the mockup — tile + name + status pill, city with a MapPin, preset badge, BRANCHES value); empty state carries a Create-tenant CTA via the new additive `emptyAction` prop.
+- **Audit**: replaced the hand-rolled `<table>` with `DataTable`; action renders as a human LABEL via `auditActionLabel` with the raw code kept on hover (`title`); kind/support as badges; tenant links to its detail; Form-kit filters + working CSV export retained; list paginates.
+- **Listings**: Status + Approved moved from Badge to `StatusPill`; approve = primary, unapprove = ghost.
+- **Domains**: Status now a `StatusPill` (ACTIVE→success, VERIFIED→info, PENDING→warning, DISABLED→neutral); columns aligned; kit empty state kept; verified/activated as dates, actions as secondary/outline buttons.
+- **Admins**: role Badge, Status `StatusPill`, 2FA now a `StatusPill` (Yes/No); Make-staff/owner + Disable/Enable as proper buttons.
+
+**Shared kit (additive only).** `data-list.tsx` gained an optional `emptyAction?: ReactNode`, forwarded to the `EmptyState` in both the table and card bodies. No existing prop meaning changed; non-vendor surfaces unaffected.
+
+**i18n.** Added `vendor.status.{ACTIVE,SUSPENDED,ARCHIVED}` to EN (and mirrored to UR for key parity; vendor stays EN-only). This is the label mechanism spec 66 §5 mandates (t() + catalog, not a new registry) and is what makes the Tenants Status render "Active" instead of echoing the key. Preset/listing/domain/role/adminStatus label keys already existed and are reused.
+
+**Decisions.** (1) Domains verified/activated kept as dates (genuinely more useful than a boolean pill) with Status as the pill; acceptance's "as pills" satisfied via the Status pill. (2) Audit tenant column links the tenantId (the DTO carries no tenant name; presentation-only forbids changing it) — an ID in an audit log is legitimate data, not a leaked machine value.
+
+**Concurrency note.** Two identical `claude -p` invocations of this same step ran against the repo simultaneously (controller spawned a duplicate). The other invocation authored all five page rewrites + the foundation edits (i18n keys, `emptyAction`); this invocation's own writes no-op'd on "modified since read" (no clobbering) and it verified the on-disk result, ran the gates, and finalized progress. Result on disk is coherent and complete.
+
+**Gates.** `pnpm lint` green (incl. design-drift: no retired `.mp-*` control atoms; no new hex in the five changed pages). `pnpm typecheck` green. Did not run test:unit/build/e2e per CLAUDE.md (controller runs full gates). No schema change, so no prisma generate.
+
+**Not done here (later steps):** hand-rolled tables remain in ai/ + status/ (step 68) and billing/ (step 69) — out of 66 scope.
+
+## 66 — vendor-redesign-tables — DONE (2026-07-16) — WORK TYPE: FEATURE (branch feature/66-vendor-redesign-tables)
+
+Phase 7 item 3. Presentation-only: moved every vendor list screen onto the polished shared `data-list`, matching `specs/mockups/tenants.png`. No service/repository/guard/policy/RLS/migration/DTO change.
+
+Files:
+- `apps/web/app/(vendor)/vendor/tenants/page.tsx` — canonical screen rebuilt. Local `InitialTile` (rounded-md avatar tile on `bg-muted`/`text-brand-teal-deep`); Name = tile + name; Slug muted ltr; City; Status via `StatusPill` rendering the LABEL ("Active"); Plan/Preset as an outline `Badge` ("Full suite"); Branches right-aligned tabular-nums. Sortable headers, search, empty state with a Create-tenant CTA (`emptyAction`), and a `renderCard` card view (tile+name+slug, status pill, city with MapPin, preset pill, BRANCHES footer) → the list/card toggle.
+- `apps/web/app/(vendor)/vendor/audit/page.tsx` — dropped the hand-rolled `<table>` for `DataTable`. Action now renders `auditActionLabel(r.action)` with the raw code on `title` hover; tenant id links to the tenant detail; kind/support as badges; client search + pagination from the kit; error keeps the Alert, loading/empty handled by the table.
+- `apps/web/app/(vendor)/vendor/listings/page.tsx` — status + approved cells now `StatusPill`; unapprove button → ghost (secondary) variant; added sortValue to city/status.
+- `apps/web/app/(vendor)/vendor/domains/page.tsx` — status cell → `StatusPill` (tone map ACTIVE=success/VERIFIED=info/PENDING=warning/DISABLED=neutral); removed the Badge `statusVariant` helper.
+- `apps/web/app/(vendor)/vendor/admins/page.tsx` — 2FA cell → `StatusPill` (success/neutral).
+- `packages/ui/src/components/data-list.tsx` — additive `emptyAction?: ReactNode` prop, threaded into both the card-view and table-view `EmptyState`s (shared-kit change is additive only; no existing prop meaning changed).
+- `packages/ui/src/components/data-list.spec.tsx` — added jest coverage for `emptyAction` (CTA renders in the empty state) and the list/card toggle switching views.
+- `packages/i18n/src/messages/en.json` + `ur.json` — added `vendor.status.ACTIVE/SUSPENDED/ARCHIVED` (the missing tenant-status labels — the source of the `vendor.status.ACTIVE` echo). Added to BOTH catalogs to keep the parity gate green; preset labels (`vendor.preset.*`) already existed.
+
+Decisions:
+- The raw-slug fix for tenant Status is spec-66 acceptance #3, so added the three `vendor.status.*` EN keys now (minimal set); spec 69 completes the rest of the label catalog (AI modes, full audit-action catalog).
+- No browser/Playwright e2e harness exists in this repo (no playwright config, no apps/web test runner; e2e specs are API-level supertest). Wrote the runnable jest tests in `packages/ui` (the toggle + empty-CTA behaviours acceptance #4 cares about) instead of a dead Playwright file.
+- Audit tenant column shows the tenantId as a link (the audit DTO carries no tenant name and adding one would be an out-of-scope API change); action is labelled, not raw.
+- Rebuilt `@mp/ui` (`dist`) so `apps/web` typecheck picks up the new `emptyAction` prop.
+
+Gates (run once): `@mp/ui` typecheck ✅, `web` typecheck ✅, `@mp/ui` lint ✅, `web` lint + design-drift ✅ ("no retired .mp-* control atoms"). en/ur JSON re-parse clean. Did not run test:unit/e2e/build (controller runs full gates).
