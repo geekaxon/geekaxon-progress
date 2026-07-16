@@ -3355,3 +3355,29 @@ tests are unchanged and still cover normalisation.
 **Tests:** `lib/shell-density.test.ts` — guided vs simple per role, empty→simple, mixed-role upgrade to guided.
 
 **Gates:** `pnpm lint` clean; `pnpm typecheck` clean. (No prisma change; no build/test run per loop rules.)
+
+## 75 — public-site-redesign — DONE (2026-07-16)
+**Branch:** feature/75-public-site-redesign · **Feature code:** marketing.site (extends 63)
+
+### What was done
+- **Removed the fabricated "Rufi Apartments" testimonial (spec §Remove 🔴).** The home hero pill, the `marketing.socialProof` block (quote/author/role attributed to "Rufi Apartments, Managing Committee, Karachi"), and the About `missionBody` all named Rufi — a hypothetical example, not a customer. Edited both `messages/en.json` and `messages/ur.json`:
+  - `hero.socialProof` → a neutral value line ("Made in Pakistan, for Pakistan's residential societies." / Urdu).
+  - `marketing.socialProof` → reshaped from `{quote,author,role}` to a value-proposition `{title,body,placeholder}` block with NO attributed quote; the `placeholder` is clearly marked illustrative ("Your society's name here — illustrative, not a customer quote.").
+  - `about.missionBody` → dropped the "— Rufi Apartments —" naming, kept the rest.
+- **Home page** (`app/[locale]/(marketing)/page.tsx`): replaced the `<figure>`/`<blockquote>`/`<figcaption>` attributed-quote section with a value-prop `<section>` rendering `socialProof.title/body/placeholder`. No more attributed customer words.
+- **Guard test** (`lib/public-site/no-fabricated-testimonial.test.ts`): unit assertion (per CODEREF's "or a unit assertion" option) — fails if en/ur JSON contains "Rufi Apartments" / "روفی اپارٹمنٹس" / "Managing Committee, Karachi" (and Urdu), and asserts `marketing.socialProof` has no author/role/quote keys. The standalone invoice-prefix sample "RUFI" is intentionally NOT on the denylist (it is a sample code, not a customer).
+- **Primary-CTA discipline (spec §Rules / acceptance):** verified already in place from spec 63 — `MARKETING_NAV` has no "demo" entry (demo funnel retired), `TRIAL_HREF = /trial`, header + every page CTA is "Start free trial". No "Request a demo" primary path. Left the dead `nav.demo`/`marketing.demo.*` copy and the deep-linkable `/demo` route untouched (not a primary path; out of scope to delete).
+
+### Decisions / limitations (recorded, not blocked)
+- The DS reference deliverables `Rihaish-*.dc.html` are NOT present anywhere in the repo, so pixel-parity restyle of all seven pages against them could not be verified. The marketing pages already sit on the design tokens (specs 63 + 70–73) and use no brand-hex literals (tokens.test guard passes). Focused this step on the concrete, testable spec items (the 🔴 testimonial removal + guard, CTA discipline).
+- **Real product screenshots:** the CSS mock (`components/marketing/product-preview.tsx`) is the deliberate spec-63 fallback "until a screenshot pipeline exists." No running staging / browser-capture pipeline is available in-agent to produce real screenshots, so the mock stays. Its neutral surface hexes are structural (not brand) and permitted by `lib/design/tokens.test.ts` (which forbids only the brand palette). Screenshot pipeline remains a follow-up.
+- **Pricing → single pricing fn:** deferred to spec 76 (pricing-consolidation) as the spec states ("depends on 76"); pricing page keeps the existing `lib/public-site/pricing.ts` wiring for now.
+
+### Gates
+- `pnpm lint` → No ESLint warnings or errors.
+- `pnpm typecheck` → clean (tsc --noEmit).
+- (Did not run test:unit/e2e/build per CLAUDE.md — controller runs full gates.)
+
+### Files
+- edited: messages/en.json, messages/ur.json, app/[locale]/(marketing)/page.tsx, PROGRESS.md
+- created: lib/public-site/no-fabricated-testimonial.test.ts, PROGRESS-HISTORY.md entry
