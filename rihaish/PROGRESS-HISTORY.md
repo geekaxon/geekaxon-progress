@@ -3381,3 +3381,23 @@ tests are unchanged and still cover normalisation.
 ### Files
 - edited: messages/en.json, messages/ur.json, app/[locale]/(marketing)/page.tsx, PROGRESS.md
 - created: lib/public-site/no-fabricated-testimonial.test.ts, PROGRESS-HISTORY.md entry
+
+## 76 — pricing-consolidation — DONE (2026-07-16)
+
+**Spec:** /specs/76-pricing-consolidation.md (feature code platform.billing, extends 65). WORK TYPE: FEATURE (branch feature/76-pricing-consolidation).
+
+**Problem:** Spec 65 promised one shared pricing fn, three callers. Reality shipped THREE band tables: lib/pricing/calculate.ts (60/45/35 @ 100/500/inf, the rate that actually invoices), lib/public-site/pricing.ts (marketing, 60/50/40/32 @ 100/300/750/inf, money typed as `number`), and lib/platform/plan-pricing.ts (a near-duplicate of calculate.ts that could drift). A 184-unit society saw Rs 9,200/mo on the website (184x50) but was invoiced Rs 8,280/mo (184x45) — an ~11% trust-killing mismatch. lib/pricing/callers.ts had zero production importers (dead).
+
+**Decision — one band table:** kept the recommended default in lib/pricing/calculate.ts DEFAULT_PLAN_PRICING (60/45/35 @ 100/500/inf) as THE agreed commercial pricing since that is what invoices; recorded it once and documented it as the single home in the module header. Did not invent an annual-discount default (left at 0) — a public annual discount is a commercial decision to be set in that one place if wanted.
+
+**Changes:**
+- Deleted lib/public-site/pricing.ts (+ its test) and lib/platform/plan-pricing.ts (+ its test lib/platform/plan-pricing.test.ts, which only exercised the deleted duplicate — fully covered by calculate.test.ts). Deleted lib/pricing/callers.ts (dead marketingQuote/builderQuote wrappers — they were only priceQuoteInput one-liners and did not fit the components, which hold PlanPricing objects not wire QuoteInput).
+- components/marketing/pricing-calculator.tsx rewritten to price through calculatePlanPrice(DEFAULT_PLAN_PRICING) with BigInt money via formatMoney — no `number` money, no second band table. Dropped the marketing-only MONTHLY_MINIMUM floor (it would make the website diverge from the un-floored invoice) and the atMinimum line. Kept a UI-only slider ceiling CALCULATOR_MAX_UNITS=1000 (a unit COUNT, not money) and the "let's talk" over-cap path. Annual line now derives from the ANNUAL cycle of the same calculator.
+- components/platform/plan-pricing-editor.tsx and plans-table.tsx repointed from @/lib/platform/plan-pricing to @/lib/pricing/calculate (identical exports: cycleTotalMinor, effectiveMonthlyMinor, DEFAULT_PLAN_PRICING, PlanPricing, BillingCycle, PricingModel). No behaviour change.
+- Recurring invoice reconciliation (spec fix #5): computeInvoiceAmounts + PricingProfile.rateMinor already reduce to rate x units for PER_UNIT; there is no plan-assignment auto-derive flow to hook (setPricingProfile is only called from the manual admin pricing route), so adding derivation infra would have been dead code (spec forbids). Instead proved reconciliation by test: a recurring PER_UNIT invoice whose rateMinor is the band rate for the society's size equals calculate.ts for the same units.
+
+**Tests (lib/pricing/calculate.test.ts):** replaced the callers-based "three callers agree" block with a spec-76 spread test over [1,100,101,184,500,501,10000] asserting all four paths return the identical BigInt: (1) marketing widget calculatePlanPrice(DEFAULT), (2) plan-editor preview cycleTotalMinor(DEFAULT), (3) quote/invoice generator priceQuoteInput(wire), (4) recurring invoice computeInvoiceAmounts(rate=band rate). Explicit 184-unit test asserts marketing == recurring == 184x45 = 8_280n (the exact spec scenario). Kept the priceQuoteInput wire-widening test. calculate.test.ts now imports computeInvoiceAmounts from @/lib/platform-billing/math (pure, no DB).
+
+**Acceptance:** exactly one pricing module (calculate.ts); public-site/pricing.ts + platform/plan-pricing.ts + callers.ts deleted; no `number` money on any pricing path; committed band table in one place; 184-unit website == invoice. All met.
+
+**Gates:** pnpm lint — clean (no warnings/errors). pnpm typecheck — clean (after deleting the orphaned lib/platform/plan-pricing.test.ts). Did not run test:unit/e2e/build per standing rules.
