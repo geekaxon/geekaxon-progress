@@ -3151,3 +3151,72 @@ must perform the host-side install for the `test` job to find a runner.
 **Gates.** Docs + workflow YAML only — no TypeScript or schema.prisma touched, so lint/
 typecheck have nothing to evaluate (skipped per the docs-only rule in CLAUDE.md §6).
 Controller runs the full gates.
+
+## 70 — design-token bridge — DONE (2026-07-16)  🔑 KEYSTONE
+**Branch:** feature/70-design-token-bridge · **Spec:** /specs/70-design-token-bridge.md (+70-70-CODEREF)
+**Feature code:** core.design (isCore, extends 02/59). Blocks 71–75.
+
+### What & why
+Bridged the delivered Rihaish Design System (theme.json/styles.css) onto the existing shadcn
+component layer with ZERO component rewrites. The DS is authored in a different token architecture
+(wrapped `hsl(...)` values, DS token names `--bg/--surface/--text/--danger/…`, hand-authored
+`.btn/.field` classes) than the code (bare HSL triplets consumed via Tailwind `hsl(var() / <alpha>)`,
+shadcn names, React components). Pasting styles.css verbatim would (a) break every translucent surface
+(`hsl(hsl(...) / .5)` is invalid), (b) orphan the shadcn token names, (c) fork the component system.
+So we mapped values → code instead.
+
+### Changes
+- **app/globals.css** — replaced the token block. Every DS colour stored as a BARE HSL triplet (light
+  + dark). shadcn names kept as aliases pointing at DS tokens via `var()` (`--background: var(--bg)`,
+  `--muted: var(--surface-sunken)`, `--destructive: var(--danger)`, sidebar*←surface/text/primary, …) —
+  aliasing via var() preserves the raw triplet so Tailwind's `/ <alpha>` keeps working through the alias.
+  Added the net-new DS tokens: primary ramp (600/500/400/soft) + on-primary, accent-600/soft/on-accent,
+  bg/bg-subtle/surface/surface-2/surface-sunken/overlay, text-muted/subtle/inverse, border-strong,
+  full semantic set success/warning/info/danger (+ -soft + on-), chart-6, --space-1..12,
+  --radius-sm/-/-md/-lg/-xl/-pill (base 10px, was 0.625rem = same 10px), --control-h-sm/-/-lg,
+  --shadow-sm/-md/-lg, motion --ease/--dur-fast/--dur/--dur-slow. Dark selector is now
+  `.dark, [data-theme="dark"]` so next-themes' class AND the DS attribute both recolour. Density (§6)
+  is composed, not a new set: `[data-density=dense|guided|simple]` re-points `--control`/`--density-gutter`
+  (platform=dense, admin=guided default, resident/guard/staff=simple ≥44px). PWA/safe-area/RTL-leading
+  layers untouched (RTL line-height stays 2, matches DS).
+- **tailwind.config.ts** — extended (not replaced): colors gain primary-600/500/400/soft, accent-600/soft,
+  surface(+2/sunken), border-strong, overlay, success/warning/info/danger (+soft +foreground), chart-6;
+  borderRadius mapped to --radius-*; boxShadow sm/md/lg → --shadow-*; transitionTimingFunction +
+  transitionDuration → --ease/--dur*; `h-control` → var(--control).
+- **lib/design/tokens.ts** — added SEMANTIC hexes (success #26875a, warning #eb860a, info #1879bf,
+  danger #ca2621) from theme.json for non-CSS surfaces (OG/PDF). Brand stays #023029/#d8a03e.
+- **lib/design/tokens.test.ts** — globals assertion updated to the DS values (171 92% 10% / 38 66% 55%)
+  + presence of the new semantic/surface tokens + "no hsl() wrapper" check. Added the PALETTE-CLASS
+  RATCHET: raw Tailwind palette classes (emerald|green|amber|sky|rose|red|orange|indigo|teal)-(50..950)
+  in components/ are now violations (semantic tokens `bg-success/10` etc. are the fix). ~580 usages across
+  71 files predate this step (steps 71–75 re-skin them), so it's a baseline ratchet: frozen counts in
+  lib/design/palette-debt.json; test fails on any NEW offending file or any file whose count GROWS, and a
+  second test forbids stale (overstated) baseline entries so the debt only ratchets to zero.
+- **lib/branding/{contrast,tokens}.ts (spec 13)** — per-tenant override now recolours the whole primary
+  family: --primary + --primary-600/500/400/soft (derived ramp, hue/sat kept) + --primary-foreground
+  (still AA-corrected: white→dark swap when a light tenant colour fails 4.5:1) + --ring. Gold, neutrals,
+  semantic, shadows stay fixed. contrast.ts ModeTokens gained the ramp fields; a mode-aware ramp() spaces
+  lightness like globals.css. branding-client preview kept in lock-step (scoped .brand-preview emits the
+  full ramp). Branding tokens.test updated to assert exactly the 7 primary-family props.
+
+### Fonts (§4)
+Left next/font/local Jameel (display) + Noto Naskh (body) as-is; did NOT re-introduce the DS Google
+`@import` on the critical path. Jameel remains the production Urdu display face (spec 59 LCP budget).
+
+### Notes / decisions
+- The DS zip (Rihaish Design System.zip / theme.json / styles.css) is not on disk; the spec + CODEREF
+  enumerate every token name and the anchor colours (primary 171 92% 10% ← #023029, accent 38 66% 55% ←
+  #d8a03e, dark primary 164 42% 45%), so the full palette was reconstructed coherently from the logo
+  ramp + those anchors. Values are internally consistent and honour every mapping/edge case in the spec.
+- Chose a baseline ratchet over a hard-fail because a hard-fail on 580 inherited usages would red the
+  build now (CODEREF forbids touching components this step; the cleanup is 71–75). The ratchet enforces
+  the rule for all NEW code immediately and burns the debt down file-by-file.
+- Radius `rounded-lg` shifts 10px→12px (DS intent); base --radius stays 10px.
+- transition* DEFAULT now 200ms/--ease (DS motion), a deliberate global shift.
+
+### Gates
+- `pnpm typecheck` — PASS (clean). `pnpm lint` — PASS (no warnings/errors).
+- Did NOT run test:unit/e2e/build per CLAUDE.md (controller runs full gates). Guard baselines were
+  generated with the exact regex the test uses, so ratchet counts match by construction.
+
+WORK TYPE: FEATURE (branch feature/70-design-token-bridge)
