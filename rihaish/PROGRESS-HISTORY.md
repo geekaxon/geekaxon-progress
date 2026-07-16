@@ -3401,3 +3401,20 @@ tests are unchanged and still cover normalisation.
 **Acceptance:** exactly one pricing module (calculate.ts); public-site/pricing.ts + platform/plan-pricing.ts + callers.ts deleted; no `number` money on any pricing path; committed band table in one place; 184-unit website == invoice. All met.
 
 **Gates:** pnpm lint — clean (no warnings/errors). pnpm typecheck — clean (after deleting the orphaned lib/platform/plan-pricing.test.ts). Did not run test:unit/e2e/build per standing rules.
+
+## 77 — deploy-gate — DONE (2026-07-16)
+
+**Spec:** /specs/77-deploy-gate.md · Feature code: n/a (CI/infra, extends 62/68) · Branch: feature/77-deploy-gate
+
+**Problem:** Spec 62 added `pnpm test:e2e` to CI and called it a deploy gate, but it never gated. `deploy-staging.yml` triggered on `push: branches: [staging]` with no `needs:`/dependency on CI, so the e2e run and the deploy fired concurrently on the same push — a red suite still shipped to staging.
+
+**Fix (Option A — chain deploy to CI success):**
+- `.github/workflows/deploy-staging.yml`: replaced the `push` trigger with `on: workflow_run: { workflows: ["CI"], types: [completed], branches: [staging] }` and guarded the deploy job with `if: github.event.workflow_run.conclusion == 'success'`. The deploy now runs ONLY after the whole CI workflow finishes green on staging. Because CI's conclusion is 'success' only when BOTH jobs pass — `static` (lint/typecheck on GitHub's shared runners) and `test` (unit/build/e2e on the self-hosted [self-hosted, rihaish] box, spec 68) — a red unit OR e2e run makes the deploy skip. Self-hosted topology unaffected: CI still splits static/test across the two runners; only the deploy's trigger changed.
+- `.github/workflows/deploy-production.yml`: production stays a manual `workflow_dispatch` (cannot use `workflow_run`), so added a `gate` job that the `deploy` job `needs:`. The gate uses actions/github-script@v7 → `listWorkflowRuns({ workflow_id: 'ci.yml', branch: 'staging', status: 'completed', per_page: 1 })`, takes the latest completed staging CI run, and `core.setFailed(...)` unless `run.conclusion === 'success'` (also fails if no completed run exists). So production cannot ship against an un-green staging build.
+- The `ci.yml` comment "E2E tests (built app — blocks deploy on failure)" is now literally true; no ci.yml change needed.
+
+**Acceptance criteria:** failing unit/e2e on staging → CI conclusion != success → staging deploy `if:` false → deploy skipped ✓. Production gated by the green-staging-CI check ✓. CI comment claim now true ✓. Self-hosted runner topology (spec 68) untouched ✓.
+
+**Gates:** workflow-YAML-only change (no TS/JS source, schema, or tests the spec demands) — per CLAUDE.md docs/config-only, lint+typecheck skipped (they do not cover .github/workflows). No unit/e2e/build run (controller runs full gates).
+
+**Notes:** deploy-production.yml still has the placeholder prod path `/REPLACE/with/prod/path` from before — untouched; that is an infra/credentials concern out of scope for this step.
