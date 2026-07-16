@@ -2704,3 +2704,29 @@ Decisions / notes:
 - Playwright page.goto test NOT added: this repo has no Playwright harness at all (only next's optional peer in the lockfile — no @playwright/test install, no playwright.config, no `test:e2e` script). apps/web tsconfig includes **/*.ts, so an unresolvable @playwright/test import would break the typecheck gate I must keep green, and CLAUDE.md forbids running build/e2e. The rendered showcase + the jest spec are the verifiable proof for this step; wiring the e2e harness is a repo-wide infra task (affects every prior UI step too) and should be handled as its own item.
 
 Gates: `pnpm --filter @mp/ui typecheck` clean; `pnpm --filter @mp/ui build` (declaration emit) clean; `pnpm --filter web typecheck` clean; `pnpm --filter @mp/ui lint` clean; `pnpm --filter web lint` clean (eslint + design-drift-check: "no retired .mp-* control atoms"). Did not run test:unit/build/test:e2e (controller runs full gates).
+
+## 65 — vendor-redesign-dashboard — DONE (2026-07-16)
+
+**Type:** FEATURE (branch feature/65-vendor-redesign-dashboard). Presentation-only, per spec 65 + CODEREF 64-69. Visual target: specs/mockups/dashboard.png.
+
+**What shipped**
+- Dashboard (apps/web/app/(vendor)/vendor/page.tsx) rebuilt to the mockup: PageHeader "Oversight" + new subtitle copy; a StatGrid of 8 StatCards (Total tenants, Active w/ "All tenants operational" when active===total, Suspended, Archived, Bookings, Revenue, Commission earned w/ "No commission cycle closed yet", Churn-risk w/ "No tenants flagged"), each with a lucide icon + tinted square; Bookings/Revenue tiles carry a mini Sparkline. Two filled-area charts in shadow-2 cards with a header row (title + "Last 6 months" left, "N total" / "Rs …" right). A "Recent activity" card with a "View all" link, rendering action LABELS (auditActionLabel) + relative time — no raw vendor.* code, no raw IDs (payload has only IDs, so actor/tenant names are omitted rather than leaked).
+- Removed the old attention strip, settlement-KPI row and preset-mix block: the approved mockup + spec §3.1 define the new composition (8 tiles + 2 charts + activity). Not a "delete to force layout" — the spec is explicit about the tiles; the churn signal survives as a tile, approvals/settlement live on their own pages.
+- Analytics (…/analytics/page.tsx) mirrored: 6 StatCards, two area-chart header cards, a Bookings-by-source donut sized to content (max-w 220) with a matching coloured legend (walk-in/marketplace/other %), and the per-tenant breakdown moved off the hand-rolled <table> onto DataList — Tenant linked to /vendor/tenants/[id], right-aligned tabular numerics (Bookings/Revenue/AI-spend/Users/Balance), a Trend StatusPill (trendPct → "—" on null baseline) and a churn Badge.
+
+**Shared kit (additive only)**
+- New packages/ui/src/components/sparkline.tsx — pure inline-SVG mini trend line, currentColor-tinted (theme-aware, no recharts, no hex), returns null for <2 points; exported from the barrel (safe — no recharts pull).
+- StatCard gained an optional `spark?: ReactNode` slot (renders at the tile bottom, mt-auto; takes precedence over trend/caption to match the Bookings/Revenue tiles). Additive prop; existing StatCard callers unaffected.
+
+**Helpers (apps/web/.../console.ts)**
+- formatMetric(value, format?, zeroIsEmpty?) — the local empty-data guard the spec asks for until 69's shared formatMetric lands (null/undefined → "—").
+- auditActionLabel(code) — humanises a raw audit slug (vendor.2fa.enrolled → "2FA enrolled"), dropping the namespace and upper-casing known acronyms; 69 replaces it with the i18n catalog.
+- relativeTime(iso) — "just now / Nm / Nh / Nd ago / date".
+
+**i18n** — vendor.dashboard subtitle reworded to the mockup copy; churnRisk shortened to "Churn-risk"; new keys allOperational / noCommissionCycle / noChurnFlagged / viewAll / chartRange / chartTotal("{count} total") added to EN and UR (parity kept — vendor stays EN-only, values are English placeholders in UR).
+
+**No-empty-data-lies** — the mockup shows commission "Rs 0" WITH the "No commission cycle closed yet" caption (not a lie, contextualised); the fabricated %-trend is what's killed — Bookings/Revenue tiles show a real sparkline (only when ≥2 points / real data), never a fake +NNNN%. stat-card.spec asserts no trend renders when none is passed.
+
+**Tests** — packages/ui/src/components/stat-card.spec.tsx extended: spark supersedes trend/caption; Sparkline draws a path for ≥2 points and nothing for <2. No apps/web unit runner and NO Playwright/e2e infra exists in this repo (no playwright config, no test:e2e turbo task) — the acceptance-6 page.goto e2e could not be added; the no-fake-% guarantee is covered at the StatCard component-contract level instead. Flagged for whoever stands up e2e infra.
+
+**Gates** — pnpm lint (incl. design-drift: no retired .mp-* atoms, no hex) green for @mp/ui, @mp/i18n, @mp/web; pnpm typecheck green for all three (rebuilt @mp/ui dist so web sees the new Sparkline/spark exports). Did not run test:unit / build / e2e (controller gates).
