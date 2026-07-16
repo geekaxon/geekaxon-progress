@@ -3328,3 +3328,30 @@ tests are unchanged and still cover normalisation.
 
 **Gates:** `pnpm lint` clean, `pnpm typecheck` clean. Did not run unit/e2e/build
 (controller runs full gates).
+
+## 74 — shells-restyle — DONE (2026-07-16)
+
+**Spec:** /specs/74-shells-restyle.md (no CODEREF). Restyle + density wiring of every app shell to the DS; nav gating untouched (restyle only).
+
+**Density model (the one piece of real logic):**
+- New pure module `lib/shell-density.ts` → `resolveDensity(roleCodes)`: management roles (SOCIETY_ADMIN, COMMITTEE_MEMBER, MANAGER, ACCOUNTANT, MODERATOR, AMENITY_MANAGER) → `guided`; everyone else (resident/guard/staff/guest) → `simple`. Extracted to a DB-free file so it unit-tests without dragging the Prisma layer.
+- `components/shell/types.ts`: added `ShellDensity` type + `density` field on `ShellData`.
+- `lib/shell-data.ts`: imports `resolveDensity`, sets `density: resolveDensity(belongsHere ? ctx.roleCodes : [])`.
+- The globals.css `[data-density=...]` rules (dense/guided/simple → `--control` + `--density-gutter`) already existed from spec 70 §6; this step wires the attribute onto the roots.
+
+**Shell roots carry `data-density`:**
+- App shell (`app-shell-client.tsx`): wrapped the banner stack + frame + tabbar in `<div data-density={data.density} className="contents">` — `display:contents` keeps layout identical while custom-prop inheritance flows `--control` to every re-skinned control.
+- Platform console (`platform-shell.tsx`): root `<div data-density="dense">`.
+
+**Restyle to DS tokens:**
+- Sidebar nav (`sidebar-nav.tsx`): active state `bg-primary/10` → `bg-primary-soft` + semibold; density-driven min-height `calc(var(--control) - 0.25rem)`; hover icon scale + motion tokens (`--dur-fast`/`--ease`); `data-tip` on the collapsed rail.
+- Platform nav (desktop + mobile): active → `bg-primary-soft` semibold.
+- Bottom tabs (`bottom-tabs.tsx`): active glyph now sits in a soft-primary pill; whole target ≥44px (`min-h-[3.25rem]`). Still 5 items, More drawer, safe-area padding — all intact.
+- Banners (`banners.tsx`): DS semantic alerts — read-only → warning-soft/warning; trial normal → info-soft/info, urgent → warning-soft/warning; impersonation stays danger-solid. Each bordered + stacked in priority order.
+- `states.tsx`: added `LockedState` (padlock, muted tone) — the DS locked-feature empty state for permission-gated resident tiles (Apartment Accounts, CCTV).
+
+**Left intact:** nav visibility (role × entitlement server gate), sidebar collapse cookie, PWA splash/manifest/install (spec 23), sign-in surfaces (guided is the CSS default, no attribute needed), logo variant logic (society mark = monogram on the collapsed rail).
+
+**Tests:** `lib/shell-density.test.ts` — guided vs simple per role, empty→simple, mixed-role upgrade to guided.
+
+**Gates:** `pnpm lint` clean; `pnpm typecheck` clean. (No prisma change; no build/test run per loop rules.)
