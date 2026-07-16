@@ -3220,3 +3220,30 @@ Left next/font/local Jameel (display) + Noto Naskh (body) as-is; did NOT re-intr
   generated with the exact regex the test uses, so ratchet counts match by construction.
 
 WORK TYPE: FEATURE (branch feature/70-design-token-bridge)
+
+## 71 — primitive-reskin — DONE (2026-07-16)
+
+**Branch:** feature/71-primitive-reskin · **Feature code:** core.ui (extends 05/06/07) · **Depends on:** 70.
+
+Styling pass on the shared shadcn/ui primitives to match the Rihaish design system, keyed entirely off the spec-70 tokens. API kept stable (200+ call sites untouched) — new appearance only. Note: the DS reference HTML (gallery.html / patterns.html / feedback.html) is NOT present in the repo, so the visual match was done against the token layer + spec text, not a live render.
+
+**Tokens (app/globals.css + tailwind.config.ts):**
+- Added `--chart-grid` / `--chart-axis` chrome tokens (light + dark) so charts stop borrowing `--border`/`--muted-foreground`; registered `chart.grid` / `chart.axis` Tailwind colours.
+
+**Re-skinned / added components (components/ui + components/charts):**
+- `button.tsx` — re-skin: DS variants `primary/gold/danger` added alongside the legacy `default/destructive/outline/secondary/ghost/link` (all still resolve); heights track `--control` (density-aware), `lg` = `--control-h-lg` (≥44px AA touch); radius `--radius`; new `loading` prop (centred `<Spinner>`, disables, `invisible` label reserves width → no reflow). asChild path left spinner-free (Slot needs a single child).
+- `spinner.tsx` — new; `currentColor`, `role=status`, motion-reduce fallback.
+- `badge.tsx` — new; tones success/warning/info/danger/primary/neutral × soft|solid. Enforces the DS "colour is never alone" rule structurally: always renders the passed icon OR a coloured dot — no bare pill possible. Long labels wrap, dot `shrink-0`.
+- `card.tsx` — new; shadcn header/title/desc/content/footer set + `kpi` and `list-card` variants, `--shadow-sm`, `--radius-lg`, optional hover lift → `--shadow-md`.
+- `segmented.tsx` (`.seg`), `timeline.tsx` (`.timeline`), `rating.tsx` (`.rating`, gold stars via `--accent`), `kbd.tsx` (`.kbd`), `alert.tsx` (`.notif`) — new small token-driven primitives the DS has but the code lacked. Alert enforces an icon per tone (default icon when none passed), same never-colour-alone rule.
+- `charts/chart-frame.tsx` — `CHART_COLORS` extended to `--chart-1..6`; exported `CHART_GRID`/`CHART_AXIS`; added `ChartLegend` (swatch+label) and `ProgressRing` (radial gauge, track=`--chart-grid`, sr label). Data-table fallback untouched. `charts.tsx` axis/grid repointed to the chrome tokens. `charts/index.ts` re-exports the new pieces.
+
+**Tests:** components/ui/primitives.test.ts (node-safe — no render env in this repo): button DS-variant coverage + lg touch target + focus-ring 2px/offset-2 + no raw palette; badge every tone has soft/solid/dot; alert every tone has a default icon; charts cycle 6 tokens and read chrome tokens. All assertions reuse the repo palette regex so a re-skinned primitive can't smuggle a raw Tailwind colour back in.
+
+**Guard / debt:** new primitives use semantic tokens only (bg-success, bg-accent, text-danger…) → zero new palette-debt entries; no baseline file touched, so the spec-70 ratchet stays green. Charts were already tokenised.
+
+**Gates:** `pnpm lint` ✓ (fixed a jsx-no-literals `%` and an AlertProps `title` override via `Omit`), `pnpm typecheck` ✓. Did NOT run test:unit/e2e/build per CLAUDE.md.
+
+**Not done (belongs to later steps):** the ~580-usage raw-palette debt in feature clients (emergency/finance/noc/… ) is migrated by 72–75, not here — spec 71 is the primitives only.
+
+WORK TYPE: FEATURE (branch feature/71-primitive-reskin)
