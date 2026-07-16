@@ -3247,3 +3247,37 @@ Styling pass on the shared shadcn/ui primitives to match the Rihaish design syst
 **Not done (belongs to later steps):** the ~580-usage raw-palette debt in feature clients (emergency/finance/noc/… ) is migrated by 72–75, not here — spec 71 is the primitives only.
 
 WORK TYPE: FEATURE (branch feature/71-primitive-reskin)
+
+## 72 — datatable-restyle — DONE (2026-07-16)
+**Branch:** feature/72-datatable-restyle · **Feature code:** core.datatable (extends 07) · depends 70/71
+**Spec:** specs/72-datatable-restyle.md + 72-72-CODEREF.md. Restyle-only; no logic/endpoint/contract change.
+
+### What changed (style only)
+- `components/table/data-table.tsx`:
+  - Bulk bar → DS `.bulk-bar`: primary-tinted strip (`border-primary/25 bg-primary-soft/60 shadow-sm`).
+  - Card view → DS `.rec-grid`/`.rec-card`: card is now a flex column with a per-row FOOTER carrying the
+    selection checkbox (when bulkActions) + the row-actions dropdown (when rowActions); body stays the
+    clickable region. Selected cards get `data-[state=selected]` primary tint. New behaviour: cards now
+    expose row actions (previously actions were list-only).
+  - Empty/error states get correct icons (Inbox / AlertTriangle) instead of the placeholder MoreHorizontal.
+  - Sticky pinned first column gains an inline-end divider (`border-e`); numeric cells keep tabular + logical
+    end alignment (DS `.cell-num`, RTL-aware).
+  - TableSkeleton reshaped to read like the real table (muted header band + first-column-narrower shimmer rows).
+- `components/table/data-table-toolbar.tsx`:
+  - Filter chips → DS `.chip--active` + `.chip__x`: chip now shows `header + value` and a dedicated, aria-
+    labelled × button (removing a filter is its own control, not the whole chip). Added `filterChipValue()`
+    helper to render a short value per filter kind (text/number/dateRange/enum→option labels/boolean→yes/no).
+- pagination + states.tsx left as-is: already logical-chevron / token-based DS.
+
+### Decisions
+- Followed the 70/71 token-bridge pattern: restyle via Tailwind classes reading the design tokens, NOT by
+  introducing literal DS CSS class names. All colours are semantic tokens (bg-primary-soft, border-primary,
+  bg-muted…) so the palette-debt + brand-hex guards stay green.
+- No new i18n labels (reused selectAll/rowActions/clearFilters/true/false). No types/persistence/server change.
+- Money-formatter rule is a consuming-module concern (kit renders caller-supplied cells); untouched here.
+
+### Gates
+- `pnpm lint` → clean (no warnings/errors). `pnpm typecheck` → clean.
+- Did NOT run test:unit/e2e/build per CLAUDE.md (controller runs full gates).
+
+WORK TYPE: FEATURE (branch feature/72-datatable-restyle)
