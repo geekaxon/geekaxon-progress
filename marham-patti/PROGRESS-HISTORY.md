@@ -2804,3 +2804,30 @@ Gates (run once): `@mp/ui` typecheck ✅, `web` typecheck ✅, `@mp/ui` lint ✅
 **Playwright note (acceptance §4):** this repo has **no web e2e/Playwright harness** — `apps/web` has no test runner and no `@playwright/test` dep, `SCREEN_ROOTS` in the drift check exclude `(vendor)`, and steps 64–66 shipped with zero web spec files. Adding a `.spec.ts` would fail `tsc` (missing test types) — i.e. break the very gate this step must pass — so, consistent with the prior three phase-7 steps, no web test file was added. The e2e coverage item is not satisfiable until a web Playwright project is scaffolded (out of scope for a presentation step).
 
 **Gates:** `pnpm --filter @mp/web typecheck` clean; `pnpm --filter @mp/web lint` clean (design-drift OK); EN/UR key parity verified. Did not run test:unit/e2e/build (controller gates).
+
+## 68 — vendor-redesign-forms — DONE (2026-07-16)
+
+**Type:** FEATURE (branch feature/68-vendor-redesign-forms). Presentation-only, Phase 7 item 5. Spec /specs/68-vendor-redesign-forms.md + CODEREF /specs/64-69-CODEREF.md; visual target /specs/mockups/create-tenant.png.
+
+**Shared form kit (new file `(vendor)/vendor/forms.tsx`):**
+- `FormSection` — grouped card: header (title over caption) above a divider, then a padded gap-stacked field body (the create-tenant.png anatomy). Built on Card + CardTitle/CardDescription tokens.
+- `FormFooter` — sticky full-bleed action bar pinned to the console viewport bottom (`sticky bottom-0`, negative `-mx-4 lg:-mx-8 / -mb-4 lg:-mb-8` to cancel the `.mp-shell-main` 1rem/2rem padding), an Info-icon "* required" note on the start edge, actions on the end.
+- `SlugInput` — one control-shaped box (shared control tokens, `focus-within` ring) with a muted, divider-separated trailing suffix cap (`.marhampatti.com`). Token-only, no hex.
+
+**Create tenant** (`tenants/new/page.tsx`): breadcrumb (Tenants › Create tenant, teal + building icon) + PageHeader; centered max-w-3xl column of five FormSections (Identity / Vertical preset / Branding / Marketplace & commission / Owner); slug field uses SlugInput; palette via SearchSelect (titleized), preset + default-theme via NativeSelect. Sticky FormFooter (ghost Cancel + primary Create, disabled-until-valid). Validation is touched-on-blur/submit only — never on mount; friendly EN field messages (name/slug/owner-email). Added an additive `themeDefault` to the create payload for the Branding "Default theme" select the spec lists; `parseCreateTenant` builds its DTO from known keys only, so the unknown field is ignored server-side — no endpoint-behaviour change (invariant §1).
+
+**Packages** (`packages/page.tsx`): plan list moved onto the shared `DataList` (Plan column = name + code + AI-mode caption + Inactive pill, end-aligned Edit; search; empty state). Editor rebuilt as four FormSections (Plan / Limits / AI entitlement / Pricing & visibility) with Textarea for the ceiling and aligned Switch rows; Save primary / Cancel ghost.
+
+**AI command centre** (`ai/page.tsx`): kept the four-tab bar; the not-configured warning is now a titled `Alert`; the key list + add-key form are FormSections (add-key on a 3-col grid, "Add key" disabled until label+key). Routing matrix and Quality table converted from hand-rolled `<table class="mp-table">` to `DataList` (editable provider-select/model-input cells in routing; tabular-nums metric cells in quality) — satisfies "every table is data-list" (invariant §6). Review queue restyled as bordered cards.
+
+**Status & retention** (`status/page.tsx`): rebuilt as well-spaced FormSections (Post an incident / Incidents / Retention policy). Severity + update-status now render EN labels via new `vendor.status.severityValue.*` / `stateValue.*` / `surfaceValue.*` catalogs (was raw MINOR/MONITORING — invariant §7); severity via NativeSelect; the surface group is an aligned `Checkbox` fieldset grid. Retention is a `DataList` with an inline per-row day Input + Save (edits kept in a `dayEdits` map keyed by data class); data-class codes titleized (`AI_SPEND` → "AI spend"). Removed the buggy `mp-shell` page root (now `mp-stack`).
+
+**i18n:** added keys to BOTH en.json and ur.json (parity gate `packages/i18n/src/parity.spec.ts` requires identical key sets) — `vendor.common.requiredNote`; `vendor.tenants.{identityDesc,presetDesc,brandingDesc,commerceDesc,ownerDesc,slugSuffix,themeDefault,nameRequired,slugRequired,ownerEmailRequired,ownerEmailInvalid}`; `vendor.packages.{editIntro,sectionPlan,sectionLimits,sectionAi,sectionPricing}`; `vendor.ai.{vaultTitle,vaultUnconfiguredTitle,addKeyTitle,routingTitle,routingNote,qualityTitle,actions}`; `vendor.status.{severity,surfaces,newStatus,colActions,sweepDone,severityValue.*,stateValue.*,surfaceValue.*}`. Urdu is real translations for the Urdu blocks; the vendor.ai block stays English to match its existing (untranslated) entries. Vendor group renders EN-only regardless.
+
+**Decisions / notes:**
+- Playwright e2e (acceptance §4 / CODEREF §11): the repo has NO Playwright config, no `test:e2e` script, and steps 65/66/67 shipped without any e2e test — bootstrapping the framework is out of scope for a presentation step. Followed precedent; wrote no e2e. Design self-checked by inspection against create-tenant.png (light + dark) and the token/DataList/Form-kit invariants.
+- No shared-kit changes this step (consumed Card/DataList/Field/Form-controls/SearchSelect/Alert/EmptyState/Breadcrumb as-is) → no non-vendor surface touched (invariant §5).
+
+**Gates:** `pnpm --filter @mp/web typecheck` ✓; `pnpm --filter @mp/web --filter @mp/i18n --filter @mp/ui lint` ✓ (incl. design-drift: no retired .mp-* control atoms); `pnpm --filter @mp/i18n --filter @mp/ui typecheck` ✓. EN↔UR key parity verified (0 missing each way). No hex literals in the changed files. Did not run test:unit/test:e2e/build (controller gates).
+
+**Files:** `apps/web/app/(vendor)/vendor/forms.tsx` (new); `.../tenants/new/page.tsx`; `.../packages/page.tsx`; `.../ai/page.tsx`; `.../status/page.tsx`; `packages/i18n/src/messages/en.json`; `packages/i18n/src/messages/ur.json`; PROGRESS.md; PROGRESS-HISTORY.md.
