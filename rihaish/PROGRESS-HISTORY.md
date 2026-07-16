@@ -3281,3 +3281,50 @@ WORK TYPE: FEATURE (branch feature/71-primitive-reskin)
 - Did NOT run test:unit/e2e/build per CLAUDE.md (controller runs full gates).
 
 WORK TYPE: FEATURE (branch feature/72-datatable-restyle)
+
+## 73 — formkit-restyle — DONE (2026-07-16)
+
+**Type:** FEATURE (branch feature/73-formkit-restyle). Spec /specs/73-formkit-restyle.md.
+
+**What:** Restyle-only pass over the Form kit — bring its appearance onto the
+design-token layer that the step-71 button re-skin established. No RHF/Zod,
+mask, or normalisation logic changed; masks (CNIC, +92 phone, Rs money) keep
+their existing, already-tested behaviour.
+
+**Decisions / changes:**
+- The form-control primitives were still on the stock shadcn defaults
+  (hard-coded `h-10`, `rounded-md`, `border-primary`, no transition) while the
+  buttons had already moved to the tokens. Moved them onto the same seam:
+  - `input.tsx`, `textarea.tsx`, `select.tsx` (SelectTrigger): `h-10`→`h-control`
+    (density-aware via `--control`), `rounded-md`→`rounded` (10px DS radius),
+    added `transition-colors duration-fast`. SelectContent `rounded-md`→`rounded`.
+    Because `--control` resolves to `--control-h-lg` (44px) under
+    `data-density="simple"`, resident/guard/staff shells now clear the AA touch
+    target with no per-call prop — satisfies the ≥44px acceptance criterion.
+  - Added `aria-invalid:border-destructive aria-invalid:ring-destructive/30` to
+    the select trigger and textarea (input already had it) so the invalid state
+    is visible everywhere, not just on inputs.
+  - `checkbox.tsx` / `radio-group.tsx`: neutral `border-border-strong` when
+    unselected, `data-[state=checked]:border-primary`, added
+    `aria-invalid:border-destructive` + `transition-colors duration-fast`.
+  - `switch.tsx`: added `duration-fast` to the track + thumb transitions.
+  - In-popover search inputs of `combobox.tsx` / `multi-select.tsx`: `h-10`→
+    `h-control`; multiselect trigger floor `min-h-10`→`min-h-[var(--control)]`.
+- Combobox / multi-select / date-picker / date-range / time-picker triggers use
+  `<Button variant="outline">`, which already tracks `--control` from step 71 —
+  they inherited the density behaviour for free, no edit needed.
+- Field anatomy (`field.tsx`: label / required `*` / hint / `role="alert"`
+  error + aria-describedby wiring) already matched the DS `.field` anatomy and
+  the spec says keep it — left untouched.
+- Date-range presets (`.range-presets`) named in the DS scope were NOT added:
+  that is a new feature (value-setting + i18n labels), not a re-skin, and no
+  acceptance criterion covers it — out of scope for a restyle step.
+
+**Tests:** added `components/ui/form-controls.test.ts` — a static guard (same
+approach as tokens.test.ts / primitives.test.ts) asserting the re-skinned
+controls track `--control`, leak no raw Tailwind palette class, keep the 2px
+focus ring at offset 2, and show the invalid state. Mask/CNIC/phone/money logic
+tests are unchanged and still cover normalisation.
+
+**Gates:** `pnpm lint` clean, `pnpm typecheck` clean. Did not run unit/e2e/build
+(controller runs full gates).
