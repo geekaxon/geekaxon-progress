@@ -3418,3 +3418,44 @@ tests are unchanged and still cover normalisation.
 **Gates:** workflow-YAML-only change (no TS/JS source, schema, or tests the spec demands) — per CLAUDE.md docs/config-only, lint+typecheck skipped (they do not cover .github/workflows). No unit/e2e/build run (controller runs full gates).
 
 **Notes:** deploy-production.yml still has the placeholder prod path `/REPLACE/with/prod/path` from before — untouched; that is an infra/credentials concern out of scope for this step.
+
+## 78 — webhook-idempotency — DONE (2026-07-16)
+Spec: /specs/78-webhook-idempotency.md (P1). Feature: platform.billing (extends 65).
+
+Problem: the SafePay webhook could double-credit a society. The processed-marker was
+stamped AFTER the money was credited (a crash between → a retry re-credited), the
+`isNew` dedupe-winner flag was computed then discarded (`void isNew`), and there was
+no DB uniqueness guarantee — two near-simultaneous deliveries both read
+`processedAt == null` and both credited. Reconciliation only detected the drift.
+
+Fix (defence in depth — all three from the spec):
+1. DB guarantee — added `@@unique([provider, reference])` to `PlatformPayment`
+   (prisma/schema.prisma) + migration 20260716120000_platform_payment_reference_unique.
+   A second credit of the same provider reference now throws P2002. NULL references
+   (manual cash) stay distinct in Postgres, so the manual path is unaffected.
+2. One transaction — `lib/platform-billing/webhook.ts` now wraps the dedupe-create
+   (PaymentWebhookEvent), the ledger credit (recordPlatformPayment), and the
+   processed-marker stamp in a single `db.$transaction`. Threaded an optional
+   transaction client through `recordPlatformPayment` and its helpers
+   (reconcileInvoiceStatus, maybeRestoreSociety, outstandingMinor, setSocietyStatus,
+   paidByInvoice) via a new `BillingDb` type in service.ts — so the in-tx invoice
+   re-derivation SEES the just-created, not-yet-committed payment (drives it to PAID)
+   and the whole credit commits or rolls back atomically.
+3. Winner-gate — the event insert is the first statement in the tx; a concurrent or
+   replayed delivery loses that insert (or, failing that, the PlatformPayment
+   (provider, reference) insert) with P2002, caught and returned as a 200 duplicate
+   no-op. A fast-path findUnique short-circuits an already-processed replay without
+   opening a transaction and echoes the winner's paymentId.
+
+Tests (lib/platform-billing/safepay-webhook.integration.test.ts): kept the
+sequential replay-credits-once + refund-is-reversal + bad-signature cases; added a
+concurrent case — two `Promise.all` deliveries of the same event yield exactly one
+`credited` + one `duplicate` and a single CLEARED PlatformPayment row. Cleanup now
+takes multiple trackers.
+
+Reconciliation (runSafepayReconciliation) left as the daily backstop — unchanged.
+
+Gates: `pnpm prisma generate`, `pnpm lint`, `pnpm typecheck` all clean. Did not run
+test/build per loop rules (controller runs full gates).
+
+WORK TYPE: FEATURE (branch feature/78-webhook-idempotency)
