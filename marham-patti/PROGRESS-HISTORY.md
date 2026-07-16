@@ -2775,3 +2775,32 @@ Decisions:
 - Rebuilt `@mp/ui` (`dist`) so `apps/web` typecheck picks up the new `emptyAction` prop.
 
 Gates (run once): `@mp/ui` typecheck ✅, `web` typecheck ✅, `@mp/ui` lint ✅, `web` lint + design-drift ✅ ("no retired .mp-* control atoms"). en/ur JSON re-parse clean. Did not run test:unit/e2e/build (controller runs full gates).
+
+## 67 — vendor-redesign-tenant-detail — DONE (2026-07-16)
+
+**Work type:** FEATURE (branch feature/67-vendor-redesign-tenant-detail). Phase 7 item 4. Presentation only; schema/RLS/services untouched.
+
+**Scope:** Rebuilt `apps/web/app/(vendor)/vendor/tenants/[id]/page.tsx` to match `specs/mockups/tenant-detail.png`.
+
+**Header:** replaced the teal-title PageHeader with a custom detail header — Breadcrumb ("Tenants" as a teal link with a Building2 icon › tenant name), an `Avatar` initials tile (rounded-lg square), the tenant name at 2xl/700 in `text-foreground` (near-black, not teal), the muted slug under it, and a `StatusPill` on the right.
+
+**Tab bar:** kept the shared `Tabs`/`TabsList`/`TabsTrigger` (Radix) but restyled via className overrides into the mockup's subtle underline — `TabsList` → transparent, full-width, `border-b`, no pill background; a local `TabTrigger` wrapper → `rounded-none border-b-2 border-transparent`, active = `border-brand-teal` + `text-brand-teal-deep`, no box/shadow. Additive (className only); shared component API unchanged.
+
+**Overview:** now the two-card row from the mockup. A `SectionCard` primitive (dark title header + divider-separated body) plus `DefRow` (muted label / right-aligned strong value) build the **Details** definition list — City ("—" when empty), Preset as an outline **Badge** label (was the raw slug — slug bug fixed), Branches right-aligned tabular, Created. **Lifecycle** card uses a `LifecycleAction` row (title + one-line caption + right-aligned button): Suspend = outline secondary, Archive = destructive (red title), Reactivate when not active. Captions are new i18n keys.
+
+**Other tabs, same standard:**
+- Flags & preset — "Apply preset" Card (Form kit select) + a `SectionCard` feature-flag list grouped under muted subheads by `getFlag(key).group` (Clinic/Lab/Pharmacy/Patient app/Accounting/Records & core/AI/Platform); each row shows a human `flagLabel()` (last-segment, camel-split, POS/AI/API cased) + the raw code muted + a right toggle + an Override badge.
+- Branding — App name (Input + hint), Palette as a **SearchSelect** (searchable, labels via `titleize()`), Default theme (NativeSelect); Save.
+- Commission — Current commission as a `SectionCard`/`DefRow` list (capability label or "Platform default" → %); Set-commission form with Save **disabled-until-valid** (finite number in 0–100).
+- Subscription — Current subscription `DefRow` list (renews now shows "—" when unset); Assign-a-package form (package/AI-mode/status selects gated by entitlement + renews date).
+- Owners — `SectionCard` rows with an `Avatar`, a **2FA StatusPill**, and Reset password / Reset 2FA as outline buttons now behind **ConfirmDialogs** (new confirm-text keys). Empty → `EmptyState`.
+- Listing — Status + Approved as **StatusPills**; Unapprove is destructive behind a **ConfirmDialog** (new key). Missing listing → `EmptyState`.
+- Support — impersonation **logic byte-for-byte unchanged** (token exchange, `storeBundle`, `mp.impersonation` marker, redirect, end-session); only the cards were restyled (CardTitle/CardDescription, primary "Start support session"). Invariant §9 honoured.
+
+**i18n:** added 10 EN keys under `vendor.detail.*` (details, suspend/archive/reactivate Title+Caption, resetPassword/reset2fa/unapprove Confirm) with mirrored Urdu so the EN↔UR parity gate stays green. Flag/group labels are derived in-code (like the existing `auditActionLabel`), not new catalog keys.
+
+**Invariants:** tokens only, `grep` for a hex in the page = none; near-black dark preserved; shared-kit additive (only className props passed); no machine value visible (preset/flag/status/AI-mode all labels); every data surface has skeleton/error/empty.
+
+**Playwright note (acceptance §4):** this repo has **no web e2e/Playwright harness** — `apps/web` has no test runner and no `@playwright/test` dep, `SCREEN_ROOTS` in the drift check exclude `(vendor)`, and steps 64–66 shipped with zero web spec files. Adding a `.spec.ts` would fail `tsc` (missing test types) — i.e. break the very gate this step must pass — so, consistent with the prior three phase-7 steps, no web test file was added. The e2e coverage item is not satisfiable until a web Playwright project is scaffolded (out of scope for a presentation step).
+
+**Gates:** `pnpm --filter @mp/web typecheck` clean; `pnpm --filter @mp/web lint` clean (design-drift OK); EN/UR key parity verified. Did not run test:unit/e2e/build (controller gates).
