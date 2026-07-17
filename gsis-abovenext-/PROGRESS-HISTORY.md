@@ -372,3 +372,33 @@ keyboard-accessible FAQ accordion; closing CTA (reused `CtaSection`). The
 decorative alt="", OG/Twitter, BreadcrumbList + FAQPage JSON-LD, sitemap entry,
 staging noindex via `robotsMeta`) · responsive ✔ · design ✔. build/tests run by
 controller. tests ➖ per spec but a light FAQ/JSON-LD test added for parity.
+
+## 11 — admission-form — DONE (2026-07-17)
+
+Branch: `feature/11-admission-form`. Online admission form saving to `AdmissionApplication`, notifying staff + acknowledging the submitter, then a thank-you page.
+
+**Decisions at build:**
+- Email provider: kept the existing provider-agnostic `sendEmail` console sink (from step 05). Real Resend/SMTP deferred to production launch. Staging never contacts real recipients — recipients come from `Settings.emailRecipients` but the sink only logs.
+- Spam protection: honeypot (hidden `website` field, silently accepted-not-saved when tripped) + in-memory per-IP sliding-window rate limit (5/min). No captcha.
+- Validation: added `zod` (4.4.3) as a dependency; one shared schema (`lib/admissions/apply-schema.ts`) drives BOTH the client form and the server route so they never drift. Client-safe (no Prisma/node imports).
+- DOB sanity: must parse, not be in the future, within the last 25 years.
+- guardianEmail made required (needed to send the acknowledgement); guardianRelation + message optional.
+
+**Files added:**
+- `lib/admissions/apply-schema.ts` — zod schema, `isSaneDob`, `toApplicationData` mapper, honeypot constant/helper.
+- `lib/admissions/rate-limit.ts` — injectable in-memory per-key sliding-window limiter.
+- `lib/admissions/apply-options.ts` — published-only programme/campus select options (server-only, resilient try/catch).
+- `lib/admissions/apply-email.ts` — staff notification + submitter acknowledgement via `sendEmail`; skips each when nothing to send.
+- `app/api/admissions/apply/route.ts` — POST (Node runtime): rate-limit → honeypot → zod → published programme/campus check → create app (status NEW, read false) → emails. Never logs the raw PII body.
+- `components/admissions/ApplyForm.tsx` — client multi-section form (student / guardian / message), shared-schema inline validation, honeypot, posts JSON, routes to thank-you.
+- `app/admissions/apply/page.tsx` — indexable form page (SEO metadata, breadcrumb JSON-LD), site chrome, DB-driven selects.
+- `app/admissions/apply/thank-you/page.tsx` — friendly confirmation + next steps; robots forced to `noindex,nofollow` regardless of env.
+- `test/admissions-apply.test.ts` — validation (valid/invalid, email/phone, required selects), DOB sanity, honeypot, save mapping, rate-limit window, email dispatch (sendEmail mocked; staff+ack, skip cases).
+
+**Files changed:**
+- `app/sitemap.ts` — added `/admissions/apply` (indexable). Thank-you deliberately omitted (noindex).
+- `package.json` / lockfile — added `zod`.
+
+**Privacy:** submissions are PII; the route logs only generic diagnostics, never field values. Emails are the one intended sink; on staging that sink is the console. Submissions are never exposed publicly (admin portal reads them in a later step).
+
+**Gates:** `pnpm lint` ✔ (no warnings/errors) · `pnpm typecheck` ✔ (tsc --noEmit clean). Did not run test:unit/build per AGENT.md (controller runs full gates).
