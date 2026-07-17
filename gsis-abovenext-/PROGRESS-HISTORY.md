@@ -278,3 +278,28 @@ SEO gate:
 Gates: `pnpm lint` ✔ (no warnings/errors), `pnpm typecheck` ✔ (tsc --noEmit clean). Tests skipped per spec (presentation). build/test:e2e left for the controller. Design self-check by inspection: desktop + mobile layouts use existing responsive grid patterns; timeline/counters animate and honour reduced-motion through Reveal/AnimatedCounter.
 
 Files: app/about/page.tsx (new), components/about/{AboutHero,MissionVision,PrincipalMessage,JourneyTimeline}.tsx (new), app/sitemap.ts (edited).
+
+## 08 — campuses — DONE (2026-07-17)
+
+Public, dynamic, slug-based Campuses listing + detail template, driven entirely from the `Campus` model. Branch: feature/08-campuses.
+
+### What was built
+- `lib/campuses/seo.ts` — pure (no Prisma) helpers safe for client/tests: `CampusCard`/`CampusDetail` types, `PUBLISHED_WHERE`, `CAMPUS_ORDER`, `campusBySlugWhere(slug)` (published baked in — single source of truth for the published-only rule), `campusPath`, `campusBreadcrumbItems`, `campusJsonLd` (EducationalOrganization branch node w/ PostalAddress + contacts).
+- `lib/campuses/data.ts` — server-only loaders: `getPublishedCampuses`, `getCampusBySlug` (findFirst, published-scoped → null → 404), `getPublishedCampusSlugs` (generateStaticParams). Try/catch → safe empty like the home loader. Registers a sitemap provider (one entry per published campus, `updatedAt` lastModified).
+- `app/sitemap.ts` — added side-effect import of `@/lib/campuses/data` so the registered provider actually loads (registry pattern from spec 03 needs the module imported).
+- `app/campuses/page.tsx` — listing: breadcrumbs, single `<h1>`, DB-driven premium card grid, CtaSection, chrome (TopBar/Header/Footer/banner/WhatsApp) from getHomeData. `revalidate = 300`.
+- `app/campuses/loading.tsx` — skeleton grid while the server component streams.
+- `app/campuses/[slug]/page.tsx` — detail: `generateStaticParams`, `generateMetadata` (per-page title/description/OG from campus, heroImage as share image), `notFound()` on null. Hero (single h1), summary, paragraph-split description, address+phone+email sidebar, lazy map iframe (mapEmbedUrl), gallery, Apply/Contact CTA, BreadcrumbList + campus JSON-LD. `revalidate = 300` (ISR picks up campuses added later via the portal).
+- Components: `CampusCard`, `CampusesList` (empty state), `Breadcrumbs` (aria-current on last), `CampusHero` (h1), `CampusGallery` (alt text per image).
+- Tests: `components/campuses/__tests__/campuses.test.tsx` — routing/clean-URL, published-filter where-clause, breadcrumb trail, campus JSON-LD, CampusCard render+link, CampusesList render+empty, Breadcrumbs current-page.
+
+### Decisions
+- Single-source published rule in `campusBySlugWhere`/`PUBLISHED_WHERE` (testable without a DB; keeps unpublished unreachable and out of the sitemap).
+- Listing `<h1>` inlined (SectionHeading only emits `<h2>`); card names are `<h2>` so exactly one `<h1>` per page.
+- Reused home `MediaImage` (graceful gradient fallback for not-yet-uploaded placeholder images) and CtaSection.
+- Apply/Contact CTAs link to `/admissions` and `/contact` (later steps).
+
+### Gates
+- `pnpm lint` ✔ (no warnings/errors) · `pnpm typecheck` ✔ (clean).
+- Did not run test:unit/e2e/build per CLAUDE.md (controller runs full gates).
+- SEO self-check: per-page title/description, single h1, alt on all images, OG/Twitter via buildMetadata, BreadcrumbList + EducationalOrganization JSON-LD, sitemap entries for published campuses only, staging noindex via robotsMeta.
