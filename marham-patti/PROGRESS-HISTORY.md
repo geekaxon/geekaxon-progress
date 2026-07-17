@@ -2852,3 +2852,29 @@ VERIFICATION: `pnpm typecheck` green (29/29), `pnpm lint` green (16/16, incl. de
 FILES: apps/web/app/(vendor)/vendor/billing/page.tsx (rewrite); apps/web/app/(vendor)/vendor/console.ts (+formatTrend); apps/web/app/(vendor)/vendor/analytics/page.tsx (trend cell); packages/i18n/src/messages/en.json + ur.json (billing keys).
 
 WORK TYPE: FIX (branch feature/69-vendor-redesign-functional-fixes)
+
+---
+
+## 70 — global-foundation — DONE (2026-07-17)
+
+**Branch:** feature/70-global-foundation. **Type:** FEATURE. **Spec:** /specs/70-global-foundation.md (+ /specs/70-84-CODEREF.md §D). Schema/RLS: none. Flags: none. [LAUNCH-CRITICAL] — Phase 8 item 1; everything later consumes it.
+
+**Goal:** upgrade the shared UI kit + add a small shared util layer so every screen everywhere gets these for free, then migrate the vendor console onto them.
+
+**Shared kit (packages/ui, packages/i18n, packages/shared):**
+- **Searchable select** (`search-select.tsx`): added `groups` (optgroup-style headers, e.g. cities-by-province), keyboard nav (↑/↓/Enter, mouse-hover active sync), `searchable` (default true) and `clearable`; `options` made optional alongside `groups`; filtering works within groups. Public props preserved (additive).
+- **Toast** (`toast.tsx`): added `warning` variant; new imperative bridge `toast.success/error/info/warning(msg, opts?)` (module singleton the mounted ToastProvider registers into) so catch-blocks/handlers raise toasts without the hook; viewport moved to top-right on desktop / bottom-centre on mobile; error toasts use role=alert + assertive. `useToast` hook API unchanged.
+- **Human dates** (new `packages/i18n/src/format-date.ts`, exported from @mp/i18n): `formatDate(input, style, locale?)` with styles full/date/datetime/time/relative, `formatRelative(input, locale?, now?)`, `toDate`. Locale-ready (en-GB now, ur-PK plug-in). Empty/invalid → em-dash. Injectable `now` for deterministic tests.
+- **Confirm + prompt** (`confirm-dialog.tsx`): ConfirmDialog gained tone/icon (info/warning/danger) with matching confirm-button variant (backward-compatible default = danger→destructive); new **PromptDialog** (labelled input + `validate` + inputType) replaces browser prompt(). Radix Dialog gives focus-trap/Esc/backdrop.
+- **Toggle** (`form-controls.tsx` Switch): OFF state now has a bordered, filled track + bordered knob so it reads clearly ON/OFF in both themes.
+- **Headings/breadcrumbs**: new `--mp-heading` token (light = brand-teal-deep; dark = #a5e8e0 light-teal) in styles.css + globals.css + preset `heading` colour; PageHeader h1 and DialogTitle switched from text-brand-teal-deep to text-heading (fixes near-invisible dark-mode titles).
+- **Table kit** (`data-list.tsx`): added `pageSizeOptions` (rows-per-page selector wired to pagination) and `columnsConfigurable` (Columns show/hide popover; per-session persistence via sessionStorage keyed by storageKey/caption; columns opt out with `hideable:false`). Everything from 64 retained. Additive props.
+- **Logging base** (new `packages/shared/src/log-event.ts`, exported from @mp/shared): `LogEventInput{actorId,actorType,action,targetType,targetId,before?,after?,meta?,at?}`, `diffChanges`, `buildAuditEvent` (computes before→after diff, secret-masks whole summary via existing maskAuditSummary), `makeLogEvent(sink)`. Wired into vendor-console.service private `audit()` helper (all tenant mutations) + real before→after on setStatus (state-change fetches prior status).
+
+**Vendor migration (apps/web/app/(vendor), via subagent):** zero native `<select>`/NativeSelect remain (16 sites → SearchSelect; short pickers use searchable=false); zero confirm()/prompt()/alert() (ai key-rotate window.prompt → PromptDialog, password input); on-screen raw dates → formatDate (console.ts relativeTime + fmtDate helpers delegate to @mp/i18n; audit/approvals/tenant-detail/domains/billing); status page form-error banner → toast.error (full-page load-error Alerts left as-is intentionally); every vendor DataList/DataTable opted into pageSizeOptions=[10,25,50,100] + columnsConfigurable (actions columns hideable:false, storageKeys set). No new i18n keys (parity gate untouched — reused existing vendor.* keys).
+
+**Tests:** search-select.spec (filter/empty/select/groups), toast.spec (hook + imperative bridge + dismiss), confirm-dialog.spec (confirm cancel + PromptDialog validate/submit), data-list.spec (+ page-size change, + column hide), i18n/format-date.spec, apps/api/src/audit/log-event.spec (diff/build/mask/sink). Added jsdom stubs (hasPointerCapture/scrollIntoView) to packages/ui/jest.setup.ts for Radix popovers.
+
+**Gates:** `pnpm typecheck` 29/29 green; `pnpm lint` 16/16 green (design-drift clean; one pre-existing unrelated api warning). Did not run test/build/e2e (controller runs full gates).
+
+**Decisions/notes:** rows-per-page uses a token-styled native select inside the shared kit (drift-guard scans (app)/(patient)/(field)/store only, not packages/ui or (vendor); acceptance §1 native-select grep is (vendor)-scoped). ConfirmTone default kept destructive to preserve existing call sites. Grouped-select "cities-by-province" capability proven by unit test; a live vendor city picker lands with spec 80.

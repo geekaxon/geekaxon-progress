@@ -1,15 +1,19 @@
-> ⚠️ **PUBLIC FILE** — NO secrets, hostnames, subdomains, endpoints, credentials, or keys. Placeholders only.
+> ⚠️ **PUBLIC FILE** — no secrets, hostnames, real subdomains, endpoints, or keys. Placeholders only.
 
-# PROGRESS.md — Marham Patti
+# PROGRESS.md — Marham Patti Build Tracker (SHORT)
 
-**Current build-step:** 70 — next module per build order
-**Last completed:** 69 — vendor-redesign-functional-fixes — DONE (2026-07-16)
-**Next:** 70 — see build order in ARCHITECTURE.md.
+> SHORT tracker. Full detail in PROGRESS-HISTORY.md (append-only). Every step ends `[CHECKPOINT]`; only stop is `[HUMAN_REQUIRED]`.
+
+## Current Status
+- **Project:** Marham Patti (multi-tenant white-label healthcare platform · Ganatra launch 1 Aug 2026)
+- **Phase:** 1–69 ✅. Now **PHASE 8 (70–84) — vendor completion + Ganatra launch**; launch-critical first.
+- **Last completed build-step:** **70 — global-foundation** — DONE (2026-07-17).
+- **Next:** **71 — vendor-bugs** — /specs/71-vendor-bugs.md (companion /specs/70-84-CODEREF.md).
+- **Branch state:** through feature/69 merged to staging (live; deploy manual). Phase 8 stacks feature/70-global-foundation onward.
 
 ### Recent steps
+- **70 — global-foundation** — DONE (2026-07-17) — shared kit: searchable selects, toasts, human dates, confirm/prompt dialogs, visible toggle, legible headings, table page-size + column show/hide, logEvent base.
+- **69 — vendor-redesign-functional-fixes** — DONE (2026-07-16) — billing load/token, empty-data "—", missing EN keys, disabled-button affordance; vendor redesign complete.
+- **domain-shift-real-domain** — DONE (2026-07-16) — staging moved to real domain (own folder, DNS-verified wildcard SSL); production prepared (human-gated).
 
-- **69 — vendor-redesign-functional-fixes** — DONE (2026-07-16) — Billing no longer blanks on a failed load; no-data metrics read “—”; invoice status a label; disabled buttons carry the affordance.
-- **68 — vendor-redesign-forms** — DONE (2026-07-16) — Standalone forms rebuilt: grouped section cards, helper text, slug suffix, sticky footer; packages/AI/status on the shared list + Form kit.
-- **67 — vendor-redesign-tenant-detail** — DONE (2026-07-16) — Tenant detail rebuilt: avatar header, underline tabs, Overview as Details + Lifecycle cards; every preset/flag/status a label; support logic untouched.
-
-> Full history: PROGRESS-HISTORY.md · Build order: ARCHITECTURE.md
+> Older steps in PROGRESS-HISTORY.md.
