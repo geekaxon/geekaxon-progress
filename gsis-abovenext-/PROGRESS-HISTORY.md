@@ -537,3 +537,26 @@ Branch: feature/17-admin-applications. Spec: specs/17-admin-applications.md.
 **Privacy.** PII rendered server-side only for authorised admins; audit rows never contain raw PII; export gated on view + audited as a bulk disclosure.
 
 **Gates.** pnpm typecheck ✔ (fixed one enum-narrowing type on the status route). pnpm lint ✔ (switched filter Reset from <a> to next/link). Did not run build/tests per loop rules. No schema.prisma change (permission catalog is code) → no prisma generate needed.
+
+## 18 — admin-inquiries — DONE (2026-07-17)
+
+**Branch:** feature/18-admin-inquiries (FEATURE)
+
+Managed contact inquiries (ContactInquiry model) in the admin portal, mirroring the step-17 applications module for consistency.
+
+**Decisions**
+- Added RBAC permission `inquiries.manage` (status + mark-read) alongside the pre-existing `inquiries.view`. EDITOR keeps view but not manage; ADMIN/SUPER_ADMIN hold both — same split as applications. Export is gated on `inquiries.view` (reading the records), matching the applications export gate. Updated `test/auth-permissions.test.ts` (key-set assertion + new EDITOR-inquiries case).
+- Search spans name/email/subject (case-insensitive OR); filters are status + date range (inclusive whole end-day); paging 20/page. All driven by URL query params (JS-free, shareable); results stream inside a Suspense boundary with a skeleton. Unread rows emphasised (dot + weight + tint) and counted in the summary line.
+- Detail view renders the full record (name/email/phone/subject/message), status pill, unread badge, and a "Reply via email" mailto (subject prefilled `Re: <subject>`). `inquiries.manage` unlocks the status select + mark read/unread client actions (optimistic, POST to audited routes, router.refresh).
+
+**Privacy / accountability**
+- PII read server-side only for authorised admins; never rendered to unauthorised roles (Forbidden). Audit summaries carry id + labels only — never raw PII. Status change / mark-read / CSV export each write an AuditLog row (actions `inquiry.status`, `inquiry.read`, `inquiry.export`). Export route is `no-store`; CSV is RFC-4180 escaped with a UTF-8 BOM.
+
+**Files**
+- lib/admin/inquiries.ts (data + pure helpers: parseFilters/buildWhere/filtersToQuery/toCsv/statusLabel/csvFilename/formatDate)
+- app/admin/inquiries/page.tsx, app/admin/inquiries/[id]/page.tsx
+- components/admin/inquiries/{StatusPill,InquiriesFilters,InquiriesResults,InquiryActions}.tsx
+- app/admin/api/inquiries/[id]/{status,read}/route.ts, app/admin/api/inquiries/export/route.ts
+- lib/auth/permissions.ts (+INQUIRIES_MANAGE), test/admin-inquiries.test.ts, test/auth-permissions.test.ts (updated)
+
+**Gates:** pnpm lint ✔ (no warnings/errors) · pnpm typecheck ✔ (tsc --noEmit clean). Unit tests written (parseFilters/buildWhere/filtersToQuery/toCsv/status/csvFilename + RBAC); controller runs full suite/build.
