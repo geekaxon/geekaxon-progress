@@ -257,3 +257,24 @@ AdmissionProcess, AdmissionsBanner, CampusesSection, CtaSection, GallerySection,
 Hero, MediaImage, ProgrammesSection, SocialIcon, StatsSection,
 TestimonialsSection, TopBar, ValuesSection, WhyChooseSection);
 components/home/__tests__/home.test.tsx (new).
+
+## 07 — about — DONE (2026-07-17)
+
+Built the public About page at `/about` (feature/07-about).
+
+Decisions:
+- Route `app/about/page.tsx`, ISR `revalidate = 300`, matching the homepage chrome (AdmissionsBanner + TopBar + Header + Footer + WhatsAppButton), sourcing Settings (banner/contact/socials/whatsapp) via the existing fail-safe `getHomeData()` loader (settings only used here).
+- Section order: AboutHero (single `<h1>`, story, Est. 1992 chip + overlapping about-1/about-2 images) → MissionVision (paired cards) → ValuesSection (reused from home, val-1..5 clay icons) → PrincipalMessage (placeholder portrait + pull-quote) → JourneyTimeline (new vertical scroll-reveal timeline) → StatsSection (reused, sample counters) → CtaSection (reused, Admissions CTA).
+- New components under `components/about/`: AboutHero, MissionVision, PrincipalMessage, JourneyTimeline. All reuse the step-02 design system (SectionHeading, Card, Reveal, Container, Button, ClayIcon) and the step-02 Reveal for scroll-reveal + reduced-motion.
+- Content discipline: all copy is static marketing sample. Principal name/photo are explicitly labelled placeholders; timeline uses only the established 1992 + "Today" as fixed and marks the rest ("Illustrative milestones — actual dates to be confirmed"); stats strip keeps its existing "sample figures" note. No real facts/stats invented.
+- Placeholder images use stable filenames: /assets/about-1.jpg, /assets/about-2.jpg, /assets/hero.jpg (wash), /assets/principal.jpg (new stable name). All images carry alt text (decorative wash uses alt="").
+
+SEO gate:
+- `buildMetadata({ title: "About Us", description, path: "/about" })` → unique templated title/description, canonical, robots policy (staging noindex via env), OG + Twitter summary_large_image.
+- Single `<h1>` (AboutHero only; SectionHeading renders `<h2>`).
+- BreadcrumbList JSON-LD (Home → About Us) via `breadcrumbJsonLd`.
+- Added `/about` to `app/sitemap.ts` static entries (changeFrequency monthly, priority 0.8).
+
+Gates: `pnpm lint` ✔ (no warnings/errors), `pnpm typecheck` ✔ (tsc --noEmit clean). Tests skipped per spec (presentation). build/test:e2e left for the controller. Design self-check by inspection: desktop + mobile layouts use existing responsive grid patterns; timeline/counters animate and honour reduced-motion through Reveal/AnimatedCounter.
+
+Files: app/about/page.tsx (new), components/about/{AboutHero,MissionVision,PrincipalMessage,JourneyTimeline}.tsx (new), app/sitemap.ts (edited).
