@@ -645,3 +645,21 @@ Staff CRUD for the existing `Testimonial` model, gated on `testimonials.edit`. N
 **Gates:** lint ✔ · typecheck ✔ (build/tests left for controller). Design self-check: matches campuses/gallery admin patterns — PortalShell, Forbidden fallback, plain-language labels, skeleton-free simple list, confirm-on-delete, toast on save, round-avatar preview consistent with the public slider.
 
 WORK TYPE: FEATURE (branch feature/22-admin-testimonials)
+
+## 23 — admin-settings — DONE (2026-07-17)
+
+Built the ADMIN-only site-settings editor at `/admin/settings` (permission `settings.edit`; EDITOR blocked, ADMIN/SUPER_ADMIN allowed). Single `Settings` singleton row edited in place.
+
+**UI:** one form, five tabs — Contact (email, phone, opening hours, address block), Social & WhatsApp (six known platforms + WhatsApp number), Admissions banner (on/off + message), SEO defaults (title, description, OG image) and Email recipients (one per line). Plain-language labels, large controls, inline field validation, single Save with a success toast; a validation failure opens the tab holding the first error.
+
+**Data/logic:** new `lib/admin/settings.ts` holds the pure model — `normalizeSettingsInput` (trim/cap, validate emails, absolute-URL social links, WhatsApp digit count, OG image path/URL; a fully blank save is valid for an unseeded school), `toSettingsData`, `settingsToForm`, `buildSocialLinksJson`/`buildSeoJson` (store only non-empty; social keys match `parseSocialLinks`), `summarizeChangedFields` (names the changed sections for the audit line) and `settingsRevalidateTargets`. `socialLinks`/`seoDefaults` stay JSON so shape can evolve without migration.
+
+**API:** `PUT /admin/api/settings` (Node runtime) — auth + preview + permission gate, normalise → 422 with field errors, snapshot the row for the diff, update with `updatedById` stamped, write an `AuditLog` (`settings.update`, summary of changed sections), then `revalidatePath('/', 'layout')` so footer/top-bar/banner/contact/WhatsApp reflect immediately across the whole tree. The existing `POST /admin/api/settings/banner` (dashboard quick-toggle) is untouched.
+
+**Schema:** added nullable `Settings.contactHours` (spec Contact section lists hours) via migration `20260717140000_settings_contact_hours`; ran `pnpm prisma generate`.
+
+**Tests:** `test/admin-settings.test.ts` — normalisation (valid/blank/invalid email/social/recipient/WhatsApp/OG), serialisation + form round-trip, changed-section summary, revalidate target, and the RBAC mapping (EDITOR blocked, ADMIN/SUPER_ADMIN allowed).
+
+**Gates:** `pnpm prisma generate` ✔ · `pnpm lint` ✔ (no warnings/errors) · `pnpm typecheck` ✔ (clean). Did not run build/unit/e2e per AGENT.md (controller runs full gates).
+
+WORK TYPE: FEATURE (branch feature/23-admin-settings)

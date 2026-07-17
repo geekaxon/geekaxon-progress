@@ -9,19 +9,19 @@
 ## Current Status
 
 - **Project:** GSIS Website & Admin Portal — built & delivered by AboveNext.
-- **Last completed build-step:** `22-admin-testimonials` (2026-07-17)
-- **Current build-step:** `23` (see build order)
+- **Last completed build-step:** `23-admin-settings` (2026-07-17)
+- **Current build-step:** `24` (see build order)
 - **Next-step pointer:** → next spec in `specs/`
-- **Branch state:** last merged `feat/11-admission-form` → `staging`. Next branch: `feature/23-*`.
+- **Branch state:** last merged `feat/11-admission-form` → `staging`. Next branch: `feature/24-*`.
 - **Environment:** working on `staging` only (noindex/robots-disallowed). `main`/production is human-gated (owner Telegram command).
 - **Checkpoint model:** continuous — every step ends with a soft `[CHECKPOINT]`; the single human gate is production launch (step 25).
 - **Build order:** runs `01` → `25`. **NOT complete until `25-production-launch` is DONE.**
 
 ## Recent steps (keep exactly 3 one-liners; newest on top)
 
+- **23 — admin-settings** — DONE (2026-07-17) — Admin-only tabbed editor for contact, socials, WhatsApp, admissions banner, SEO and email recipients; audited, revalidates the whole site.
 - **22 — admin-testimonials** — DONE (2026-07-17) — Staff CRUD for quotes — author, role, photo, reorder, publish; audited, revalidates the homepage slider.
 - **21 — admin-gallery** — DONE (2026-07-17) — Staff CRUD for photo albums — multi-upload with required alt text, cover pick, reorder, publish; audited, revalidates gallery.
-- **20 — admin-curriculum** — DONE (2026-07-17) — Staff CRUD for programmes — subject chips, 3D-icon picker, image upload, reorder, publish; audited, revalidates public pages.
 
 ## Notes / open decisions
 
