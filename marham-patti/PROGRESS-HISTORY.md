@@ -2974,3 +2974,27 @@ TESTS (repo has NO web test framework — no vitest/jest/playwright/test script 
 **Gates:** `pnpm typecheck` green (29/29); `pnpm lint` green (web + api clean; one pre-existing unrelated api warning in doctor-portal.repositories.ts). Did not run test:unit/e2e/build per standing rules. No schema change (uses 73). No RLS weakening — all tenant reads/writes go through runWithTenant seams.
 
 **Decisions:** platform owner may grant any TENANT permission when editing a tenant role (acts above the tenant); staff invites reuse the owner invite mechanism/`/invite` page; created staff get a base Role enum + optional custom role, effective perms unioned server-side (73). Tenant self-service path ([POST-LAUNCH]) not built — shared components are ready for it.
+
+## 75 — subscription-module — DONE (2026-07-17)
+
+Branch: feature/75-subscription-module. WORK TYPE: FEATURE. [LAUNCH-CRITICAL], Phase 8.
+
+**What shipped.** A real subscription lifecycle for every tenant, driven from the console (tenant detail → Subscription tab): Trial → Active → Suspended → Cancelled, plus Trial→Cancelled and the Suspended→Active resume, with the right side-effects at each step (access, billing, notification, audit).
+
+**Design decisions.**
+- Subscription state is the source of truth; each transition MIRRORS onto the tenant's own ACTIVE/SUSPENDED/ARCHIVED status via tenantStatusForSubscription (TRIAL/ACTIVE→ACTIVE, SUSPENDED→SUSPENDED, CANCELLED→ARCHIVED). This reuses the already-shipped suspended surface (host resolver → /host-context → tenant-gate) end to end instead of adding a parallel gate. After a transition the host-resolution cache is flushed so suspend/resume take effect immediately.
+- Login gate: staff login now rejects a non-ACTIVE clinic with a clear "contact MarhamPatti" state and a new TENANT_SUSPENDED login-history outcome, before any credential check — no token is ever issued for a blocked clinic. Resume restores login with no data loss.
+- Guarded state machine lives in @mp/shared (canTransition + the transition graph); illegal moves are rejected server-side. CANCELLED is terminal — reactivation is a fresh assignment/trial, not a transition.
+- Billing follows state: the subscription fee is charged only while ACTIVE (Suspended/Cancelled paused; a free Trial is full access at zero cost — AI metered rate forced to 0 during trial). Commission stays per-booking (§C.4) and is structurally zero while suspended (no login → no bookings).
+- Grandfathered legacy package is excluded from the console assign flow (UI filter + a console-boundary guard); the core service stays permissive so the pre-51 grandfather backfill path is unaffected. Next-invoice shown from package fee + renewal.
+- Cancellation records cancelledAt as the operational-retention clock start (30-day const in @mp/shared) and deletes NOTHING — clinical records are never auto-deleted (§C.8); the actual prune worker is out of this module's scope.
+
+**Schema (additive migration 20260715000000_subscription_lifecycle).** TRIAL added to SubscriptionStatus; TENANT_SUSPENDED added to LoginOutcome; trial_ends_at/suspended_at/cancelled_at added to tenant_subscriptions; new subscription_events history table (LINK table, apply_platform_link_rls — a tenant reads only its own history, platform is the sole append-only writer).
+
+**Code.** apps/api subscriptions: types/repo/service extended with provision/changePackage/applyTransition/setRenewal/listEvents and startTrial/transition/setRenewal + consoleSubscription now returns lifecycle timestamps, next-invoice, and history. Vendor console+controller: new endpoints tenants/:id/subscription/{trial,transition,renewal}; afterLifecycle mirrors tenant.status, invalidates host cache, audits before→after, and best-effort emails the owner (5 new MONEY templates in @mp/notifications). auth.service + TenantRef gained the tenant-status login gate. Web: Subscription tab redesigned — state card (package, state pill, trial countdown, renewal, next invoice, AI), contextual action buttons (Activate/Suspend/Resume/Cancel) with confirm+toast, assign/change-package + start-trial cards (grandfather excluded), and a transitions history list; new EN keys (vendor EN-only); suspended-surface copy now references MarhamPatti (EN+UR).
+
+**Tests.** subscription-lifecycle.spec.ts (state machine legal/illegal, timestamps, events, trial-at-zero-cost, billing pause when suspended); auth.service.spec.ts (suspended clinic blocks login → resume restores); vendor.spec.ts (suspend mirrors tenant.status; resume/cancel; grandfather assign rejected); subscriptions-isolation.spec.ts extended with subscription_events RLS (own-only read, platform-all, tenant write blocked).
+
+**Deviation noted.** The repo has NO Playwright harness (specs 70–74 shipped without one; apps/web has no test runner). Rather than introduce a whole e2e stack unilaterally, the suspend→login-blocked→resume→login-works acceptance and the state machine are covered by vitest at the auth + service + console layers, and the tab render by inspection against the shared kit conventions. If the owner wants a real Playwright suite it should be a dedicated harness step.
+
+**Gates.** pnpm prisma generate, pnpm lint, pnpm typecheck — all green (one pre-existing, unrelated lint warning in doctor-portal.repositories.ts). Did not run test:unit/test:e2e/build per standing rules (controller runs them).
