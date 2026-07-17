@@ -445,3 +445,21 @@ Branch: `feature/11-admission-form`. Online admission form saving to `AdmissionA
 - Email provider `[DECIDE AT BUILD]`: console sink on staging (existing `sendEmail`), no real recipients.
 
 **Gates:** `pnpm lint` ✔ (no warnings/errors), `pnpm typecheck` ✔ (clean). No schema change (ContactInquiry already existed) → no prisma generate. Did not run build/test:unit/test:e2e per token-discipline rules; controller runs full gates. SEO gate satisfied by inspection: title/description via buildMetadata, single `<h1>`, iframe title (alt equivalent), OG/Twitter defaults, BreadcrumbList + ContactPage + Organization JSON-LD, sitemap entry, staging noindex via central robots policy. Privacy: PII never logged raw; staging sink only.
+
+## 14 — legal — DONE (2026-07-17)
+
+**Spec:** specs/14-legal.md. Branch: feature/14-legal. Gates: typecheck ✔, lint ✔ (build/tests run by controller).
+
+**What was built:** A Legal page presenting Privacy Policy and Terms of Service as two DISTINCT, deep-linkable, indexable URLs — `/legal/privacy` and `/legal/terms` — never collapsed to a query-string tab.
+
+**Routing / active tab:** Two thin route files (`app/legal/privacy/page.tsx`, `app/legal/terms/page.tsx`) each set their own `buildMetadata` (unique title/description + canonical) and render a shared server scaffold `components/legal/LegalPage.tsx` with a `tab` prop. The tab strip `components/legal/LegalTabs.tsx` is a client component using `usePathname()` + `resolveLegalTab()` so the active tab is derived from the PATH (works on direct load) and each tab is a Next `<Link>` (client nav swaps URL without full reload, no SEO loss). `revalidate = 300` so Settings-driven chrome refreshes.
+
+**Content:** `lib/legal/content.tsx` holds `LEGAL_TABS`, `resolveLegalTab`, `privacySections(contactEmail)` and `termsSections()`. Most copy is clearly-marked SAMPLE placeholder (amber callout + inline italics) for the client to finalise. The Privacy "Information you provide" / "How we use it" / "Keeping submissions secure" sections describe REAL PII handling and match actual behaviour: admission form fields (studentName, studentDob, programme, campus, guardian name/relation/phone/email, optional address) and contact form fields (name, email, optional phone, subject, message); submissions saved to DB, staff notified by email + acknowledgement to submitter, honeypot + per-visitor rate limiting, admin-only access, no selling, essential-cookies-only (analytics deferred). The configured contact email is surfaced as a real mailto link in "Your rights".
+
+**Design / UX:** clean long-form typography (Fraunces via font-display headings, Inter body), sticky in-page contents nav (`LegalContents`, plain hash anchors, scroll-mt on sections), linked section headings, and a new reusable `components/ui/BackToTop.tsx` (client, appears after scroll, smooth-scroll to top; exported from ui barrel).
+
+**SEO gate:** unique per-URL title/description + canonical via buildMetadata; single `<h1>` per page (the active tab label); `BreadcrumbList` JSON-LD (Home › Legal › <doc>); both URLs added to `app/sitemap.ts` static entries; staging noindex inherited from `robotsMeta()`.
+
+**Cross-link:** `components/ui/Footer.tsx` bottom bar gained a Legal nav linking directly to `/legal/privacy` and `/legal/terms`.
+
+**Tests:** `test/legal.test.tsx` — resolveLegalTab active-tab-from-path (privacy/terms/default), LEGAL_TABS config (two distinct non-query URLs), unique section anchor ids, accurate PII disclosure (renders LegalArticle, asserts admission/contact fields + real behaviour + mailto), and LegalTabs marks the path-matching tab aria-selected with correct hrefs (next/navigation mocked).
