@@ -303,3 +303,32 @@ Public, dynamic, slug-based Campuses listing + detail template, driven entirely 
 - `pnpm lint` ✔ (no warnings/errors) · `pnpm typecheck` ✔ (clean).
 - Did not run test:unit/e2e/build per CLAUDE.md (controller runs full gates).
 - SEO self-check: per-page title/description, single h1, alt on all images, OG/Twitter via buildMetadata, BreadcrumbList + EducationalOrganization JSON-LD, sitemap entries for published campuses only, staging noindex via robotsMeta.
+
+## 09 — curriculum — DONE (2026-07-17)
+
+**Branch:** feature/09-curriculum · WORK TYPE: FEATURE
+
+**Scope:** Public curriculum listing `/curriculum` + dynamic programme detail `/curriculum/[slug]`, driven entirely from the `Programme` model (the 5-stage learning journey). Slug-based clean URLs, no IDs. Mirrors the campuses (spec 08) architecture.
+
+**Files added:**
+- `lib/curriculum/seo.ts` — Prisma-free pure helpers: `ProgrammeCard`/`ProgrammeDetail` types; `PUBLISHED_WHERE`/`PROGRAMME_ORDER`; `programmeBySlugWhere` (publish baked into the where-clause so unknown/unpublished → no row → 404); `programmePath`; `programmeIcon` (honours record `icon`, else positional `prog-1..5`); `programmeBreadcrumbItems`; `programmeJsonLd` (EducationalOccupationalProgram with EducationalOrganization provider, typicalAgeRange, and subjects as `hasCourse` Course items).
+- `lib/curriculum/data.ts` — server-only Prisma loaders: `getPublishedProgrammes` (cards), `getProgrammeBySlug` (detail), `getPublishedProgrammeSlugs` (generateStaticParams); registers a sitemap provider for published programmes. try/catch → safe empty data on DB failure, matching the home/campuses resilience pattern.
+- `components/curriculum/Breadcrumbs.tsx` — visible breadcrumb nav (aria-current on last) matching the BreadcrumbList JSON-LD.
+- `components/curriculum/ProgrammeCard.tsx` — listing card: ClayIcon + name + stage·ageRange + summary + "Explore" pill; whole card links to clean slug URL.
+- `components/curriculum/CurriculumList.tsx` — responsive grid (sm:2 / lg:3) with Reveal stagger + graceful empty state.
+- `components/curriculum/ProgrammeHero.tsx` — detail hero: breadcrumbs, clay icon, single `<h1>`, stage·ageRange, summary + programme image.
+- `app/curriculum/page.tsx` — listing (ISR revalidate 300), buildMetadata, breadcrumb JSON-LD, TopBar/Header/Footer/WhatsApp chrome, CtaSection.
+- `app/curriculum/[slug]/page.tsx` — detail: generateStaticParams from published slugs, generateMetadata (title/desc/OG image from record), notFound() on null, ProgrammeHero + "What to expect" description paragraphs + subjects sidebar + Apply/Contact CTAs + CtaSection; breadcrumb + EducationalOccupationalProgram JSON-LD.
+- `app/curriculum/loading.tsx` — skeleton mirroring the 3-col card grid.
+- `components/curriculum/__tests__/curriculum.test.tsx` — routing helpers, published-filter where-clause, icon resolver (explicit + positional fallback + wrap), JSON-LD shape, ProgrammeCard clean-URL link, CurriculumList render + empty state, Breadcrumbs aria-current.
+
+**Files edited:**
+- `app/sitemap.ts` — side-effect import `@/lib/curriculum/data` to register its sitemap provider; added static `/curriculum` entry (priority 0.8).
+
+**Decisions:**
+- Clay icon: `programmeIcon(icon, index)` prefers the record's `icon` key and falls back to the positional `prog-1..5` set, so the listing always shows a distinct icon even before editors set one. Detail uses the record icon with `prog-1` positional default (no index at slug lookup).
+- "What to expect" maps to the `Programme.description` field (split into paragraphs on blank lines); subjects render as a sidebar of pills; no new schema fields (spec adds none).
+- JSON-LD: EducationalOccupationalProgram (+ Course per subject via `hasCourse`) as the spec's "where sensible" structured data; BreadcrumbList emitted on both listing and detail.
+- No schema change → no `pnpm prisma generate` needed.
+
+**Gates:** lint ✔ (No ESLint warnings or errors) · typecheck ✔ (tsc --noEmit clean). Did not run test:unit/e2e/build per CLAUDE.md (controller runs full gates). SEO: per-page title/description, single h1, alt on icons/images, OG/Twitter via buildMetadata, BreadcrumbList + EducationalOccupationalProgram JSON-LD, sitemap entries, staging noindex via robotsMeta. Responsive grid + skeleton loading state.
