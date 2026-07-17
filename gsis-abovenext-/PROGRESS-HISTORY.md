@@ -119,3 +119,53 @@ Gates: typecheck PASS, lint PASS (no warnings/errors). Did not run test:unit/bui
 per CLAUDE.md (controller runs full gates).
 
 WORK TYPE: FEATURE (branch feature/03-seo-core)
+
+## 04 — content-model — DONE (2026-07-17)
+
+**Branch:** feature/04-content-model (WORK TYPE: FEATURE)
+
+**What:** Authored the complete Prisma data model that every downstream content,
+submission, and admin step depends on, plus the initial migration and a
+sample-only seed.
+
+**Models / schema (prisma/schema.prisma):**
+- Content: Campus, Programme, GalleryAlbum + GalleryImage (cascade), Testimonial.
+- Settings: effectively single-row via fixed PK default `"singleton"`; Json
+  socialLinks + seoDefaults, String[] addressLines/emailRecipients, banner flags,
+  updatedById FK -> User (SetNull).
+- PII (not exposed by any route yet): AdmissionApplication (FKs to Programme +
+  Campus, both SetNull), ContactInquiry.
+- Users/audit: User (unique email, passwordHash, Role enum, lock/lastLogin
+  fields), AuditLog (actorId FK -> User SetNull, entity/entityId index).
+- Enums: Role (SUPER_ADMIN/ADMIN/EDITOR), ApplicationStatus
+  (NEW/REVIEWED/CONTACTED/CLOSED), InquiryStatus (NEW/REPLIED/CLOSED).
+- Indexes on (published, order) for content collections, (status, createdAt) for
+  submissions, audit lookups.
+
+**Migration:** Hand-authored prisma/migrations/20260717120000_init_content_model/
+migration.sql (no DB reachable in the build env) + migration_lock.toml. SQL
+matches the schema so `prisma migrate deploy` applies clean on staging and the
+generated client matches the DB. First migration in the repo.
+
+**Seed:** Split into prisma/seed-data.ts (PURE sample data, no client/secrets —
+2 campuses, 5 programmes Starters/Movers/Flyers/Anchors/High School Programme,
+2 gallery albums w/ images, 3 testimonials, single Settings row with banner
+"Admissions Open 2026-27") and prisma/seed.ts (idempotent upserts; delete+recreate
+for gallery images/testimonials that lack a natural key). Admin user created from
+env only (SEED_ADMIN_EMAIL/PASSWORD/NAME); password hashed with Node scrypt in
+`scrypt$<saltHex>$<hashHex>` format for the step-05 auth layer to verify. No real
+PII in seed — all copy marked sample placeholder, contact emails @example.com.
+
+**Wiring:** package.json gains `prisma.seed` = `tsx prisma/seed.ts`, a
+`prisma:seed` script, and tsx devDependency. .env.example gains SEED_ADMIN_*
+placeholders (commented, skips admin if unset). Prisma warns package.json#prisma
+is deprecated in favour of prisma.config.ts (v7) — still valid in v6.
+
+**Tests:** test/seed.test.ts asserts seed integrity without a DB — campus/
+programme/testimonial counts, unique human-readable slugs, banner enabled, images
+present+ordered, and the "no real PII (@example.com only)" rule.
+
+**Gates:** `prisma generate` OK (client v6.19). `pnpm lint` clean. `pnpm typecheck`
+clean. Did not run build/test:unit/e2e per build-loop rules (controller runs full
+gates). Privacy: PII models defined, not exposed by any route. Env: only
+placeholders committed.
