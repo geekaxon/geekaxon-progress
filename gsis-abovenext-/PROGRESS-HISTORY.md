@@ -519,3 +519,21 @@ The `/admin` landing page after login, rebuilt from the step-05 placeholder into
 ### Files
 - Added: `lib/admin/dashboard.ts`, `components/admin/{PortalShell,AdminIcon,StatCard,BannerToggle,DashboardStats,RecentActivity,QuickActions}.tsx`, `app/admin/api/settings/banner/route.ts`, `test/admin-dashboard.test.ts`.
 - Changed: `app/admin/page.tsx` (placeholder → dashboard), `PROGRESS.md`.
+
+## 17 — admin-applications — DONE (2026-07-17)
+
+Branch: feature/17-admin-applications. Spec: specs/17-admin-applications.md.
+
+**Scope.** Admin management of admission applications: filtered/searchable list, PII detail view, status changes, mark read/unread, and CSV export — every mutation and the export audited.
+
+**Permissions.** Added `applications.manage` to the RBAC catalog (lib/auth/permissions.ts) alongside the existing `applications.view`. View = read list/detail/export (EDITOR + ADMIN/SUPER_ADMIN). Manage = status change + read toggle (ADMIN/SUPER_ADMIN only; EDITOR is content-only and stays read-only on applications). Reconcile loop upserts the new Permission row on boot automatically. Updated test/auth-permissions.test.ts (key list + EDITOR view-not-manage case).
+
+**Data + pure helpers** — lib/admin/applications.ts. Status metadata/pills, `parseFilters` (validates status/date/page from raw URL params, drops bad input), `buildWhere` (name contains-insensitive, status/programme/campus, inclusive whole-day date range), `filtersToQuery`, paginated `getApplicationsPage` (rows + total + unread counts, PAGE_SIZE 20), `getApplication` detail, `getFilterOptions` (all programmes/campuses), `getApplicationsForExport` + RFC-4180 `toCsv` (BOM, quote/escape) + `csvFilename`. Pure helpers unit-tested in test/admin-applications.test.ts (filter parse/validation, where-building incl. date bounds, CSV escaping, filename).
+
+**UI.** /admin/applications list = URL-driven GET filter form (JS-free, shareable), streamed results inside Suspense with skeleton; desktop table + mobile cards; unread rows emphasised (amber dot + tint + bold); summary line with unread count; prev/next pagination; Export CSV button carrying current filters. /admin/applications/[id] detail = student + guardian + message cards, DOB, programme/campus, tel/mailto links, "Reply via email" mailto to guardian; sidebar Manage panel. Client ApplicationActions (status select + mark read/unread) shown only to managers; view-only roles see a read-only status line. New components under components/admin/applications/.
+
+**API routes (Node runtime).** POST /admin/api/applications/[id]/status (manage; validates enum; audits old→new), POST .../[id]/read (manage; audits read/unread), GET /admin/api/applications/export (view; filtered CSV download, audits row count). All reject preview + missing permission; audit summaries carry id + labels only, never applicant PII.
+
+**Privacy.** PII rendered server-side only for authorised admins; audit rows never contain raw PII; export gated on view + audited as a bulk disclosure.
+
+**Gates.** pnpm typecheck ✔ (fixed one enum-narrowing type on the status route). pnpm lint ✔ (switched filter Reset from <a> to next/link). Did not run build/tests per loop rules. No schema.prisma change (permission catalog is code) → no prisma generate needed.

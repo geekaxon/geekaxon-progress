@@ -9,19 +9,19 @@
 ## Current Status
 
 - **Project:** GSIS Website & Admin Portal — built & delivered by AboveNext.
-- **Last completed build-step:** `16-admin-dashboard` (2026-07-17)
-- **Current build-step:** `17` (see build order)
+- **Last completed build-step:** `17-admin-applications` (2026-07-17)
+- **Current build-step:** `18` (see build order)
 - **Next-step pointer:** → next spec in `specs/`
-- **Branch state:** last merged `feat/11-admission-form` → `staging`. Next branch: `feature/16-*`.
+- **Branch state:** last merged `feat/11-admission-form` → `staging`. Next branch: `feature/18-*`.
 - **Environment:** working on `staging` only (noindex/robots-disallowed). `main`/production is human-gated (owner Telegram command).
 - **Checkpoint model:** continuous — every step ends with a soft `[CHECKPOINT]`; the single human gate is production launch (step 25).
 - **Build order:** runs `01` → `25`. **NOT complete until `25-production-launch` is DONE.**
 
 ## Recent steps (keep exactly 3 one-liners; newest on top)
 
+- **17 — admin-applications** — DONE (2026-07-17) — Applications list with URL-driven search/filter/paging, PII detail with audited status and read toggles, and an access-controlled CSV export.
 - **16 — admin-dashboard** — DONE (2026-07-17) — Portal shell with role-filtered nav, streaming counter cards, merged activity feed, quick actions and a live admissions-banner toggle.
 - **15 — supporting-pages** — DONE (2026-07-17) — Shared branded thank-you template, on-design noindex 404 and error boundary, plus a full-site SEO and broken-link sweep.
-- **14 — legal** — DONE (2026-07-17) — Privacy and Terms as two distinct indexable URLs with a path-driven tabbed shell, in-page anchors, back-to-top, accurate PII disclosure, footer links, sitemap and full SEO gate.
 
 ## Notes / open decisions
 
