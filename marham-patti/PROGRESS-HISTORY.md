@@ -3125,3 +3125,31 @@ Three parts, all inside the vendor console tenant-detail screen `apps/web/app/(v
 
 ### Gates
 `pnpm prisma generate` ✓. `pnpm typecheck` ✓ (29/29). `pnpm lint` ✓ (fixed an unused-var; only a pre-existing doctor-portal warning remains, unrelated). `pnpm test:unit`/`build`/`e2e` left for the controller.
+
+## 80 — tenants-list-enhancements — DONE (2026-07-17)
+
+**Branch:** feature/80-tenants-list-enhancements. **Spec:** specs/80-tenants-list-enhancements.md (+ 70-84-CODEREF). Schema: none. Work type: FEATURE.
+
+**Scope built (launch-critical first):**
+- Logo-or-initials Name cell (list + card): new `NameTile` renders the tenant's branding logo on a white tile (border, object-contain, small pad) when a `logoKey` is present (77), else the existing brand-tint initials tile.
+- Commission column: right-aligned, tabular-nums, formatted via new `commissionLabel()` (fraction → trimmed `%`). Shows the tenant DEFAULT commission (tenant capability=null override → platform default → hard `DEFAULT_COMMISSION_PCT` floor); per-capability overrides deliberately NOT summarised here (they live in the Commission tab, §C.4).
+- Whitelabel indicator: hideable column + card badge (Badge variant primary) from the tenant's current package whitelabel capability.
+- Column show/hide + rows-per-page: already 70's kit; kept `columnsConfigurable` + `pageSizeOptions`, pinned the Name column (`hideable:false`).
+- City picker: new `apps/web/lib/pk-cities.ts` (`PK_CITY_GROUPS` province→cities + `PK_CITY_SET`), shape matches `@mp/ui` SelectOptionGroup. Wired as a grouped clearable `SearchSelect` replacing the free-text city Input in Create-Tenant, and as a Tenants toolbar filter (client-side by exact city; the filter only offers provinces/cities actually in use so it never returns an empty list). `city` still stored as its plain name (value === label) so pre-picker tenants stay compatible.
+
+**API enrichment:** `ConsoleTenantRow` (api vendor.types.ts + web console.ts) gains `logoKey`, `commissionPct`, `whitelabel`. `VendorRepository.listTenants` batch-reads BrandingProfile.logoKey for all listed tenant ids in ONE query (no per-row N+1; BrandingProfile has no Tenant relation field so it's fetched by id set). `VendorConsoleService.listTenants` fills preset (existing per-tenant scoped read) + `commissionPct` (via new exported `defaultCommissionPct` helper over `commission.listFor`) + `whitelabel` (via `subscriptions.tenantHasWhitelabel`), all per-tenant scoped — no cross-tenant join. `tenantDetail` (extends the row shape) also emits the three fields. `__fakes__` list updated.
+
+**i18n:** EN-only vendor keys added under vendor.tenants: commission, whitelabel, whitelabelYes/No, cityFilter, cityAll, cityPlaceholder. No UR (vendor is EN-only per CODEREF §B).
+
+**Tests:** `apps/api/src/vendor/tenants-list-enrichment.spec.ts` covers `defaultCommissionPct` precedence (tenant default > platform default > floor, capability-override isolation, inactive-row skip).
+
+**Post-launch parts intentionally light:** advanced/specific-field search (basic search already covers name/slug/city) and deep card-view redesign left for a later polish pass; the launch-critical logo/commission/columns/city-picker are complete.
+
+**Gates:** `pnpm typecheck` PASS (all 29 tasks). `pnpm lint` PASS (0 errors; 1 pre-existing unrelated warning in doctor-portal.repositories.ts; web design-drift clean). Did not run build/test:unit/test:e2e per standing rules — controller runs full gates.
+
+**Notes/decisions:** logoKey used directly as an `<img src>` (established convention, cf. approvals preview). Badge has no `teal` variant → used `primary` (brand teal fill) for the whitelabel badge. `bg-white` on the logo tile is spec-mandated ("white bg, contain") and passes design-drift.
+
+## 80 — tenants-list-enhancements — gate fix (2026-07-17)
+Fixed the failing `pnpm test:unit` gate. Root cause was NOT a DB/env issue: build-step 80 added a `subscriptions.tenantHasWhitelabel(t.id)` call inside `VendorConsoleService.listTenants`, but the in-memory `StubSubscriptionService` in apps/api/src/vendor/__fakes__.ts had no such method, so vendor.spec.ts failed with `tenantHasWhitelabel is not a function`. Added `whitelabelTenants: Set<string>` + `async tenantHasWhitelabel()` to the stub (mirrors the real service: no subscription ⇒ false).
+Verified boot-time reconciles are already DB-less-safe for the unit suite: VendorModule.onApplicationBootstrap and SubscriptionsModule.onApplicationBootstrap both wrap onBoot() in try/catch, and PlatformPermissionService.onBoot() is itself crash-proof (logs, never throws). No unit spec bootstraps AppModule — all full-app bootstraps live in *.e2e.spec.ts (test:e2e, not test:unit) — so the unit suite never requires a live Postgres. No boot-hook changes were needed.
+Gates: pnpm lint PASS, pnpm typecheck PASS, pnpm test:unit PASS (109 suites, 1231 tests, no live DB).
