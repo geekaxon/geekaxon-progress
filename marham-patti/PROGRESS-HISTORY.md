@@ -3038,3 +3038,29 @@ Branch: feature/75-subscription-module. WORK TYPE: FEATURE. [LAUNCH-CRITICAL], P
 - "Playwright" (spec §4/§6): this repo has NO Playwright/browser harness and no apps/web test runner; the controller gates are lint→typecheck→test:unit→build. Proof is therefore the API + DB-integration + UI-unit specs above (the strongest runnable evidence), plus the pure countdown maths — not a browser goto.
 
 **Gates.** pnpm prisma generate ✓; pnpm typecheck ✓ (29/29); pnpm lint ✓ (0 errors; the single warning is a pre-existing unused-disable in doctor-portal, untouched). Did NOT run test:unit/build/e2e (controller runs them).
+
+## 77 — whitelabel-core — DONE (2026-07-17)
+
+**Branch:** feature/77-whitelabel-core. **Type:** FEATURE. [LAUNCH-CRITICAL] (§C.7 — Ganatra brands on launch).
+
+**What shipped.** Whitelabel is now a PER-PACKAGE capability (§C.7), not a global flag.
+- **Schema (additive):** `SubscriptionPackage.whitelabel Boolean @default(false)` + migration `20260717100000_package_whitelabel`. Seed premium + grandfather packages carry whitelabel=true (top sold tier brands; §C.9 grandfather kept legacy). `pnpm prisma generate` run.
+- **Capability resolution:** `SubscriptionService.tenantHasWhitelabel(tenantId)` + `packageHasWhitelabel(packageId)`. Surfaced on the tenant-facing `SubscriptionView.package.whitelabel`, the console `ConsoleSubscriptionView.whitelabel`, and `PackageRow`/`PackageInput` (types/dto/repo wired end-to-end).
+- **Package create/edit:** a whitelabel switch (71's switch style) in the vendor Packages form.
+- **Vendor tenant-detail Branding tab:** gated by the tenant's package whitelabel. Included → app name, palette, theme + custom PRIMARY/ACCENT colour pickers with the AA-contrast guard and a SCOPED live-preview card (candidate `--brand-*` vars applied to the preview container only — never the vendor document, so no cross-surface bleed, AC4). Not included → read-only branding + an upsell, no editor. The `/vendor/tenants/:id/branding` endpoint accepts `paletteOverrides` (validated known-key→hex) and REJECTS it server-side (403) when the package lacks whitelabel.
+- **Create-Tenant:** a package selector; when the chosen package includes whitelabel the advanced colour fields appear (AC2), sent as `paletteOverrides`. The endpoint assigns the chosen subscription on provisioning and applies the colours only on a whitelabel package.
+- **Tenant self-serve (Settings → Brand):** the premium slots (custom accent, logo upload, NEW app-icon upload) are gated by whitelabel (fetched from `/subscription/me`); otherwise an upsell shows. App icon = a new `appIcon` asset variant + a new AUTO `appIcon` change type publishing `iconKey`; upload reuses 59's SVG sanitisation + validation.
+- **Rendering (AC3):** unchanged path — BrandProvider reads `/brand/me` (resolved colours via cssVars, app name in title, `identity.icon` = iconKey). Non-whitelabel tenants have no custom overrides → MarhamPatti defaults.
+- **i18n:** vendor keys EN-only in en.json but MIRRORED into ur.json (the parity gate compares full key sets); settings.personalization keys added EN+UR. Parity verified (2716=2716).
+
+**Tests (repo uses Vitest, not Playwright — no PW harness exists here):**
+- `subscriptions/package-whitelabel.spec.ts` — parse default/explicit, seed premium=true/basic=false, tenant resolution + both views expose whitelabel.
+- `vendor/whitelabel-dto.spec.ts` — parseSetBranding colour-patch validation (known keys, hex) + parseCreateTenant package/colours pass-through.
+- `personalization/personalization-helpers.spec.ts` — added the appIcon variant + AUTO-change assertions.
+
+**Decisions / deferrals.**
+- VENDOR-side logo/app-icon UPLOAD is NOT wired: PersonalizationModule imports VendorModule, so routing a vendor upload through PersonalizationService would be a circular dep. Vendor tenant-detail handles name/palette/theme/custom-colours; logo + app-icon uploads are self-served by the tenant (existing infra). Documented, not a blocker for launch (owner brands Ganatra's colours+name from the console; the tenant uploads marks).
+- The self-serve asset upload endpoint keeps its existing `@RequireFeature(platform.fullPersonalization)` guard; the whitelabel PACKAGE capability gates the editor UI + the vendor colour write. The two premium gates run in parallel (documented) rather than remapping the flag→package.
+- Per-tenant PWA manifest wiring (app icon in the manifest) is deferred to the tenant-operations block; the icon is stored + resolvable via `/brand/me` today.
+
+**Gates:** `pnpm prisma generate` ✓, `pnpm lint` ✓ (0 errors; 1 pre-existing unrelated warning in doctor-portal), `pnpm typecheck` ✓ (29/29). EN↔UR parity ✓. Did not run test:unit/e2e/build per standing rules (controller runs them).
