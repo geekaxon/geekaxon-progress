@@ -589,3 +589,17 @@ Managed contact inquiries (ContactInquiry model) in the admin portal, mirroring 
 **Accountability / safety:** all mutations require `campuses.edit` (401 unauth, 403 preview or missing perm); unpublished campuses stay excluded from the public site via the existing `PUBLISHED_WHERE` guard in `lib/campuses/data.ts`; slug stays unique + URL-safe.
 
 **Gates:** `pnpm lint` ✔ (no warnings/errors) · `pnpm typecheck` ✔ (tsc --noEmit clean). Did not run build/tests per build-loop rules (controller runs full gates). Unit tests written for the pure helpers per the established admin-module testing pattern.
+
+## 20 — admin-curriculum — DONE (2026-07-17)
+
+Staff CRUD for the `Programme` model at `/admin/curriculum`, gated on `curriculum.edit`, mirroring the campuses module (step 19). Builds on existing permissions and nav entries (already scaffolded).
+
+Decisions:
+- Pure lib `lib/admin/curriculum.ts`: `slugify`/`isValidSlug` (URL-safe, 80-char cap), `isValidIconKey` (only `prog-1..5` or blank), `normalizeProgrammeInput` (name required; slug auto-derived from name when blank; subjects coerced from array or comma/newline string; unknown icon rejected), `curriculumPublicPaths` (`/curriculum` + detail), plus server-only Prisma helpers (list incl. drafts, edit fetch, slug-taken, next-order, neighbour-for reorder, toProgrammeData).
+- API routes (Node runtime, all `curriculum.edit`, preview users blocked, audited, revalidate public ISR): POST create (append order), PATCH/DELETE `[id]` (rename revalidates old+new slug), `[id]/publish` toggle, `reorder` (transactional order swap, no-op at ends), `slug` inline check, `upload` (single image → `public/assets/curriculum/`, 5 MB, jpg/png/webp/avif/gif; R2 deferred to step 21).
+- UI: list page with thumbnail (image, else icon, else placeholder), Draft/Published pill, per-row publish/reorder/edit/delete-with-confirm; shared `ProgrammeForm` (auto-slug with debounced availability check, stage/age/summary/description, `SubjectsField` chip editor add-on-Enter/comma with dedupe + backspace-remove, `IconPicker` tiles for prog-1..5 + Default, single-image `ImageField` upload/preview, publish toggle, toasts, inline field errors); new + edit pages (edit 404s on unknown id).
+- Audit actions: programme.create/update/publish/unpublish/reorder/delete/upload on entity `Programme`.
+
+Files: lib/admin/curriculum.ts; app/admin/api/curriculum/{route,[id]/route,[id]/publish/route,reorder/route,slug/route,upload/route}.ts; app/admin/curriculum/{page,new/page,[id]/page}.tsx; components/admin/curriculum/{ProgrammeForm,ProgrammeRowActions,SubjectsField,IconPicker,ImageField}.tsx; test/admin-curriculum.test.ts.
+
+Gates: lint ✔ (no warnings/errors), typecheck ✔ (tsc --noEmit clean). No schema change (Programme model + permissions + nav pre-existed). Tests written for slug/icon/normalize/subjects/publicPaths; full suite run by controller.
