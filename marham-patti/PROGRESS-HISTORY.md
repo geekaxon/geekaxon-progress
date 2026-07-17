@@ -2947,3 +2947,30 @@ TESTS (repo has NO web test framework — no vitest/jest/playwright/test script 
 **Acceptance:** 1 catalog split platform/tenant ✓; 2 roles scoped, tenant RLS proven ✓; 3 system roles seeded/protected/clonable ✓; 4 union + can()/<Can> + endpoint reject ✓; 5 idempotent, Ganatra roles available ✓; 6 additive migration + RLS helpers + fail-closed test ✓; 7 server 403 + client control-hiding (`<Can>`) — note apps/web has NO Playwright/test harness yet (per repo state), so the client gate is a pure predicate + the server 403 is the enforceable proof; a web e2e harness is a separate infra concern.
 
 **Gates:** `pnpm prisma generate` ✓, `pnpm typecheck` ✓ (29/29), `pnpm lint` ✓ (0 errors; 1 pre-existing unrelated doctor-portal warning). Did NOT run test:unit/e2e/build (controller runs full gates).
+
+## 74 — rbac-users-management — DONE (2026-07-17)
+
+**Spec:** /specs/74-rbac-users-management.md ([LAUNCH-CRITICAL], Phase 8 item 5). Presentation over the 73 engine — vendor console screens to manage vendor console users/roles AND each tenant's staff/roles from tenant detail, tenant-scoped via RLS, all audited.
+
+**API (apps/api/src/vendor):**
+- `platform-rbac.controller.ts` — extended the console's own RBAC surface with write endpoints: POST/PUT/DELETE `/vendor/rbac/roles` (create/clone/edit/delete custom console roles) + GET/POST/DELETE `/vendor/rbac/users/:id/roles` (per-admin custom-role assignment). All `admins.manage`-gated, escalation-bounded by the actor's own keys, audited to the vendor stream (controller now injects VendorRepository).
+- `vendor-team.controller.ts` + `vendor-team.service.ts` (new) — the per-tenant Team surface under `/vendor/tenants/:tenantId/team/*`: list/create/clone/edit/delete the tenant's roles (delegates to the tenant PermissionService, RLS-scoped) and list/create/enable-disable/password-reset/2fa-reset tenant staff users + assign/unassign custom roles. Reads gated by `tenants.view`, writes by `tenants.manage`. Platform-owner acts above the tenant → escalation `actorKeys` = full TENANT vocabulary. Every mutation audited with targetTenantId via buildAuditEvent (logEvent).
+- `vendor-team.dto.ts` (new) — hand validation; TENANT_STAFF_ROLES whitelist (excludes SUPER_ADMIN/PATIENT/RIDER/PHLEBOTOMIST), create-user (invite-or-password), status, roleId.
+- `vendor.repositories.ts` — added tenant-scoped user CRUD (listTenantUsers, findTenantUserByEmail, createTenantUser, setTenantUserStatus, clearTenantUserPassword, resetTenantUser2fa); setUserPassword now also clears mustResetPassword.
+- `vendor-admin.service.ts` — relaxed acceptInvite to any password-less tenant user (was TENANT_OWNER-only), so staff invites reuse the existing `/invite` flow (single-use guard unchanged).
+- `vendor.types.ts` — TenantUserRow. `vendor.module.ts` — wired VendorTeamController/Service.
+
+**Web (apps/web/app/(vendor)/vendor):**
+- `_rbac/RoleManager.tsx` (reusable) — role list + create/clone/edit(permission tree of grouped 70 switches)/delete; drives both vendor (NON_TENANT) and tenant (TENANT) namespaces via basePath+scope.
+- `_rbac/TeamUsers.tsx` (reusable) — tenant staff DataTable + create dialog (base role + optional custom role, invite link or temp password), enable/disable, reset password (shows absolute invite link)/2FA, manage assigned roles. All toasts + confirm dialogs.
+- `_rbac/rbac-shared.ts` — RbacRole type + groupedPermissions() (catalog from @mp/shared, grouped by module).
+- `admins/page.tsx` — reworked into Tabs: Team (roster + per-admin console-role assignment dialog) + Roles (RoleManager).
+- `tenants/[id]/page.tsx` — new "Team" tab (inner Users/Roles) between Subscription and Owners.
+- `lib/vendor-api.ts` — added delJsonV.
+- i18n: added vendor.rbac / vendor.team / vendor.staffRole + vendor.detail.tabTeam + vendor.admins.tab* to en.json AND ur.json (parity gate requires identical key sets even for the EN-only vendor group).
+
+**Tests:** `vendor-team.service.spec.ts` (new) — role/user tenant scoping (A vs B isolation), absolute invite link, duplicate-email conflict, unknown-tenant 404, disable/enable audit trail, password reset. `platform-rbac.e2e.spec.ts` — added staff-blocked create (403) + owner create→edit→assign→list flow; provided VendorRepository stub for the new audit path. `__fakes__.ts` — tenant-team fake methods.
+
+**Gates:** `pnpm typecheck` green (29/29); `pnpm lint` green (web + api clean; one pre-existing unrelated api warning in doctor-portal.repositories.ts). Did not run test:unit/e2e/build per standing rules. No schema change (uses 73). No RLS weakening — all tenant reads/writes go through runWithTenant seams.
+
+**Decisions:** platform owner may grant any TENANT permission when editing a tenant role (acts above the tenant); staff invites reuse the owner invite mechanism/`/invite` page; created staff get a base Role enum + optional custom role, effective perms unioned server-side (73). Tenant self-service path ([POST-LAUNCH]) not built — shared components are ready for it.
