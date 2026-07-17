@@ -199,3 +199,61 @@ Secured the `/admin` portal per specs/05-admin-auth.md. WORK TYPE: FEATURE (bran
 **Gates**: `pnpm prisma generate` ✔ · `pnpm lint` ✔ (no warnings) · `pnpm typecheck` ✔. Did not run build/test:unit/e2e per CLAUDE.md (controller runs full gates).
 
 **Decisions**: no external auth/JWT/bcrypt deps — Web Crypto + Node scrypt keep the bundle lean and Edge-compatible. Refresh rotation is stateless (no session store) — acceptable for this admin surface. Preview viewer granted ADMIN-level READ (mutations are POST and structurally blocked) so staging screenshots capture all screens; staging holds only sample data.
+
+## 06 — home — DONE (2026-07-17)
+
+First public page. Server-component homepage with ISR (`revalidate = 300`).
+
+Data wiring: new `lib/home/data.ts#getHomeData()` batches published campuses,
+programmes, gallery albums, testimonials and the Settings singleton in one
+`Promise.all`, mapped to view models. Wrapped in try/catch that returns safe
+defaults (empty collections + neutral settings) so an unseeded/unreachable DB
+never fails build/prerender — real data flows in on the next revalidation.
+`lib/home/social.ts#parseSocialLinks()` normalises the free-form
+`Settings.socialLinks` JSON into an ordered, validated list of known platforms
+(http(s)-only, `x`→twitter alias, unknown keys dropped).
+
+Sections (components/home/, spec order): AdmissionsBanner (dismissible, shown
+only when `admissionsBannerOn` + text), TopBar (contact + socials from
+Settings), reused Header, Hero (single `<h1>` "Education Above and Beyond",
+amber underline, floating cards, trust avatars, hero.jpg), ValuesSection
+(val-1..5 clay icons), AboutPreview (about-1/2 overlap + 1992 chip),
+ProgrammesSection (client Tabs, prog-1..5 icons, DB-driven), CampusesSection
+(premium cards, DB-driven), WhyChooseSection (why-1..4 + why.jpg), AdmissionProcess
+(5-step revealed timeline), StatsSection (glass cards + animated counters,
+figures explicitly marked sample), GallerySection (client Carousel, DB albums),
+TestimonialsSection (client Carousel, DB testimonials), CtaSection (teal→navy),
+reused Footer + floating WhatsAppButton (number from Settings, digits-sanitised).
+
+Graceful images: new client `components/home/MediaImage.tsx` renders next/image
+`fill` and falls back to a branded gradient block on empty/missing/404 src, so
+not-yet-uploaded placeholder paths degrade cleanly while the correct filenames
+stay in the DB. Static /assets images (hero, about, why, avatars, clay icons)
+render directly. `components/home/SocialIcon.tsx` provides inline brand glyphs.
+
+SEO: page exports unique `buildMetadata({ path:"/", description })`; layout
+already emits EducationalOrganization JSON-LD site-wide, and the page adds a new
+`websiteJsonLd()` (added to lib/seo.ts) WebSite node. Single `<h1>` (Hero only);
+all sections use h2/h3. Every image has alt (decorative → alt=""/aria-hidden;
+dynamic → required alt / role=img aria-label fallback). OG/Twitter + robots come
+from buildMetadata (staging stays noindex). Homepage "/" already in sitemap.
+
+Tests (components/home/__tests__/home.test.tsx): parseSocialLinks ordering /
+alias / invalid-input; websiteJsonLd shape; AdmissionsBanner render + dismiss;
+TopBar contact + socials; and DB-wiring assertions for Programmes (tab per
+programme + subjects), Campuses (names/city, null when empty), Gallery (titles,
+null when empty), Testimonials (quotes/authors, null when empty). Presentational
+components take props only; the prisma-importing data loader is never imported
+in tests (type-only imports are erased).
+
+Gates: `pnpm typecheck` ✔ · `pnpm lint` ✔ (no warnings/errors). Did not run
+build/test:unit per standing rules — controller runs full gates. Design
+self-check by inspection: sections match spec §3 / home-V5 order, reduced-motion
+honoured via existing Reveal/useInView/counter primitives.
+
+Files: app/page.tsx (rewritten); lib/seo.ts (+websiteJsonLd); lib/home/data.ts,
+lib/home/social.ts (new); components/home/*.tsx (new: AboutPreview,
+AdmissionProcess, AdmissionsBanner, CampusesSection, CtaSection, GallerySection,
+Hero, MediaImage, ProgrammesSection, SocialIcon, StatsSection,
+TestimonialsSection, TopBar, ValuesSection, WhyChooseSection);
+components/home/__tests__/home.test.tsx (new).
