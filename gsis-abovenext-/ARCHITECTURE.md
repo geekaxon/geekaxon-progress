@@ -114,6 +114,8 @@ A step is **DONE** only when ALL hold (recorded in PROGRESS-HISTORY.md):
 ## 11. BUILD ORDER (canonical — continuous numbering; phase = label)
 
 > The agent builds strictly in this order, one step at a time, foundation first. Each step has a `specs/NN-slug.md`. **Every completed step ends with a soft `[CHECKPOINT]`** — the single human gate is production launch (step 25).
+>
+> **Completion rule (controller must honour):** the build is complete ONLY when step **`25-production-launch`** is DONE. After finishing step N < 25, the next step is always **N+1** in this list — never treat the project as finished before 25. PROGRESS.md must always name an explicit `Current build-step` and `Next-step pointer` (e.g. `→ specs/10-admissions.md`); a vague pointer is a bug, not a stop signal.
 
 **FOUNDATION (platform base)**
 1. `01-foundation-nextjs` — Next.js 15 + TS + Tailwind app, Prisma base, DB connection, health endpoint, base config, deploy.sh.

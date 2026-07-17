@@ -332,3 +332,43 @@ Public, dynamic, slug-based Campuses listing + detail template, driven entirely 
 - No schema change → no `pnpm prisma generate` needed.
 
 **Gates:** lint ✔ (No ESLint warnings or errors) · typecheck ✔ (tsc --noEmit clean). Did not run test:unit/e2e/build per CLAUDE.md (controller runs full gates). SEO: per-page title/description, single h1, alt on icons/images, OG/Twitter via buildMetadata, BreadcrumbList + EducationalOccupationalProgram JSON-LD, sitemap entries, staging noindex via robotsMeta. Responsive grid + skeleton loading state.
+
+---
+
+## 10 — admissions — DONE (2026-07-17)
+
+**Branch:** `feature/10-admissions` (FEATURE). Spec: `specs/10-admissions.md`.
+
+**What was built:** the public `/admissions` information page. Sections, top to
+bottom: intro hero (single `<h1>`, breadcrumbs, CTA → `/admissions/apply`);
+five-step animated process (reused `components/home/AdmissionProcess`);
+requirements/eligibility clay-icon cards; a marketing-only fees note; a
+keyboard-accessible FAQ accordion; closing CTA (reused `CtaSection`). The
+"Admissions Open" banner reuses `AdmissionsBanner`, shown only when
+`Settings.admissionsBannerOn` and driven by `admissionsBannerYear` (surfaced as
+`admissionsBannerText` by `getHomeData`) — nothing hardcoded.
+
+**Files:**
+- `app/admissions/page.tsx` — ISR (`revalidate = 300`), metadata via
+  `buildMetadata`, BreadcrumbList + FAQPage JSON-LD, banner/TopBar/WhatsApp chrome.
+- `lib/admissions/content.ts` — SAMPLE PLACEHOLDER copy: REQUIREMENTS, FEES_NOTE
+  (with a "no fees collected here" disclaimer), FAQS.
+- `lib/seo.ts` — added `faqPageJsonLd(items)` helper.
+- `components/admissions/{AdmissionsHero,Requirements,FeesNote,Faq,Breadcrumbs}.tsx`.
+- `components/admissions/__tests__/admissions.test.tsx` — FAQ toggle + JSON-LD sync.
+- `app/sitemap.ts` — static `/admissions` entry (priority 0.9).
+
+**Decisions:**
+- FAQ built as a native-`<button>` disclosure list (aria-expanded/aria-controls,
+  region panels) so it's keyboard-accessible without extra JS; the same `FAQS`
+  array feeds both the visible accordion and the FAQPage JSON-LD so they can't
+  drift. First item defaults open.
+- No payment/fee logic — fees section is informational copy pointing to the
+  admissions team, per the Do-NOT-break constraint.
+- Local `Breadcrumbs` in the admissions module (mirrors curriculum/campuses) to
+  keep the module self-contained.
+
+**Gates:** typecheck ✔ · lint ✔ (no warnings) · SEO ✔ (title/desc, single h1,
+decorative alt="", OG/Twitter, BreadcrumbList + FAQPage JSON-LD, sitemap entry,
+staging noindex via `robotsMeta`) · responsive ✔ · design ✔. build/tests run by
+controller. tests ➖ per spec but a light FAQ/JSON-LD test added for parity.
