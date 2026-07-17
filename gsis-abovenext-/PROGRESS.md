@@ -9,25 +9,25 @@
 ## Current Status
 
 - **Project:** GSIS Website & Admin Portal — built & delivered by AboveNext.
-- **Last completed build-step:** `20-admin-curriculum` (2026-07-17)
-- **Current build-step:** `21` (see build order)
+- **Last completed build-step:** `21-admin-gallery` (2026-07-17)
+- **Current build-step:** `22` (see build order)
 - **Next-step pointer:** → next spec in `specs/`
-- **Branch state:** last merged `feat/11-admission-form` → `staging`. Next branch: `feature/21-*`.
+- **Branch state:** last merged `feat/11-admission-form` → `staging`. Next branch: `feature/22-*`.
 - **Environment:** working on `staging` only (noindex/robots-disallowed). `main`/production is human-gated (owner Telegram command).
 - **Checkpoint model:** continuous — every step ends with a soft `[CHECKPOINT]`; the single human gate is production launch (step 25).
 - **Build order:** runs `01` → `25`. **NOT complete until `25-production-launch` is DONE.**
 
 ## Recent steps (keep exactly 3 one-liners; newest on top)
 
+- **21 — admin-gallery** — DONE (2026-07-17) — Staff CRUD for photo albums — multi-upload with required alt text, cover pick, reorder, publish; audited, revalidates gallery.
 - **20 — admin-curriculum** — DONE (2026-07-17) — Staff CRUD for programmes — subject chips, 3D-icon picker, image upload, reorder, publish; audited, revalidates public pages.
 - **19 — admin-campuses** — DONE (2026-07-17) — Staff CRUD for campuses — auto-slug + uniqueness, image upload/preview, reorder, publish toggle; audited and revalidating public pages.
-- **18 — admin-inquiries** — DONE (2026-07-17) — Contact inquiries list with URL-driven search/filter/paging, PII detail with audited status and read toggles, reply-by-email link and an access-controlled CSV export.
 
 ## Notes / open decisions
 
 - Email: console sink for now (real Resend/SMTP deferred to production); staging never emails real recipients. Public forms use honeypot + per-IP rate-limit (no captcha).
 - `[DECIDE AT BUILD]` analytics provider + Search Console — scaffolded in `03-seo-core`, activated at `25-production-launch`.
-- `[DECIDE AT BUILD]` optional object storage (Cloudflare R2) for admin-uploaded gallery/testimonial images — decided at `21-admin-gallery`.
+- Image storage: admin-uploaded gallery/testimonial images live in `public/assets/` (DB stores only the path). Object storage (R2) deferred — a later path swap, no schema change.
 - `[DECIDE AT BUILD]` optional 2FA for ADMIN accounts (`05-admin-auth`).
 - Client finalises all real content; sample/placeholder data used until then. Never invent real facts.
 - Missing real photos to be supplied later: `hero.jpg`, `about-1.jpg`, `about-2.jpg`, `avatar-1..4.jpg` (use clearly-marked placeholders with correct filenames).

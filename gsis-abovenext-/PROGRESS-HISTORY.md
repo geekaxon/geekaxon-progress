@@ -603,3 +603,24 @@ Decisions:
 Files: lib/admin/curriculum.ts; app/admin/api/curriculum/{route,[id]/route,[id]/publish/route,reorder/route,slug/route,upload/route}.ts; app/admin/curriculum/{page,new/page,[id]/page}.tsx; components/admin/curriculum/{ProgrammeForm,ProgrammeRowActions,SubjectsField,IconPicker,ImageField}.tsx; test/admin-curriculum.test.ts.
 
 Gates: lint ✔ (no warnings/errors), typecheck ✔ (tsc --noEmit clean). No schema change (Programme model + permissions + nav pre-existed). Tests written for slug/icon/normalize/subjects/publicPaths; full suite run by controller.
+
+## 21 — admin-gallery — DONE (2026-07-17)
+
+**Branch:** feature/21-admin-gallery · **Type:** FEATURE
+
+Staff CRUD for the public gallery (`GalleryAlbum` + `GalleryImage`), gated on `gallery.edit`, mirroring the campuses/curriculum module shape.
+
+**Storage decision (resolved at this step):** admin-uploaded gallery images stay in the repo's `public/assets/gallery/` folder, served directly by Next; the DB stores only the public path. Optional Cloudflare R2 remains deferred — because only the path is persisted, a later move to R2 is a path swap touching just the upload handler + `next.config` remote patterns, with no schema change. `next/image` renders local `/assets/...` paths without any remote-pattern config, so the public gallery already renders uploaded images.
+
+**Files added:**
+- `lib/admin/gallery.ts` — pure helpers (`slugify`, `isValidSlug`, `normalizeAlbumInput`, `albumPublicPaths`, `formatDate`, `toAlbumData`, `toImageCreateData`) + server-only DB helpers (`listAlbums` with image counts, `getAlbumForEdit` with ordered images, `slugTaken`, `nextAlbumOrder`, `neighbourFor`). Alt text is required per image (`normalizeAlbumInput` flags any kept image lacking alt); cover is pinned to one of the album's images (editor choice, else first).
+- API (Node runtime, all require `gallery.edit`, all audited, all revalidate `/gallery` [+ `/gallery/<slug>`]): `POST /admin/api/gallery` (create album + nested images), `PATCH/DELETE /admin/api/gallery/[id]` (PATCH replaces scalars AND the image set in one transaction — delete-then-recreate in submitted order so alt edits/reorder/removals persist atomically; DELETE cascades images), `POST /admin/api/gallery/[id]/publish`, `POST /admin/api/gallery/reorder` (order swap with neighbour), `GET /admin/api/gallery/slug` (inline uniqueness), `POST /admin/api/gallery/upload` (multipart → `public/assets/gallery/`, 5 MB cap, type allowlist).
+- Pages: `app/admin/gallery/page.tsx` (list: cover thumb, image count, publish pill, row actions), `new/page.tsx`, `[id]/page.tsx`.
+- Components: `AlbumImagesField` (large drag/drop zone, sequential multi-upload with progress, per-image alt input with inline "add a description" enforcement, move up/down, star-to-set-cover, remove; broken paths degrade to a neutral block), `AlbumForm` (auto-slug + debounced availability, blocks save while any alt is missing — client + server, toast on success), `AlbumRowActions` (publish/reorder/edit/delete-with-confirm).
+- Tests: `test/admin-gallery.test.ts` — slugify/isValidSlug, normalizeAlbumInput (valid record, slug-from-title, title required, **alt-required**, drop-url-less images, cover pinning, empty-draft allowed), toImageCreateData ordering/null-alt, albumPublicPaths.
+
+**Nav/dashboard:** `/admin/gallery` link, "Published albums" stat card and "Add album" quick action already existed from step 16 — no change needed. Permission `gallery.edit` already defined in step 05.
+
+**Do-NOT-break honoured:** behind auth + `gallery.edit`; unpublished albums never public (public loader uses `published:true` where-clause from step 12); alt required (SEO); every mutation audited; upload/create/update/delete/publish/reorder revalidate the public gallery via ISR.
+
+**Gates:** `pnpm lint` ✔ (no warnings/errors) · `pnpm typecheck` ✔ (tsc --noEmit clean). No schema change → no `prisma generate`. Did not run build/tests per build-loop rules (controller runs full gates).
