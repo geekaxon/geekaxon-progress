@@ -402,3 +402,20 @@ Branch: `feature/11-admission-form`. Online admission form saving to `AdmissionA
 **Privacy:** submissions are PII; the route logs only generic diagnostics, never field values. Emails are the one intended sink; on staging that sink is the console. Submissions are never exposed publicly (admin portal reads them in a later step).
 
 **Gates:** `pnpm lint` ✔ (no warnings/errors) · `pnpm typecheck` ✔ (tsc --noEmit clean). Did not run test:unit/build per AGENT.md (controller runs full gates).
+
+## 12 — gallery — DONE (2026-07-17)
+
+**Spec:** specs/12-gallery.md. Public, dynamic, SEO hard gate. Branch: feature/12-gallery.
+
+**Built:**
+- `lib/gallery/seo.ts` — pure, Prisma-free helpers (client/test-safe): types (AlbumImage/AlbumCard/AlbumDetail), PUBLISHED_WHERE + ALBUM_ORDER + IMAGE_ORDER, albumBySlugWhere (published baked in), albumPath, imageAlt (editor alt or "<title> — photo N" fallback), albumBreadcrumbItems (Home › Gallery › [Album]), albumJsonLd (schema.org ImageGallery with per-image ImageObject/contentUrl/caption).
+- `lib/gallery/data.ts` — Prisma loaders, try/catch → safe-empty on DB-unreachable, mirroring campuses/curriculum: getPublishedAlbums (with _count.images → imageCount), getAlbumBySlug (images ordered), getPublishedAlbumSlugs; registers a sitemap provider (one entry per published album, priority 0.6).
+- `components/gallery/`: Breadcrumbs (module copy), AlbumCard (cover via MediaImage + title + photo count, clean slug link), GalleryList (responsive grid + empty state), AlbumGallery (client thumbnail grid, buttons open lightbox), Lightbox (client: role=dialog/aria-modal, keyboard ← → Esc, Tab focus-trap across buttons, backdrop-click close, focus restore to trigger, body-scroll lock, next/image via MediaImage fit=contain).
+- `app/gallery/page.tsx` (listing, ISR revalidate 300, buildMetadata, BreadcrumbList JSON-LD), `app/gallery/loading.tsx` (skeleton album cards), `app/gallery/[slug]/page.tsx` (SSG+ISR, generateStaticParams over published slugs, generateMetadata, single h1, BreadcrumbList + ImageGallery JSON-LD, notFound() on unknown/unpublished slug).
+- `components/home/MediaImage.tsx` — added optional `fit: "cover" | "contain"` (default cover; lightbox uses contain). Backward-compatible.
+- `app/sitemap.ts` — added static `/gallery` entry + side-effect import of the gallery album provider.
+- `components/gallery/__tests__/gallery.test.tsx` — routing helpers, published-only where-clause, imageAlt fallback, albumJsonLd captions, AlbumCard (singular/plural), GalleryList empty state, Breadcrumbs aria-current, and lightbox a11y (open dialog → ArrowRight navigates → Escape closes + restores focus to trigger).
+
+**Decisions:** Seed data already present (albums campus-life, events). imageCount via Prisma _count. Lightbox images render via MediaImage so empty/failed src degrades to the branded fallback (also lets the a11y test avoid next/image in jsdom). Nav bar left unchanged (prior steps didn't add campuses/curriculum links either). No user-event dep in repo → used fireEvent.
+
+**Gates:** pnpm lint ✔ (no warnings/errors) · pnpm typecheck ✔ (tsc --noEmit clean). Schema unchanged → no prisma generate. Did not run build/test:unit/e2e per AGENT.md (controller runs full gates). SEO gate satisfied: metadata/OG/Twitter, single h1, alt on every image, BreadcrumbList + ImageGallery JSON-LD, sitemap entries, staging noindex via robotsMeta.

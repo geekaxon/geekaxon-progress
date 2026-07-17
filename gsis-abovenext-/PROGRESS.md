@@ -9,19 +9,19 @@
 ## Current Status
 
 - **Project:** GSIS Website & Admin Portal — built & delivered by AboveNext.
-- **Last completed build-step:** `11-admission-form` (2026-07-17)
-- **Current build-step:** `12-gallery`
-- **Next-step pointer:** → `specs/12-gallery.md`
-- **Branch state:** last merged `feat/11-admission-form` → `staging`. Next branch: `feat/12-gallery`.
+- **Last completed build-step:** `12-gallery` (2026-07-17)
+- **Current build-step:** `13` (see build order)
+- **Next-step pointer:** → next spec in `specs/`
+- **Branch state:** last merged `feat/11-admission-form` → `staging`. Next branch: `feature/13-*`.
 - **Environment:** working on `staging` only (noindex/robots-disallowed). `main`/production is human-gated (owner Telegram command).
 - **Checkpoint model:** continuous — every step ends with a soft `[CHECKPOINT]`; the single human gate is production launch (step 25).
 - **Build order:** runs `01` → `25`. **NOT complete until `25-production-launch` is DONE.**
 
 ## Recent steps (keep exactly 3 one-liners; newest on top)
 
+- **12 — gallery** — DONE (2026-07-17) — DB-driven album listing plus slug detail pages with an accessible keyboard lightbox, published-only, 404s, sitemap and the full SEO gate.
 - **11 — admission-form** — DONE (2026-07-17) — Online admission form: shared zod validation, honeypot plus rate-limit, DB-driven selects, saves the application, staff and applicant emails, thank-you page.
 - **10 — admissions** — DONE (2026-07-17) — Admissions info page: process timeline, requirements, marketing fees note, FAQ accordion and CTA, with the full SEO gate.
-- **09 — curriculum** — DONE (2026-07-17) — DB-driven curriculum listing plus slug detail pages with clay icons, published-only, 404s and the SEO gate.
 
 ## Notes / open decisions
 
