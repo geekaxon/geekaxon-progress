@@ -77,3 +77,45 @@ Stood up the deployable Next.js 15 skeleton per specs/01-foundation-nextjs.md.
 **Gates:** typecheck ✔ · lint ✔ (0 warnings/errors) · test:unit 16/16 (1 suite; +16) ✔ · build ➖ (controller runs) · responsive ✔ (md breakpoints, mobile menu) · design ✔ (palette/type/radius per §8) · SEO ➖ · audit ➖ · privacy ➖ · env ✔.
 
 **Notes:** next/font fetches Fraunces/Inter at build (network needed). /dev/ui must stay unlinked + noindex.
+
+## 03 — seo-core — DONE (2026-07-17)
+
+Built the site-wide SEO framework (spec 03). Framework only, no page content.
+
+Decisions:
+- Env additions (lib/env.ts, all fail-closed / placeholder-safe): SITE_URL (from
+  NEXT_PUBLIC_SITE_URL, trailing slash stripped, defaults http://localhost:3000),
+  ANALYTICS_SRC (NEXT_PUBLIC_ANALYTICS_SRC, provider-agnostic script URL),
+  SEARCH_CONSOLE_VERIFICATION (server-side token). No IDs/tokens committed —
+  .env.example placeholders only.
+- lib/seo.ts: buildMetadata({title,description,path,image,type}) → complete
+  Next Metadata (metadataBase, absolute templated title via pageTitle/TITLE_TEMPLATE
+  "%s — GSIS", canonicalUrl, robots via robotsMeta, OpenGraph + Twitter
+  summary_large_image, OG default /assets/og-default.jpg). robotsMeta() is
+  fail-closed: index only when APP_ENV==="production". organizationJsonLd()
+  (EducationalOrganization, ORG_NAME GreenSprings International School, foundingDate
+  1992, logo, sameAs [] — socials wired from Settings later) and breadcrumbJsonLd().
+- components/JsonLd.tsx: <JsonLd data> renders application/ld+json.
+- components/Analytics.tsx: next/script loader, renders null unless isProduction
+  && ANALYTICS_SRC set → off on staging/local.
+- app/layout.tsx: metadata = buildMetadata() spread + title {default,template} +
+  verification (google) gated on isProduction && token. Injects
+  <JsonLd data={organizationJsonLd()}> and <Analytics/> site-wide.
+- app/robots.ts: kept fail-closed; production now advertises sitemap
+  (canonicalUrl /sitemap.xml) + host.
+- app/sitemap.ts + lib/sitemap-registry.ts: static home entry + registry
+  (registerSitemapProvider/collectSitemapEntries) so later steps add dynamic slugs
+  without editing the route.
+- next.config.ts: images deviceSizes/imageSizes + remotePatterns https ** (future
+  R2 host; concrete hostnames added later).
+- public/assets/og-default.jpg: placeholder (copied from hero.jpg), swappable.
+
+Tests (test/seo.test.ts, test/robots.test.ts): buildMetadata title/description/
+canonical/OG/Twitter + defaults; robotsMeta + robots() fail-closed matrix
+(production/staging/missing/typo); EducationalOrganization + BreadcrumbList shape.
+Env-time consts tested via vi.resetModules + vi.stubEnv dynamic re-import.
+
+Gates: typecheck PASS, lint PASS (no warnings/errors). Did not run test:unit/build
+per CLAUDE.md (controller runs full gates).
+
+WORK TYPE: FEATURE (branch feature/03-seo-core)
