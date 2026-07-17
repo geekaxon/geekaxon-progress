@@ -2998,3 +2998,43 @@ Branch: feature/75-subscription-module. WORK TYPE: FEATURE. [LAUNCH-CRITICAL], P
 **Deviation noted.** The repo has NO Playwright harness (specs 70–74 shipped without one; apps/web has no test runner). Rather than introduce a whole e2e stack unilaterally, the suspend→login-blocked→resume→login-works acceptance and the state machine are covered by vitest at the auth + service + console layers, and the tab render by inspection against the shared kit conventions. If the owner wants a real Playwright suite it should be a dedicated harness step.
 
 **Gates.** pnpm prisma generate, pnpm lint, pnpm typecheck — all green (one pre-existing, unrelated lint warning in doctor-portal.repositories.ts). Did not run test:unit/test:e2e/build per standing rules (controller runs them).
+
+---
+
+## 76 — trial-and-demo — DONE (2026-07-17) — WORK TYPE: FEATURE (branch feature/76-trial-and-demo)
+
+**Spec:** /specs/76-trial-and-demo.md ([POST-LAUNCH]). Depends on 75 (lifecycle), 41 (demo seed), 70 (UI). Companion /specs/70-84-CODEREF.md §C.6.
+
+**Problem.** Two "try before you buy" needs: (1) a real tenant on a 3–7 day free trial that AUTO-SUSPENDS at expiry (data retained), and (2) a no-signup shared DEMO sandbox — ephemeral, isolated, dummy data, auto-resets after a fixed window.
+
+**What already existed (75) and was NOT rebuilt.** The trial START (owner picks 3/5/7 days), the guarded TRIAL→ACTIVE→SUSPENDED→CANCELLED machine, the suspended-clinic login gate, and the vendor tenant-detail trial COUNTDOWN line were all shipped in 75. So 76 added only the genuinely-missing pieces below.
+
+**A. Trial auto-suspend (backend).**
+- `SubscriptionRepo.findExpiredTrials(now)` — platform-scope worklist of TRIAL subs with trialEndsAt <= now. `applyTransition` gained an `actorType` ('vendor'|'system', default vendor) threaded into the subscription_events row so the history records the platform (not a vendor) as the actor. `SubscriptionService.transition` + new `listExpiredTrials` pass it through.
+- `VendorConsoleService.expireDueTrials(now)` — moves each expired trial TRIAL→SUSPENDED via 75's machine with actorType 'system', then runs the SHARED afterLifecycle side-effects (tenant-status mirror to SUSPENDED = the login gate, host-cache flush, owner email via money.subscription_suspended, audit). `afterLifecycle` now accepts a `'system'` actor and a new `auditSystem()` stamps actorId 'system'/actorType 'system'. One failing tenant never aborts the run.
+- `TrialSweeper` — in-process interval (mirrors 62's RetentionScheduler), gated by TRIAL_SWEEP_ENABLED/TRIAL_SWEEP_MINUTES (off in tests/CI), non-overlapping. Wired into VendorModule.
+
+**B. Shared demo session (all new).**
+- Schema (additive): `Tenant.isDemo` marker; new PLATFORM table `demo_sessions` (token, demoTenantId, tenantSlug, expiresAt) under `apply_platform_rls` (fail-closed). Migration 20260717000000_trial_and_demo. `prisma generate` run.
+- ISOLATION MODEL (the key decision): each demo session owns its OWN ephemeral `isDemo` tenant, so the ordinary always-on tenant RLS isolates one session's rows from every other session AND from every real tenant — the exact guarantee real tenants get, NO new policy. The demo_sessions table itself is platform-only.
+- `@mp/db` `seedDemoSessionData()` REUSES the 41 `buildDemoPlan` (invariant-checked dummy data) — a fresh tenant means a plain chunked createMany (no idempotent upsert/account-remap/token dance the staging re-seed needs). `purgeDemoTenant()` tears the whole tenant down child→parent by the new exported `DEMO_TENANT_TABLE_ORDER` (a seed-time drift guard asserts the plan matches it), then flags/branches/refresh-tokens, then the registry row — HARD-GUARDED to isDemo tenants (final delete filters isDemo:true) so a bug can never prune a real tenant.
+- API `DemoModule`: `DemoService.startSession()` creates the isDemo tenant, seeds it, and MINTS a real staff session (reuses AuthModule's `TokenService.issueBundle` for the seeded TENANT_OWNER) so the visitor lands in the clinic-staff surface scoped by RLS to the demo tenant alone — no bespoke auth. Bounded by DEMO_MAX_ACTIVE_SESSIONS. `sweep()` purges expired. `DemoController` is `@Public` with GET /demo/config + POST /demo/session, both FAIL-CLOSED on PUBLIC_DEMO_ENABLED (off ⇒ 404). `DemoSweeper` gated by DEMO_SWEEP_ENABLED/MINUTES. Registered in AppModule.
+- Demo tenants EXCLUDED from the vendor console at source: repo.listTenants (feeds list + oversight + analytics) and searchTenants now filter isDemo:false, so ephemeral demos never pollute real-customer surfaces.
+
+**C. Web.**
+- `@mp/ui` new `Countdown` (+ pure `countdownParts`/`formatCountdown`) — one tested formatter behind both timers; SSR-safe (renders after mount).
+- Public `/demo` entry (server shell + `DemoClient` island, robots:index false, mirrors /discover): reads /demo/config first (fail-closed → "not available", no button), else Start → stores mp.auth bundle + tenant slug + a `mp.demo` marker, routes to /dashboard.
+- `DemoBanner` mounted in the (app) layout — renders ONLY when the mp.demo marker is present (inert for real users): a fixed "DEMO mode — resets in mm:ss" strip with the live Countdown; onExpire clears the session+marker and returns to /demo (the visible reset).
+- i18n: new `demo.*` namespace, EN+UR parity (13/13 keys).
+
+**Config/env (all fail-closed, .env.example documented).** TRIAL_SWEEP_ENABLED/MINUTES, PUBLIC_DEMO_ENABLED (THE demo gate — unset ⇒ off everywhere via `publicDemoEnabled()`), DEMO_SESSION_TTL_MINUTES, DEMO_MAX_ACTIVE_SESSIONS, DEMO_SWEEP_ENABLED/MINUTES.
+
+**Tests.** (a) apps/api trial-autosuspend.spec.ts — DB-free: expireDueTrials suspends every expired trial as a system actor, mirrors tenant status, audits as system, keeps going past a failing tenant; TrialSweeper arms no timer when disabled. (b) packages/db demo-session-isolation.spec.ts — DB-gated (skips when no DATABASE_URL, like the 41 idempotency proof): two demo tenants can't see each other's patients (RLS), purge removes one tenant+data while the other is untouched, and purge refuses a real (non-demo) tenant. (c) packages/ui countdown.spec.tsx — the pure timer maths.
+
+**Judgement calls (recorded per AGENT §2 — I decide, no escalation).**
+- Public-demo gate implemented as a CONFIG flag (`PUBLIC_DEMO_ENABLED`, fail-closed) rather than a per-tenant capability flag from @mp/flags: the demo is pre-auth with NO tenant context, so a tenant-scoped capability flag is the wrong tool; a config seam matches the retention-sweep precedent and the spec's "fail-closed, unset=off".
+- Demo isolation via a throwaway REAL tenant per session (not a bespoke "demo scope"): reuses the strongest guarantee in the codebase (always-on tenant RLS) and the 41 seed verbatim, satisfying "isolated from each other and from real tenants (RLS)" with zero new policy surface.
+- Demo auth mints a full staff session (issueBundle) for the seeded owner. Accepted risk: the token is scoped strictly to the ephemeral demo tenant (only dummy data, RLS-isolated), the whole surface is fail-closed off by default, and sessions die when the sweeper deletes the tenant/user. No MFA (we bypass login by minting directly) — acceptable for a throwaway sandbox with no real data.
+- "Playwright" (spec §4/§6): this repo has NO Playwright/browser harness and no apps/web test runner; the controller gates are lint→typecheck→test:unit→build. Proof is therefore the API + DB-integration + UI-unit specs above (the strongest runnable evidence), plus the pure countdown maths — not a browser goto.
+
+**Gates.** pnpm prisma generate ✓; pnpm typecheck ✓ (29/29); pnpm lint ✓ (0 errors; the single warning is a pre-existing unused-disable in doctor-portal, untouched). Did NOT run test:unit/build/e2e (controller runs them).
