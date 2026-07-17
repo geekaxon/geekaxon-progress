@@ -9,19 +9,19 @@
 ## Current Status
 
 - **Project:** GSIS Website & Admin Portal — built & delivered by AboveNext.
-- **Last completed build-step:** `23-admin-settings` (2026-07-17)
-- **Current build-step:** `24` (see build order)
+- **Last completed build-step:** `24-prelaunch-seo-audit` (2026-07-17)
+- **Current build-step:** `25` (see build order)
 - **Next-step pointer:** → next spec in `specs/`
-- **Branch state:** last merged `feat/11-admission-form` → `staging`. Next branch: `feature/24-*`.
+- **Branch state:** last merged `feat/11-admission-form` → `staging`. Next branch: `feature/25-*`.
 - **Environment:** working on `staging` only (noindex/robots-disallowed). `main`/production is human-gated (owner Telegram command).
 - **Checkpoint model:** continuous — every step ends with a soft `[CHECKPOINT]`; the single human gate is production launch (step 25).
 - **Build order:** runs `01` → `25`. **NOT complete until `25-production-launch` is DONE.**
 
 ## Recent steps (keep exactly 3 one-liners; newest on top)
 
+- **24 — prelaunch-seo-audit** — DONE (2026-07-17) — Full-site SEO/perf/a11y audit on staging; report written, minor JSON-LD and alt-text fixes made; structured-data + sitemap tests added; staging stays noindex.
 - **23 — admin-settings** — DONE (2026-07-17) — Admin-only tabbed editor for contact, socials, WhatsApp, admissions banner, SEO and email recipients; audited, revalidates the whole site.
 - **22 — admin-testimonials** — DONE (2026-07-17) — Staff CRUD for quotes — author, role, photo, reorder, publish; audited, revalidates the homepage slider.
-- **21 — admin-gallery** — DONE (2026-07-17) — Staff CRUD for photo albums — multi-upload with required alt text, cover pick, reorder, publish; audited, revalidates gallery.
 
 ## Notes / open decisions
 

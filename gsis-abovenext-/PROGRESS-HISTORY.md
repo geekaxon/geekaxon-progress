@@ -663,3 +663,36 @@ Built the ADMIN-only site-settings editor at `/admin/settings` (permission `sett
 **Gates:** `pnpm prisma generate` ✔ · `pnpm lint` ✔ (no warnings/errors) · `pnpm typecheck` ✔ (clean). Did not run build/unit/e2e per AGENT.md (controller runs full gates).
 
 WORK TYPE: FEATURE (branch feature/23-admin-settings)
+
+---
+
+## 24 — prelaunch-seo-audit — DONE (2026-07-17)
+
+**Branch:** `feature/24-prelaunch-seo-audit` (WORK TYPE: FEATURE)
+**Spec:** specs/24-prelaunch-seo-audit.md — quality gate before go-live; staging stays noindex (indexing flip is step 25).
+
+### What was done
+Full-site SEO / performance / accessibility audit of every public route (admin + API out of scope). Produced a staging-only audit report and cleared the code-fixable findings; added the two test suites the spec's gate demands (structured-data + sitemap completeness).
+
+### Audit outcome (per area)
+- **Metadata:** PASS. Every public page composes via `buildMetadata()` — templated unique title, unique description, canonical from `path`, robots policy, OG/Twitter. Dynamic detail pages use `generateMetadata` with 404 fallback. Exactly one `<h1>` per page.
+- **Structured data:** PASS. Site-wide `EducationalOrganization` (layout) + `WebSite` (home); `BreadcrumbList` on all inner pages; `FAQPage` on /admissions; `ContactPage` on /contact; per-page `EducationalOccupationalProgram` / campus `EducationalOrganization`+`PostalAddress` / album `ImageGallery`+`ImageObject`.
+- **Sitemap/robots:** PASS. Sitemap lists all 10 static routes + published dynamic slugs via the registry; noindex utility routes excluded; robots fail-closed (staging `Disallow: /`, no sitemap advertised). Staging noindex NOT flipped.
+- **Performance/CWV:** code-level PASS (next/image everywhere except an admin icon picker, lazy-load, next/font `font-display: swap`, Server Components + isolated client islands, prod-only analytics). Live Lighthouse numbers deferred to real-asset delivery at step 25 — documented exception.
+- **Links + alt:** PASS. No broken internal links; every meaningful image has descriptive alt, decorative imagery uses `alt=""`+`aria-hidden`.
+- **A11y:** PASS baseline — single h1, focus states, keyboard-navigable forms/lightbox, iframe titles, contrast on text surfaces.
+
+### Findings + resolutions
+- **F1 (fixed):** /contact emitted three overlapping Organization nodes. Dropped the standalone `organizationJsonLd(sameAs)` on the contact page (removed its import too); `ContactPage.mainEntity` already carries email/phone/address/sameAs and the layout emits the site-wide node. File: app/contact/page.tsx.
+- **F3 (fixed):** `alt="Portrait of the GSIS Principal (placeholder image)"` leaked a build note into SR text → now `"Portrait of the GSIS Principal"`; placeholder disclosure stays in the visible caption. File: components/about/PrincipalMessage.tsx.
+- **F2 (accepted):** site-wide Organization has empty `sameAs` (root layout is static, doesn't fetch Settings); /contact's ContactPage already carries sameAs. Documented, not changed.
+
+### Files
+- Added: docs/seo-audit.md (audit report artifact).
+- Added: test/structured-data.test.ts — validates every JSON-LD helper (site-wide + per-page): @context/@type present on every node, required fields per type, all emitted URLs absolute, round-trips through JSON.
+- Added: test/sitemap-completeness.test.ts — mocks @/lib/db, imports app/sitemap, asserts the URL set equals exactly the 10 static routes + published dynamic slugs, no dupes, all absolute, noindex utility routes excluded.
+- Edited: app/contact/page.tsx, components/about/PrincipalMessage.tsx (fixes above).
+- Edited: PROGRESS.md.
+
+### Gates
+- `pnpm lint` ✔ (no warnings/errors) · `pnpm typecheck` ✔ (clean). No schema.prisma change → no prisma generate. Did not run build/test:unit/e2e per AGENT.md (controller runs full gates).
