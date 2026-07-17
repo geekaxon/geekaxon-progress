@@ -169,3 +169,33 @@ present+ordered, and the "no real PII (@example.com only)" rule.
 clean. Did not run build/test:unit/e2e per build-loop rules (controller runs full
 gates). Privacy: PII models defined, not exposed by any route. Env: only
 placeholders committed.
+
+## 05 — admin-auth — DONE (2026-07-17)
+
+Secured the `/admin` portal per specs/05-admin-auth.md. WORK TYPE: FEATURE (branch feature/05-admin-auth).
+
+**Auth & sessions**
+- Password hashing: Node scrypt, format `scrypt$salt$hash` — identical to the step-04 seed so seeded users authenticate without re-hash (lib/auth/password.ts).
+- JWT: hand-rolled HS256 on Web Crypto (`crypto.subtle`) so the SAME code runs in Edge middleware and Node route handlers, zero deps (lib/auth/jwt.ts). Short-lived access (15m) + rotating refresh (7d).
+- Session cookies: httpOnly, sameSite=lax, secure off only in local dev; names/TTLs/options shared via lib/auth/cookies.ts. Server helpers establish/destroy/read via next/headers (lib/auth/session.ts).
+
+**Route protection (middleware.ts, Edge)**
+- Matcher `/admin/:path*`. Valid access → allow; expired access + valid refresh → rotate BOTH tokens (response + forwarded request cookies) → allow; neither → redirect to /admin/login?next=…. Authed users are bounced off the login page. Public exceptions: /admin/login, /admin/forgot-password, /admin/reset-password, /admin/api/auth/*. Public site untouched.
+
+**RBAC**
+- Code catalog + role→permission map (lib/auth/permissions.ts): keys applications.view, inquiries.view, campuses.edit, curriculum.edit, gallery.edit, testimonials.edit, settings.edit, users.manage. EDITOR = content only; ADMIN/SUPER_ADMIN = all (SUPER_ADMIN break-glass). Guards requireUser/requirePermission/hasPermission + ForbiddenError (lib/auth/guard.ts). Catalog reconciled into new Permission table on boot via instrumentation.ts (Node runtime only, best-effort).
+- Demonstrated by /admin (dashboard), /admin/settings (settings.edit), /admin/users (users.manage) — EDITOR sees inline Forbidden panel.
+
+**Security**
+- Lockout: pure policy (lib/auth/lockout.ts) — 5 consecutive failures → 15-min lock via failedLoginCount/lockedUntil; login route applies it and resets on success.
+- Password reset: forgot-password issues a single-use SHA-256-hashed, 1h token (new PasswordResetToken model), emails link via console sink (lib/auth/email.ts), generic response (no enumeration). reset-password consumes token in a transaction, clears lockout. change-password verifies current + re-issues session.
+- Audit base: audit() helper (lib/auth/audit.ts) writes AuditLog with actor + ip (x-forwarded-for) for every auth event (login success/failed/locked, logout, reset requested/done, password changed).
+- Screenshot preview: pure fail-closed check (lib/auth/screenshot.ts) — grants read-only /admin only when APP_ENV is EXACTLY "staging", token matches SCREENSHOT_TOKEN, and method GET/HEAD. Middleware sets a preview header (stripping any forged incoming value); getCurrentUser returns a synthetic read-only viewer so pages render for screenshots. OFF in production / missing env.
+
+**Schema/migration**: added Permission + PasswordResetToken models and PasswordResetToken FK to User; migration 20260717130000_admin_auth. env.example already carried JWT_SECRET + SCREENSHOT_TOKEN placeholders; lib/env.ts now exports JWT_SECRET (weak dev fallback), RAW_APP_ENV, SCREENSHOT_TOKEN.
+
+**Tests** (test/auth-*.test.ts): password round-trip/malformed; JWT sign/verify/expiry/tamper/wrong-secret (node env); RBAC matrix + catalog keys; lockout threshold/isLocked; screenshot env logic (staging/prod/missing/non-GET/mismatch).
+
+**Gates**: `pnpm prisma generate` ✔ · `pnpm lint` ✔ (no warnings) · `pnpm typecheck` ✔. Did not run build/test:unit/e2e per CLAUDE.md (controller runs full gates).
+
+**Decisions**: no external auth/JWT/bcrypt deps — Web Crypto + Node scrypt keep the bundle lean and Edge-compatible. Refresh rotation is stateless (no session store) — acceptable for this admin surface. Preview viewer granted ADMIN-level READ (mutations are POST and structurally blocked) so staging screenshots capture all screens; staging holds only sample data.
