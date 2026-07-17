@@ -2896,3 +2896,32 @@ Launch-critical vendor-console defects from owner testing, 11 items. Located eac
 11. **Marketplace listing not surfaced.** ROOT CAUSE: a `MarketplaceListing` row is created only tenant-side (Settings → Marketplace save/refresh); enabling marketplace on a subscription/package only widens the flag ceiling / flips the `platform.marketplace` override — it never created a listing row, and the vendor Listings view lists straight from marketplace_listings (no status filter), so a marketplace-enabled tenant was silently absent until it self-set-up. FIX (create-on-enable, keeps the state consistent + explicit): new tenant-scoped `VendorRepository.ensureListing(tenantId,name)` upserts a create-if-absent DRAFT listing (never clobbers an existing one; RLS unchanged), called from `createTenant` (publishMarketplace opt-in) and `setFlag` when `platform.marketplace` is enabled. The tenant now appears in Listings as DRAFT/unapproved immediately.
 
 TESTS (repo has NO web test framework — no vitest/jest/playwright/test script in apps/web — so the CODEREF "Playwright page.goto" gate is not wireable for web here; added API jest tests instead): vendor.spec.ts — absolute-invite-URL (item 5, config override w/ PLATFORM_BASE_DOMAIN), consumed/expired/invalid status classification via getStatus() 409/410/401 (item 6), marketplace-enabled tenant surfaces in listingQueue via both createTenant and setFlag (item 11); updated build() to pass the new APP_CONFIG ctor arg + accept a config override, added FakeVendorRepository.ensureListing. platform-billing.spec.ts — controller carries IS_PUBLIC + VendorAuthGuard and no ROLES_KEY (items 3/4 regression guard). Items 7/8/9/10 are presentation/CSS or already-correct with no runnable web harness; verified by inspection (tokens only, light+dark).
+
+## 72 — subdomain-surface-routing (BUG-B) — DONE (2026-07-17) — branch feature/72-subdomain-surface-routing
+
+**Work type:** FIX. Phase 8 / item 3. Middleware + routing only; no schema/data-model change; RLS untouched.
+
+**Problem (BUG-B):** spec-53 host addressing resolved the hostname but never selected the Next SURFACE. Because Next route groups ((vendor)/(app)/(platform)) don't appear in the URL, `vendor.<base>/` and `<tenant>.<base>/` both hit the root entrance chooser (app/page.tsx) instead of the vendor console / that tenant's app.
+
+**Decisions taken (autonomous):**
+- The edge middleware cannot hit the DB, so surface selection is split: (1) a PURE host→surface classification in the Next middleware picks vendor/tenant/public and rewrites only the ROOT request; (2) a client tenant-gate page confirms validity via the existing `/host-context` API and renders app / not-found / suspended. Deep links pass through untouched — the API already scopes them by host.
+- Reserved-subdomain set lives in config (default list + `RESERVED_SUBDOMAINS` env extras). `vendor` always → console; www/api/app/admin/staging/etc → shared entrance, never a tenant lookup.
+- Resolver now distinguishes a non-reserved subdomain with no tenant (`tenant-unknown` → "clinic not found") from a generic unknown host (`unknown` → shared), and a SUSPENDED/ARCHIVED tenant on its own subdomain (`tenant-suspended` → suspended page). `findTenantBySlug` now returns the row for ANY status (was: null for ARCHIVED) so the suspended path can fire; it carries `status` on `HostTenantRef` (optional, so custom-domain/map paths are unaffected).
+- No Playwright infra exists in this repo (zero `page.goto` anywhere); the de-facto test convention is jest in apps/api + packages. The host→scope routing decisions (reserved, vendor, unknown, suspended) are unit-tested in the resolver suite; the web middleware helper is a thin pure mirror. The spec's Playwright acceptance is left to the infra layer where a harness exists.
+
+**Files:**
+- `packages/config/src/index.ts` — `RESERVED_SUBDOMAINS` env; `VENDOR_SUBDOMAIN`, `DEFAULT_RESERVED_SUBDOMAINS`, `reservedSubdomains()`.
+- `apps/api/src/tenancy/tenant-domain.resolver.ts` — reserved/vendor handling in `classifyHost`; new `tenant-unknown`/`tenant-suspended` resolutions; `HostTenantRef.status`.
+- `apps/api/src/tenancy/host-resolution.service.ts` — pass reserved set + vendor label; `findTenantBySlug` returns any-status row with `status`.
+- `apps/api/src/tenancy/host-context.controller.ts` — map new kinds to scopes `not-found` / `suspended`.
+- `apps/api/src/tenancy/tenant-domain.resolver.spec.ts` — updated ghost→tenant-unknown; added vendor/reserved/suspended/archived + classify cases.
+- `apps/web/lib/surface-routing.ts` (new) — pure host→surface classifier + rewrite targets.
+- `apps/web/middleware.ts` — surface rewrite integrated with the existing screenshot-token gate.
+- `apps/web/app/tenant-gate/page.tsx` (new) — client gate: tenant→/dashboard, suspended/not-found→branded page.
+- `apps/web/lib/host.ts` — HostScope adds `not-found` | `suspended`.
+- `packages/i18n/src/messages/{en,ur}.json` — `hostGate.*` (EN+UR parity).
+- `.env.example` — documents `RESERVED_SUBDOMAINS`.
+
+**Gates:** `pnpm typecheck` green (29/29). `pnpm lint` green (0 errors; 1 pre-existing unrelated warning in doctor-portal). Did not run test:unit/e2e/build per CLAUDE.md — controller runs full gates.
+
+**Do-NOT-break honored:** RLS/isolation unchanged (host only selects surface + pre-auth branding; auth principal + RLS still the boundary). Apex entrance unchanged. Spec-53 resolver extended, not replaced. No TLS/DNS (INFRA-1) touched. No hardcoded hosts (guard green; all base-derived).
