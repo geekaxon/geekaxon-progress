@@ -484,3 +484,38 @@ Closed out the public site with the remaining shared states plus a full-site SEO
 **Gates** — `pnpm typecheck` ✔, `pnpm lint` ✔ (no warnings/errors). Existing Header/Footer tests still pass (assert "About" + "Apply for Admission", both retained). Design self-check by inspection: shared tokens (teal/amber, rounded-card, font-display, foreground/muted), responsive py/text scales, on-design header/footer on 404 + error.
 
 **Decision** — Footer Connect column now lists Privacy/Terms (also in the bottom legal bar); minor duplication accepted to keep three balanced columns of real routes and avoid broken links.
+
+---
+
+## 16 — admin-dashboard — DONE (2026-07-17)
+
+**Branch:** feature/16-admin-dashboard (FEATURE)
+**Spec:** specs/16-admin-dashboard.md
+
+### What was built
+The `/admin` landing page after login, rebuilt from the step-05 placeholder into a real portal dashboard.
+
+- **Portal shell** (`components/admin/PortalShell.tsx`, client): fixed sidebar nav on desktop (`lg` grid), slide-in drawer on mobile (uses `animate-slide-in-right`), sticky topbar with hamburger, user identity (email + humanised role), avatar initial, and the existing `LogoutButton`. Active-link detection via `usePathname`. Nav items are pre-filtered to the user's role on the server (`navForRole`) and passed in, so the client component stays presentational.
+- **Data + presentation model** (`lib/admin/dashboard.ts`): thin Prisma readers `getDashboardStats` (Promise.all of six counts — NEW applications, NEW inquiries, published campuses/programmes/albums/testimonials) and `getRecentActivity` (latest applications + inquiries + audit logs). Pure, unit-tested helpers: `mergeActivity` (merges three sources newest-first, caps at limit, maps titles/details/section links per kind), `formatWhen` (deterministic en-GB / Africa-Lagos label), `navForRole`, `quickActionsForRole`, plus `STAT_CARDS`/`NAV_ITEMS`/`QUICK_ACTIONS` catalogs.
+- **Stat cards** (`components/admin/StatCard.tsx` + `DashboardStats.tsx`): animated counters via existing `AnimatedCounter`, action-needed cards (applications/inquiries) accented amber, others teal; each links to its section. Streamed inside a `<Suspense>` boundary with `DashboardStatsSkeleton`.
+- **Recent activity** (`components/admin/RecentActivity.tsx`): unified feed with per-kind icon/tone, quick links to Applications/Inquiries sections (audit rows have no link — no dedicated screen), friendly empty state, streamed inside `<Suspense>` with `RecentActivitySkeleton`.
+- **Quick actions** (`components/admin/QuickActions.tsx`): role-filtered add-content shortcuts + edit-settings link, plus the **Admissions Open banner toggle**.
+- **Banner toggle** (`components/admin/BannerToggle.tsx` client + `app/admin/api/settings/banner/route.ts`): switch control POSTs `{on}` to a Node route that requires `settings.edit` (401 unauth / 403 forbidden incl. screenshot-preview, 400 bad body), updates `Settings.admissionsBannerOn` on the `singleton` row, records `updatedById`, and writes a `settings.banner.toggle` audit row. `router.refresh()` re-reads the state.
+- **Icons** (`components/admin/AdminIcon.tsx`): compact inline-SVG set (currentColor stroke) for sidebar/cards/actions — no PNG asset dependency.
+
+### Decisions
+- "New" counts = `status === NEW` (not the `read` flag) for both applications and inquiries.
+- Skeletons implemented via App-Router Suspense streaming (idiomatic) rather than client fetch; only the counters and the banner switch are client components.
+- Sidebar/quick-action links point at the intended section routes (`/admin/applications`, `/admin/campuses/new`, …) that later steps build; settings + users pages already exist.
+- Banner toggle is a genuine mutation with audit even though the spec's gate marks audit N/A for the read-only view — flipping site behaviour warrants a trail.
+- Top-level `app/admin/layout.tsx` left untouched (still noindex wrapper) so the unauthenticated auth screens keep their own centred layout; the shell is applied per authenticated page (dashboard here).
+
+### Gates
+- `pnpm lint` ✔ (no warnings/errors)
+- `pnpm typecheck` ✔ (clean)
+- Tests: added `test/admin-dashboard.test.ts` — stat-card/count coverage, mergeActivity ordering/mapping/cap, formatWhen, and RBAC gating (EDITOR vs ADMIN nav + quick actions). Not executed here (controller runs full suite); lint+typecheck only per AGENT.md.
+- No schema change → no `prisma generate` needed.
+
+### Files
+- Added: `lib/admin/dashboard.ts`, `components/admin/{PortalShell,AdminIcon,StatCard,BannerToggle,DashboardStats,RecentActivity,QuickActions}.tsx`, `app/admin/api/settings/banner/route.ts`, `test/admin-dashboard.test.ts`.
+- Changed: `app/admin/page.tsx` (placeholder → dashboard), `PROGRESS.md`.
