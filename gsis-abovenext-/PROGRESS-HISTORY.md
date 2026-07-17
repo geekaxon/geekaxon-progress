@@ -624,3 +624,24 @@ Staff CRUD for the public gallery (`GalleryAlbum` + `GalleryImage`), gated on `g
 **Do-NOT-break honoured:** behind auth + `gallery.edit`; unpublished albums never public (public loader uses `published:true` where-clause from step 12); alt required (SEO); every mutation audited; upload/create/update/delete/publish/reorder revalidate the public gallery via ISR.
 
 **Gates:** `pnpm lint` ✔ (no warnings/errors) · `pnpm typecheck` ✔ (tsc --noEmit clean). No schema change → no `prisma generate`. Did not run build/tests per build-loop rules (controller runs full gates).
+
+## 22 — admin-testimonials — DONE (2026-07-17)
+
+Staff CRUD for the existing `Testimonial` model, gated on `testimonials.edit`. No schema change (model, permission, dashboard nav/count all pre-existed).
+
+**Decisions**
+- Testimonials have no slug — they only surface in the homepage `TestimonialsSection` slider — so the sole public revalidation target is `/`. Kept a `testimonialPublicPaths()` helper (returns `["/"]`) for symmetry with campuses/gallery.
+- Fields: authorName (required), authorRole (optional), quote (required, capped 600), photo (optional). Validation lives in the pure `normalizeTestimonialInput`; DB helpers are thin Prisma wrappers, mirroring `lib/admin/campuses.ts`.
+- Photo storage per the step-21 decision: single upload endpoint writes to `public/assets/testimonials/`, DB stores only the path (R2 later = path swap, no schema change). Reused the 5 MB / image-type guards.
+- Reorder via order-swap-with-neighbour in a transaction; publish toggle is a lightweight route; every mutation (create/update/delete/publish/unpublish/reorder/upload) audited with entity `Testimonial`.
+
+**Files**
+- `lib/admin/testimonials.ts` — pure validation/format helpers + server DB reads/writes.
+- `app/admin/api/testimonials/route.ts` (POST), `[id]/route.ts` (PATCH/DELETE), `[id]/publish/route.ts`, `reorder/route.ts`, `upload/route.ts`.
+- `app/admin/testimonials/page.tsx` (list), `new/page.tsx`, `[id]/page.tsx`.
+- `components/admin/testimonials/TestimonialRowActions.tsx`, `PhotoField.tsx` (single round-avatar upload), `TestimonialForm.tsx`.
+- `test/admin-testimonials.test.ts` — normalize (valid, required name/quote, optional role/photo, caps), toTestimonialData nulling, public paths.
+
+**Gates:** lint ✔ · typecheck ✔ (build/tests left for controller). Design self-check: matches campuses/gallery admin patterns — PortalShell, Forbidden fallback, plain-language labels, skeleton-free simple list, confirm-on-delete, toast on save, round-avatar preview consistent with the public slider.
+
+WORK TYPE: FEATURE (branch feature/22-admin-testimonials)
