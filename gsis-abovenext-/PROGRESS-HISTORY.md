@@ -463,3 +463,24 @@ Branch: `feature/11-admission-form`. Online admission form saving to `AdmissionA
 **Cross-link:** `components/ui/Footer.tsx` bottom bar gained a Legal nav linking directly to `/legal/privacy` and `/legal/terms`.
 
 **Tests:** `test/legal.test.tsx` — resolveLegalTab active-tab-from-path (privacy/terms/default), LEGAL_TABS config (two distinct non-query URLs), unique section anchor ids, accurate PII disclosure (renders LegalArticle, asserts admission/contact fields + real behaviour + mailto), and LegalTabs marks the path-matching tab aria-selected with correct hrefs (next/navigation mocked).
+
+## 15 — supporting-pages — DONE (2026-07-17)
+
+Closed out the public site with the remaining shared states plus a full-site SEO/link sweep.
+
+**Delivered**
+- `components/shared/ThankYou.tsx` — one shared, branded, presentational confirmation template (check icon, headline, copy, optional "what happens next" panel, action slot). Configurable heading level (`h1` standalone / `h2` inline) and ARIA `role`, so it works in both a server page and a client form. Refactored `app/admissions/apply/thank-you/page.tsx` and the ContactForm "message sent" state to render it — same look/wording across both flows.
+- `app/not-found.tsx` — branded 404 with Header/Footer, single `<h1>`, helpful links (Home/Admissions/Curriculum/Gallery/Contact) and Return-home/Contact CTAs. Deliberately DB-free so it renders even when data is down; Next serves it with a real 404 status. Explicit `robots: noindex,nofollow`.
+- `app/error.tsx` — client error boundary: branded, safe message, `Try again` (reset) + Return-home. Logs the error to the console for observability; never renders the message, stack, or digest to the user.
+- `app/global-error.tsx` — self-contained last-resort boundary (own `<html>/<body>`, imports globals.css) for root-layout failures, with a safe message + reset.
+
+**SEO sweep fixes**
+- Removed broken internal links in the shared nav: Header `DEFAULT_NAV` and Footer `DEFAULT_COLUMNS` pointed at not-yet-built routes (`/academics`, `/campus-life`, `/news`, `/careers`). Repointed to existing routes only — Header: About/Curriculum/Admissions/Campuses/Contact; Footer columns School (About/Curriculum/Admissions), Explore (Campuses/Gallery/Apply), Connect (Contact/Privacy/Terms).
+- Added the `/campuses` index (which existed but was absent) to `app/sitemap.ts` static entries.
+- Verified: robots stays fail-closed noindex on staging + `Disallow: /` (unchanged); thank-you/404/error explicitly noindex even in production; all content images already use `next/image`.
+
+**Tests** — `test/supporting-pages.test.tsx`: 404 metadata is noindex + single-h1 + helpful links; error boundary shows the safe message and leaks neither the error text nor the digest, and `Try again` calls `reset`; shared ThankYou renders heading/description/steps/actions and supports the h2+status inline variant.
+
+**Gates** — `pnpm typecheck` ✔, `pnpm lint` ✔ (no warnings/errors). Existing Header/Footer tests still pass (assert "About" + "Apply for Admission", both retained). Design self-check by inspection: shared tokens (teal/amber, rounded-card, font-display, foreground/muted), responsive py/text scales, on-design header/footer on 404 + error.
+
+**Decision** — Footer Connect column now lists Privacy/Terms (also in the bottom legal bar); minor duplication accepted to keep three balanced columns of real routes and avoid broken links.
