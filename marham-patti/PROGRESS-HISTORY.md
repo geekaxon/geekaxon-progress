@@ -3064,3 +3064,29 @@ Branch: feature/75-subscription-module. WORK TYPE: FEATURE. [LAUNCH-CRITICAL], P
 - Per-tenant PWA manifest wiring (app icon in the manifest) is deferred to the tenant-operations block; the icon is stored + resolvable via `/brand/me` today.
 
 **Gates:** `pnpm prisma generate` ✓, `pnpm lint` ✓ (0 errors; 1 pre-existing unrelated warning in doctor-portal), `pnpm typecheck` ✓ (29/29). EN↔UR parity ✓. Did not run test:unit/e2e/build per standing rules (controller runs them).
+
+## 78 — whitelabel-invite-and-domain — DONE (2026-07-17)
+
+**Type:** FEATURE (branch feature/78-whitelabel-invite-and-domain). PHASE 8. [LAUNCH-CRITICAL] for the branded invite screen; [POST-LAUNCH] for custom domain (whose infra already shipped in 53/59/72).
+
+### Branded invite/password screen (launch-critical)
+- API: `VendorTokenService.decodeInviteTenant(token)` — resolves the tenant an invite JWT addresses WITHOUT consuming it and WITH `ignoreExpiration` (signature + `typ:'vendor_invite'` still required), so a consumed/expired link still renders on-brand; a forged/garbage/wrong-secret/wrong-type token → null → platform default.
+- API: new `VendorInviteBrandingService` + PUBLIC `GET /vendor/invite/branding?token=` on `VendorAuthController`. Returns `{whitelabel, appName, logo, poweredBy, cssVars}`. Whitelabel gate via `SubscriptionService.tenantHasWhitelabel`; identity via `BrandService.resolveFor`. Always 200 — never leaks token validity or tenant existence; non-whitelabel and unresolvable tokens are indistinguishable from the Marham Patti default. Registered in VendorModule providers (BrandModule + SubscriptionsModule were already imported).
+- Web: `/invite` page now hands off from the server (lang + token) to a new client frame `BrandedInviteScreen` that fetches the branding, applies the tenant's `--brand-*` colours as SCOPED vars on the auth card (not `<html>`), renders the tenant logo (uploaded URL/path) or falls back to the platform `<Logo>`, shows the app name in the mark + subtitle, and sets the browser tab title in the tenant's name when whitelabel. First paint is the default identity (tokens already inlined by the layout → no unstyled flash), tenant theme layered on resolve. The EN/UR toggle now preserves the token. `InviteForm` is unchanged, so the 71 consumed(409)/expired(410)/invalid(401/403) states render inside the same branded frame. Invite links stay absolute + domain-derived (71/CODEREF §E.8).
+- i18n: `vendorInviteSubtitle` parametrised to `{app}` (reads identically as "Marham Patti" for non-whitelabel), added `vendorInviteTabTitle` (EN+UR parity).
+
+### Custom domain (post-launch)
+- The lifecycle (PENDING→VERIFIED→ACTIVE), tenant Settings→Domains manager, vendor console Domains list (status + activate/disable), and host→tenant routing for ACTIVE custom domains already shipped in 53/59/72 (`TenantDomainService`, `HostResolutionService`, `resolveHost`). No re-litigation.
+- Added the in-UI flow explanation the owner asked for: a numbered add→DNS→verify→activate `<ol class="mp-steps">` in the tenant Domains custom-domains card, with new `domains.flow*` keys (EN+UR) and a small `.mp-steps` style in globals.css (tokens only).
+- Cross-tenant isolation (custom domain maps to exactly one tenant) already proven by `tenant-domain.resolver.spec.ts` + `tenant-addressing-isolation.spec.ts` + `branding-isolation.spec.ts`.
+
+### Tests
+- New `apps/api/src/vendor/vendor-invite-branding.spec.ts` (jest, no DB): whitelabel tenant → own identity + `--brand-teal` override + poweredBy; non-whitelabel → Marham Patti default; EXPIRED invite → still branded; forged/garbage/null token → default; wrong token type → default.
+- No Playwright harness exists in this repo (the web package has no test runner — consistent with prior Phase-8 steps); the invite screen is covered by the API-level branding resolver test + design self-check by inspection. The acceptance's "Playwright page.goto" could not be added as a runnable gate.
+
+### Gates
+- `pnpm typecheck` — green. `pnpm lint` — green (0 errors; the single warning is a pre-existing unused-disable directive in doctor-portal.repositories.ts, unrelated). Did NOT run test:unit/build/e2e (controller runs them). No schema.prisma change → no prisma generate.
+
+### Decisions
+- Branding resolved CLIENT-side (mirroring the existing `BrandProvider`/host-context pattern) because API_BASE is a relative `/api` with no server-side base URL — server-component fetch isn't wired here.
+- Custom-domain add stays gated by the existing `platform.customDomain` capability flag (51) rather than re-wiring the gate to the 77 whitelabel toggle — "non-whitelabel cannot add one" holds when that flag lives only on whitelabel packages; avoided re-litigating a settled seam.
