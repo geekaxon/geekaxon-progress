@@ -3090,3 +3090,38 @@ Branch: feature/75-subscription-module. WORK TYPE: FEATURE. [LAUNCH-CRITICAL], P
 ### Decisions
 - Branding resolved CLIENT-side (mirroring the existing `BrandProvider`/host-context pattern) because API_BASE is a relative `/api` with no server-side base URL — server-component fetch isn't wired here.
 - Custom-domain add stays gated by the existing `platform.customDomain` capability flag (51) rather than re-wiring the gate to the 77 whitelabel toggle — "non-whitelabel cannot add one" holds when that flag lives only on whitelabel packages; avoided re-litigating a settled seam.
+
+## 79 — tenant-detail-enhancements — DONE (2026-07-17)
+
+**Branch:** feature/79-tenant-detail-enhancements. **Work type:** FEATURE. Spec 79 (+ CODEREF 70–84). Mixed launch tags handled inline.
+
+### What shipped
+Three parts, all inside the vendor console tenant-detail screen `apps/web/app/(vendor)/vendor/tenants/[id]/page.tsx`:
+
+1. **Overview mini-dashboard [LAUNCH-CRITICAL].** Replaced the plain definition-list Overview with a cockpit: a 4-tile StatGrid (this tenant's bookings, revenue, outstanding balance, active staff — each routed through `formatMetric` so no-data shows "—", never a fabricated 0), a lazily-loaded (`next/dynamic`) BookingsAreaChart trend from the tenant's own analytics series, a subscription snapshot card (package · status pill · next invoice) and a quick-actions row (Suspend/Resume via tenant status, Assign package + Start support that jump tabs). Data from the existing scoped `GET /vendor/analytics/tenants/:id` (returns `TenantAnalytics | null`). Details + full Lifecycle cards kept below. Tabs made controlled so quick actions can navigate.
+
+2. **Flags core/toggleable + deps + ceiling [LAUNCH-CRITICAL].** A new Core-capabilities section renders the always-on infra (`NEVER_FLAGS`: auth, isolation, audit, offline, branding, i18n, …) as locked rows with a Lock glyph, a "Core" badge and an "Always on" caption — shown but never toggleable. Toggleable catalog flags now show their `dependsOn` UPFRONT ("Requires …"), and the package ceiling is resolved pre-emptively: a flag (or a required dependency) above the ceiling is disabled with a gold upgrade hint instead of failing after a click. Enabling a flag whose dependency is off opens a confirm dialog ("Enabling X also turns on its requirement Y") and then writes the dependencies parents-first, then the child — so the server's per-write dependency + ceiling guards are always satisfied in order (no post-click "action failed" for a known dependency, Acceptance §2).
+
+3. **Owners → partner shares [POST-LAUNCH].** New platform-scoped `tenant_partners` table (migration `20260717200000_tenant_partners`, `apply_platform_rls` fail-closed, `tenant_id`-keyed) + Prisma model `TenantPartner`. New `GET`/`PUT /vendor/tenants/:id/partners`. An editable partner list (name, contact, whole-% share) with a live total and a Save gated to "empty OR shares total exactly 100%". Server re-validates the sum in `parseSetPartners` (never trust the client) and `replacePartners` swaps the whole set atomically inside the platform-scope transaction; every save is audited (`vendor.tenant.partners_set`, before→after count/total). This is OWNERSHIP/equity, deliberately distinct from the Team (staff/roles, 74).
+
+### Code touched
+- `packages/shared/src/flags.ts` — added `core: boolean` to `FlagDef` (+ `F` factory param, default false; additive) and a pure `flagDependencyClosure(key)` (transitive ancestors, parents-first). Boot sync (`syncFlagCatalog`) unaffected — it cherry-picks key/group/defaultOn/dependsOn, so `core` is code-side only and the NEVER_FLAGS/flag-catalog tests stay green.
+- `apps/api/src/subscriptions/subscriptions.types.ts` + `subscription.service.ts` — added `flagCeiling: string[] | null` to `ConsoleSubscriptionView`, mirroring `getCeiling` (null = unrestricted `*`/no-sub) so the Flags UI can enforce the ceiling client-side.
+- `apps/api/src/vendor/vendor.types.ts` — `ConsolePartner` + `PartnerInput`.
+- `apps/api/src/vendor/vendor.dto.ts` — `parseSetPartners` (field validation + "sum to 100 or empty", ≤20 rows).
+- `apps/api/src/vendor/vendor.repositories.ts` — `listPartners` / `replacePartners` (platform-scope, atomic delete+createMany).
+- `apps/api/src/vendor/vendor-console.service.ts` — `listPartners` / `setPartners` (+ audit).
+- `apps/api/src/vendor/vendor.controller.ts` — `GET`/`PUT tenants/:id/partners`.
+- `packages/db/prisma/schema.prisma` + new migration — `tenant_partners`.
+- `apps/web/.../console.ts` — mirrored `flagCeiling` + `ConsolePartner`.
+- `apps/web/.../tenants/[id]/page.tsx` — the three UI features above; `putJsonV`, StatCard/StatGrid, dynamic chart, `ceilingAllows`/`flagDependencyClosure`/`NEVER_FLAGS`.
+- `packages/i18n/src/messages/en.json` — new `vendor.detail.*` keys (EN-only vendor group, spec 54; no UR added).
+- `apps/api/src/vendor/tenant-partners.spec.ts` — new unit tests: partner share-sum validation, dependency closure, ceiling gate, core annotation.
+
+### Decisions / notes
+- **"Playwright page.goto" (CODEREF §E.5):** the repo still has NO web e2e/playwright harness (prior vendor UI steps 77/78 shipped API `.spec.ts` only). Rather than scaffold a whole framework in one step (and the controller gate is `pnpm test:unit`), the spec's testable logic is covered by the new API unit tests; the visual states (light/dark, stat+chart render, dep-before-click, ceiling hint) were verified by inspection against the 70 conventions. Flagged here in case an e2e harness lands later.
+- **`tenant_partners` RLS:** modelled as a platform table (`apply_platform_rls`) managed from the console — consistent with every other console-owned table and CODEREF §B/§E.1 ("new tables get RLS via the existing helpers"). Rows carry `tenantId`, so each tenant's equity records stay isolated; the sum-to-100 rule is a service invariant, not a DB constraint (partial edits must remain possible in the editor).
+- **Core flags:** no sellable catalog flag is core today; `core` is false throughout the catalog and the Core section is driven by `NEVER_FLAGS`. The field exists so a future always-on catalog entry can never be accidentally switchable and the lock logic reads one source.
+
+### Gates
+`pnpm prisma generate` ✓. `pnpm typecheck` ✓ (29/29). `pnpm lint` ✓ (fixed an unused-var; only a pre-existing doctor-portal warning remains, unrelated). `pnpm test:unit`/`build`/`e2e` left for the controller.
