@@ -560,3 +560,32 @@ Managed contact inquiries (ContactInquiry model) in the admin portal, mirroring 
 - lib/auth/permissions.ts (+INQUIRIES_MANAGE), test/admin-inquiries.test.ts, test/auth-permissions.test.ts (updated)
 
 **Gates:** pnpm lint ✔ (no warnings/errors) · pnpm typecheck ✔ (tsc --noEmit clean). Unit tests written (parseFilters/buildWhere/filtersToQuery/toCsv/status/csvFilename + RBAC); controller runs full suite/build.
+
+---
+
+## 19 — admin-campuses — DONE (2026-07-17)
+
+**Branch:** feature/19-admin-campuses · WORK TYPE: FEATURE
+
+**Goal (spec 19):** Staff-facing CRUD for the `Campus` model (create/read/update/delete, images, slug, publish/unpublish, order) with every change reflected on the public `/campuses` pages and audited. Route `/admin/campuses`, permission `campuses.edit`.
+
+**Decisions:**
+- **Image storage:** decided local `public/assets/campuses/` (served directly by Next). The optional Cloudflare R2 object store remains deferred to step 21; the DB stores only the public path, so a later R2 switch is a path swap with no schema change. Upload endpoint validates image mime-type (jpeg/png/webp/avif/gif) and a 5 MB size cap, writes with a `randomUUID` filename.
+- **No schema change:** the `Campus` model (slug unique, order, published, heroImage, gallery[], addressLines[], mapEmbedUrl, etc.) already existed from spec 08; reused as-is. No prisma migrate/generate needed.
+- **Live reflection:** public listing + detail use ISR (`revalidate = 300`); every mutation additionally calls `revalidatePath("/campuses")` and the detail path on demand. Renames revalidate both old and new slug paths.
+- **Reorder:** number/arrow based (move up/down swaps `order` with the neighbour in a transaction) rather than drag — simpler, keyboard-accessible, and matches the "large controls, non-technical-friendly" UX ask.
+- **Publish toggle** kept as a dedicated lightweight route (list action) separate from the full-form PATCH, mirroring the existing settings/banner + inquiry status route pattern.
+- **Validation:** shared pure `normalizeCampusInput` — name required, slug auto-derived from name until hand-edited then sanitised + URL-safety checked, email + https-map-embed format checks, addressLines split by newline, gallery coerced to string[]. Slug uniqueness enforced server-side (409) with an inline debounced availability check (`GET /admin/api/campuses/slug`).
+
+**Files:**
+- `lib/admin/campuses.ts` — pure helpers (slugify, isValidSlug, normalizeCampusInput, campusPublicPaths, formatDate, toCampusData) + DB helpers (listCampuses, getCampusForEdit, slugTaken, nextCampusOrder, neighbourFor).
+- API (Node runtime, all gated on `campuses.edit`, all audited): `app/admin/api/campuses/route.ts` (POST create), `app/admin/api/campuses/[id]/route.ts` (PATCH update + DELETE), `app/admin/api/campuses/[id]/publish/route.ts` (POST toggle), `app/admin/api/campuses/reorder/route.ts` (POST up/down), `app/admin/api/campuses/upload/route.ts` (POST image), `app/admin/api/campuses/slug/route.ts` (GET availability).
+- Pages: `app/admin/campuses/page.tsx` (list), `.../new/page.tsx` (create), `.../[id]/page.tsx` (edit).
+- Components: `components/admin/campuses/CampusForm.tsx`, `ImageField.tsx`, `CampusRowActions.tsx`.
+- Tests: `test/admin-campuses.test.ts` — slugify, isValidSlug, normalizeCampusInput (name/slug/email/map validation, published coercion, address/gallery parsing), campusPublicPaths.
+
+**Audit actions written:** campus.create, campus.update, campus.publish/unpublish, campus.delete, campus.reorder, campus.upload — summaries carry the campus name/id only.
+
+**Accountability / safety:** all mutations require `campuses.edit` (401 unauth, 403 preview or missing perm); unpublished campuses stay excluded from the public site via the existing `PUBLISHED_WHERE` guard in `lib/campuses/data.ts`; slug stays unique + URL-safe.
+
+**Gates:** `pnpm lint` ✔ (no warnings/errors) · `pnpm typecheck` ✔ (tsc --noEmit clean). Did not run build/tests per build-loop rules (controller runs full gates). Unit tests written for the pure helpers per the established admin-module testing pattern.
