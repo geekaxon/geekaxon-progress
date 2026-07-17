@@ -9,19 +9,19 @@
 ## Current Status
 
 - **Project:** GSIS Website & Admin Portal — built & delivered by AboveNext.
-- **Last completed build-step:** `12-gallery` (2026-07-17)
-- **Current build-step:** `13` (see build order)
+- **Last completed build-step:** `13-contact` (2026-07-17)
+- **Current build-step:** `14` (see build order)
 - **Next-step pointer:** → next spec in `specs/`
-- **Branch state:** last merged `feat/11-admission-form` → `staging`. Next branch: `feature/13-*`.
+- **Branch state:** last merged `feat/11-admission-form` → `staging`. Next branch: `feature/14-*`.
 - **Environment:** working on `staging` only (noindex/robots-disallowed). `main`/production is human-gated (owner Telegram command).
 - **Checkpoint model:** continuous — every step ends with a soft `[CHECKPOINT]`; the single human gate is production launch (step 25).
 - **Build order:** runs `01` → `25`. **NOT complete until `25-production-launch` is DONE.**
 
 ## Recent steps (keep exactly 3 one-liners; newest on top)
 
+- **13 — contact** — DONE (2026-07-17) — Contact page with details, map and socials from Settings; shared-schema form with honeypot plus rate-limit saves an inquiry, emails staff and sender, inline thank-you, full SEO gate.
 - **12 — gallery** — DONE (2026-07-17) — DB-driven album listing plus slug detail pages with an accessible keyboard lightbox, published-only, 404s, sitemap and the full SEO gate.
 - **11 — admission-form** — DONE (2026-07-17) — Online admission form: shared zod validation, honeypot plus rate-limit, DB-driven selects, saves the application, staff and applicant emails, thank-you page.
-- **10 — admissions** — DONE (2026-07-17) — Admissions info page: process timeline, requirements, marketing fees note, FAQ accordion and CTA, with the full SEO gate.
 
 ## Notes / open decisions
 

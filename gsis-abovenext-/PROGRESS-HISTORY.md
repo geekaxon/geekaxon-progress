@@ -419,3 +419,29 @@ Branch: `feature/11-admission-form`. Online admission form saving to `AdmissionA
 **Decisions:** Seed data already present (albums campus-life, events). imageCount via Prisma _count. Lightbox images render via MediaImage so empty/failed src degrades to the branded fallback (also lets the a11y test avoid next/image in jsdom). Nav bar left unchanged (prior steps didn't add campuses/curriculum links either). No user-event dep in repo → used fireEvent.
 
 **Gates:** pnpm lint ✔ (no warnings/errors) · pnpm typecheck ✔ (tsc --noEmit clean). Schema unchanged → no prisma generate. Did not run build/test:unit/e2e per AGENT.md (controller runs full gates). SEO gate satisfied: metadata/OG/Twitter, single h1, alt on every image, BreadcrumbList + ImageGallery JSON-LD, sitemap entries, staging noindex via robotsMeta.
+
+## 13 — contact — DONE (2026-07-17)
+
+**Branch:** feature/13-contact (FEATURE). Spec: specs/13-contact.md.
+
+**What was built:** Public `/contact` page — school contact info, embedded map, social links + WhatsApp, and a contact form that saves to `ContactInquiry` and emails staff + sender.
+
+**Files:**
+- `lib/contact/contact-schema.ts` — shared zod schema (name+email+message required; phone/subject optional), `toInquiryData` mapper, honeypot helper. Client-safe (no Prisma).
+- `lib/contact/contact-email.ts` — `sendInquiryEmails`: staff notification (recipients from Settings; skipped if none) + submitter acknowledgement, via the provider-agnostic `sendEmail` sink (staging = console; no real recipients).
+- `app/api/contact/route.ts` — POST (Node runtime): per-IP rate-limit (reuses `lib/admissions/rate-limit` with `contact:` key namespace) → honeypot silent-accept → zod → persist ContactInquiry (status NEW, read false) → emails. Never logs raw PII body.
+- `components/contact/ContactForm.tsx` — client form, same shared schema, inline success state (no navigation), honeypot field, accessible errors.
+- `components/contact/ContactInfo.tsx` — server panel rendering address/phone/email/WhatsApp/socials from Settings; omits missing values.
+- `app/contact/page.tsx` — sections + breadcrumbs; Google Maps embed iframe (address query, lazy, titled); WhatsApp FAB. JSON-LD: BreadcrumbList + ContactPage + Organization.
+- `lib/seo.ts` — added `contactPageJsonLd()`; extended `organizationJsonLd(sameAs)` to accept social URLs (backward-compatible default []).
+- `app/sitemap.ts` — added `/contact` static entry.
+- `test/contact.test.ts` — validation (required/optional/malformed), save mapping, honeypot, rate-limit, email dispatch (sendEmail mocked).
+
+**Decisions:**
+- Thank-you: chose the spec's inline success-state option over a `/contact/thank-you` route — cleaner UX, and no separate indexable page to worry about (noindex concern moot).
+- "Hours from Settings": the Settings model has no hours field; omitted rather than add a migration for one minor field (not in acceptance criteria). Address/phone/email/socials/WhatsApp all render from Settings.
+- Rate-limit reused from admissions (generic `checkRateLimit`, key-namespaced) rather than duplicated.
+- captcha `[DECIDE AT BUILD]`: kept honeypot + per-IP rate-limit (matches project standing decision; no captcha).
+- Email provider `[DECIDE AT BUILD]`: console sink on staging (existing `sendEmail`), no real recipients.
+
+**Gates:** `pnpm lint` ✔ (no warnings/errors), `pnpm typecheck` ✔ (clean). No schema change (ContactInquiry already existed) → no prisma generate. Did not run build/test:unit/test:e2e per token-discipline rules; controller runs full gates. SEO gate satisfied by inspection: title/description via buildMetadata, single `<h1>`, iframe title (alt equivalent), OG/Twitter defaults, BreadcrumbList + ContactPage + Organization JSON-LD, sitemap entry, staging noindex via central robots policy. Privacy: PII never logged raw; staging sink only.
