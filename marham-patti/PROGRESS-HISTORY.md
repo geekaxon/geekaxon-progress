@@ -3215,3 +3215,21 @@ both files for parity) + flat auditSupport.
 
 **Gates.** pnpm typecheck ✅ (29 tasks). pnpm lint ✅ (0 errors; 1 pre-existing unrelated warning
 in doctor-portal.repositories.ts). Did not run test:unit/test:e2e/build (controller runs them).
+
+## 85 — brand-assets-and-shell — DONE (2026-07-18) — WORK TYPE: FEATURE (branch feature/85-brand-assets-and-shell)
+
+Phase 9 item 1 (LAUNCH-CRITICAL). Presentation-only: wired the real owner-committed brand SVGs through the existing `platformLogo()` resolver and aligned the vendor console shell to the approved mockups. No service/repo/guard/policy/RLS/migration/permission changes.
+
+Decisions & changes:
+- **Real logo through the resolver.** `apps/web/components/shell/VendorChrome.tsx` sidebar brand block now renders the `horizontal-full` lockup via `<Logo variant="horizontal" height={28}>` (was insignia + a text wordmark span). The bare `insignia` is rendered in a second wrapper span, shown only in the collapsed rail. No hardcoded `/brand/*.svg` path — everything goes through `@mp/brand platformLogo()`. Owner had already committed all 8 real SVGs to `apps/web/public/brand/`.
+- **Sidebar header ↔ top bar alignment.** Added layout tokens to `globals.css :root`: `--topbar-h: 60px`, `--sidebar-w: 248px`, `--sidebar-w-collapsed: 68px`. `.mp-shell` grid now uses `var(--sidebar-w)` (identical to the old 15.5rem). Vendor top bar pinned to `height: var(--topbar-h)`; vendor brand block sized `calc(var(--topbar-h) - 1px)` content-box + a 1px bottom border, bled to the sidebar edges — so both bottom borders meet in one unbroken 60px line.
+- **Staff/patient shells untouched (Acceptance §6).** The `.mp-shell-*` classes are shared with `apps/web/components/shell/AppShell.tsx`. All new shell styling is scoped under `.mp-vendor-root` (the vendor layout wrapper, `display:contents`) so only the vendor console changes; base `.mp-shell-brand` / `.mp-shell-topbar` and the shared drawer media query were reverted to their originals.
+- **Collapsed icon rail.** New `@media (min-width:768px) and (max-width:1023.98px)` block, `.mp-vendor-root`-scoped, replaces the shared off-canvas drawer with a 68px in-flow rail (wordmark→insignia, group labels + nav labels hidden, icons centred, bottom avatar stacked over sign-out, hamburger hidden). Below 768px the vendor console falls back to the shared drawer, so the deliberate drawer/hamburger/backdrop code is preserved (invariant 11).
+- **Top bar to the library.** Added a right-edge account cluster: notification bell (with an accent unread dot), the existing ThemeToggle, a thin vertical divider, and an account avatar. Search + cluster now ride the right edge (spacer moved ahead of the search) to match the mockup composition. `flex-wrap: nowrap` + a flexible search keep it from wrapping 360→2560.
+- **i18n.** Added `vendor.notifications` to BOTH `en.json` and `ur.json` (parity gate — vendor UI stays EN-only but the catalogs must keep key parity, which bit the gate in 79).
+
+Assets/paths touched: `apps/web/components/shell/VendorChrome.tsx`, `apps/web/app/globals.css`, `packages/i18n/src/messages/{en,ur}.json`, `packages/ui/src/lib/brand-shell.spec.ts` (new).
+
+Tests: no browser/Playwright harness exists for the web app (noted at 84), and jsdom does no layout — so acceptance §1/§2 are guarded by a runnable jest spec in `packages/ui` (existing jest harness): asserts `platformLogo()` resolves the real `horizontal-full`/`vertical-full`/`insignia` filenames in both modes; that every committed brand SVG exists on disk (a missing asset fails loudly); that `VendorChrome` renders the lockup via `<Logo>` with no literal `/brand/*.svg` path; and a CSS-contract check that the vendor top bar and brand block are both sized off the single `--topbar-h` token (same height by construction).
+
+Gates: `pnpm lint` (incl. design-drift check) and `pnpm typecheck` both green. Did not run test:unit/build/e2e per standing rules (controller runs them). No hex literals outside globals.css. Screenshots not captured — no running web/Playwright harness in this environment; verified by inspection against dashboard.png (light + dark) and the component-library shell sections.
