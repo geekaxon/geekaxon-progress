@@ -943,3 +943,26 @@ Gates: `pnpm prisma generate` ✔ · `pnpm lint` ✔ (no warnings) · `pnpm type
 **Gates:** lint ✔ (no warnings/errors) · typecheck ✔ (tsc --noEmit clean). Did not run build/test:unit/test:e2e per token-discipline rules; controller runs full gates.
 
 **Design self-check:** light theme only, no theme toggle, no dark-mode CSS, no preloader; single `<h1>` in the hero with amber underline; breadcrumb JSON-LD + OG/Twitter via `buildMetadata`; next/image (ClayIcon) with descriptive alt; no link points to `/curriculum/[slug]` (grep-verified — only the seo helper `programmePath` referenced, in tests).
+
+## 37 — gallery-contact-rebuild — DONE (2026-07-18)
+
+Rebuilt the Gallery and Contact pages to their mockups (`/mockups/gallery.html`, `/mockups/contact.html`), keeping the spec-13 contact backend untouched.
+
+**Gallery (`/gallery`)** — replaced the album-card listing with a single filterable masonry photo grid:
+- New `getGalleryData()` in `lib/gallery/data.ts` flattens every published album's images into an album-tagged `GalleryPhoto[]` plus an ordered filter list (albums with ≥1 image only). Added `GalleryPhoto`/`GalleryFilter` types and a `GALLERY_ALL` const to `lib/gallery/seo.ts`; existing album-detail helpers/loaders kept intact (still used by structured-data + gallery unit tests).
+- New `GalleryHero` (amber-underline "Gallery", breadcrumb, blobs — matches sibling rebuilds) and `GalleryGrid` client component: filter bar (All + one tab per album, active = navy, `aria-pressed`, amber focus ring), CSS multi-column masonry with varied aspect ratios, hover gradient + album/caption + zoom cue, "Load more" paging (9/step), empty state, and lightbox integration.
+- Generalised `Lightbox` to take `GalleryPhoto[]` (per-photo album label in caption + dialog aria-label) while keeping the full focus-trap / arrow-nav / Esc / focus-restore a11y behaviour.
+- `app/gallery/loading.tsx` now shows filter-bar + masonry skeleton tiles (skeletons only, no preloader).
+- Deleted now-dead `AlbumCard`, `AlbumGallery`, `GalleryList`. Rewrote the gallery unit test to cover the new grid (All+album tabs, filtering, lightbox a11y) plus the retained seo helpers. Single page only — no `/gallery/[slug]` route.
+
+**Contact (`/contact`)** — matched the mockup layout:
+- New `ContactHero` (amber-underline "Contact Us"). Rebuilt `ContactInfo` as a navy gradient card with icon rows (Address / Phone / Email / Office Hours), a green WhatsApp quick-link and social icon squares — all from Settings.
+- Exposed `contactHours` on `HomeSettings` (interface + default + mapping in `lib/home/data.ts`) so office hours render from the existing `Settings.contactHours` column (no schema/migration change).
+- `ContactForm`: subject is now a select (Admissions enquiry / Fee structure / Schedule a visit / General question) and added the lock "Your details are kept private and secure." reassurance line beside the inline-submit button. Kept the shared zod schema, honeypot, rate-limit, and inline ThankYou success state.
+- Map iframe (from Settings address) moved to a full-width band below the two-column grid so it doesn't break the mockup's info+form layout. Kept breadcrumb + ContactPage JSON-LD.
+
+**Decisions:** subject/phone left optional server-side (spec-13 shared schema is authoritative) even though the mockup marks them required — visual only. Inline thank-you kept (no separate `/contact/thank-you` route needed, so nothing new to noindex). Map retained per spec item 5 though absent from the mockup.
+
+**Gates:** `pnpm lint` ✔ (no warnings/errors) · `pnpm typecheck` ✔ (clean). Did not run test/build (controller runs full gates). No PROGRESS-HISTORY read-back; appended only.
+
+WORK TYPE: FEATURE (branch feature/37-gallery-contact-rebuild)
