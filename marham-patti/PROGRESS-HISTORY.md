@@ -3282,3 +3282,23 @@ Gates: pnpm typecheck — green (29/29). pnpm lint — green (incl. design-drift
 **Tests:** extended `packages/ui/src/components/data-list.spec.tsx` — asserts the action cell renders View/Edit/Delete controls (10 rows/page), that clicking Edit fires the handler with the row, that an inline action does NOT trigger `onRowClick`, and that overflow extras hide behind the `⋯` menu.
 
 **Gates:** `pnpm lint` green (incl. design-drift + i18n eslint); `pnpm typecheck` green (29 tasks; @mp/ui rebuilt dist). No hex literals in the changed component/pages (grep clean). test:unit/build/e2e left to controller.
+
+## 88 — dashboard-and-analytics — DONE (2026-07-18) — feature/88-dashboard-and-analytics
+
+**Spec:** specs/88-89-design-post-launch.md (step 88) + CODEREF 85-89. Presentation-only visual pass over Oversight (dashboard) and Analytics to their approved mockups (dashboard.png, analytics.png; component-library.png authoritative for stat-card/chart anatomy). No service/repo/guard/schema change.
+
+**Shared kit (packages/ui):**
+- `stat-card.tsx`: added the graceful no-data `empty` variant — value rendered as a tertiary "—", the muted caption kept, and a FLAT DIVIDER drawn where a sparkline would sit (never a fabricated line/percentage). Value typography aligned to the library (28px `text-[1.75rem]`, 700, `tabular-nums`). Additive prop; existing trend/spark/caption paths unchanged.
+- `chart.tsx`: `AreaChartCard` gained an additive `dots` prop → open card-filled plotted points at each vertex + activeDot; `BarChartCard` gained `valueLabels` → a `LabelList` value above each bar (mockup bookings-by-month). Imported `LabelList`.
+- `chart-empty.tsx` (NEW): `ChartEmpty` — "No data yet" over a muted divider, sized to a chart's height. Kept OUT of chart.tsx on purpose so it stays recharts-free (rendered inline on-route when a series is empty). Exported from the `@mp/ui` barrel.
+- `stat-card.spec.tsx`: added a test asserting the empty variant renders "—" + caption + `stat-flat` divider, no `stat-trend`/`stat-spark`, and NO `%` anywhere (acceptance §2 — no fabricated trend on an empty baseline).
+
+**Vendor charts (apps/web/components/vendor/VendorCharts.tsx):** area charts now pass `dots`; `BookingsBarChart` now passes `valueLabels`.
+
+**Dashboard (apps/web/app/(vendor)/vendor/page.tsx):** Commission-earned tile uses the `empty` variant when the cycle total is 0 ("—" + "No commission cycle closed yet" + flat divider). Both chart cards use `ChartEmpty` for the empty series. 8-card grid + two gradient-area line cards (now with plotted points) + Recent activity feed unchanged in composition.
+
+**Analytics (apps/web/app/(vendor)/vendor/analytics/page.tsx):** KPI row re-scoped to the mockup's FOUR cards — Total bookings, Revenue, AI spend (empty "—" when 0 → "No AI billing cycle closed yet"), Avg. booking value (revenue/bookings, "—" when no bookings). Charts reorganised to the mockup: left = Revenue trend (gradient-area line w/ points), right = Bookings by month (bar chart with value labels). Donut "Bookings by source" card sized to content (`sm:max-w-xl`), gained a "This quarter" sub-label, centre total kept, legend now shows count (foreground) + percentage (muted) in aligned columns. Per-tenant breakdown header gained a "{n} tenants" sub-label; the 87 DataList kit (columns menu, rows-per-page, list/card toggle, inline row actions) unchanged. `ChartEmpty` replaces the old `EmptyState` for empty chart/donut.
+
+**i18n (packages/i18n/src/messages/en.json + ur.json — parity kept):** added `vendor.analytics.totalBookings`, `noAiCycle`, `avgBookingValue`, `revenueTrend`, `bookingsBySourceRange`, `tenantCount`; `chartEmpty` retexted to "No data yet". Mirrored into ur.json (vendor is EN-only on screen but the parity gate requires identical key sets).
+
+**Gates:** `pnpm lint` green (incl. design-drift check); `pnpm typecheck` green (turbo `^build` rebuilt @mp/ui + @mp/i18n dist so new exports/keys resolved). Did not run test:unit/build/e2e per BUILD LOOP; controller runs the full suite. No hex added beyond the file's existing `var(--token, #fallback)` convention. Screenshots (light+dark, 360→2560) require the running app — no Playwright harness in web (noted since 78); verified by inspection against the mockups.
