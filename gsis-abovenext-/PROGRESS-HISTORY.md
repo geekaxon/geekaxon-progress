@@ -696,3 +696,46 @@ Full-site SEO / performance / accessibility audit of every public route (admin +
 
 ### Gates
 - `pnpm lint` ✔ (no warnings/errors) · `pnpm typecheck` ✔ (clean). No schema.prisma change → no prisma generate. Did not run build/test:unit/e2e per AGENT.md (controller runs full gates).
+
+## 25 — production-launch — DONE (2026-07-17)
+
+**Type:** FEATURE (branch feature/25-production-launch). Human-gated launch step: the actual production deploy of `main` happens ONLY on the owner's explicit Telegram command — the agent prepares and verifies, never auto-deploys.
+
+**Findings (all production behaviour was already code-complete + fail-closed from prior steps; step 25 verified it and documented go-live):**
+- `lib/env.ts` — production is `APP_ENV === "production"` exactly; everything else fails closed to staging/noindex. `isIndexable`, `ANALYTICS_SRC`, `SEARCH_CONSOLE_VERIFICATION` derive from env.
+- `app/robots.ts` / `lib/seo.ts#robotsMeta` — production emits `allow:/` + sitemap + host and `index,follow`; staging/missing → `disallow:/` + `noindex,nofollow`.
+- `lib/auth/screenshot.ts` — screenshot preview bypass is OFF unless raw `APP_ENV === "staging"`; production denies even a matching token (verified).
+- `components/Analytics.tsx` + `app/layout.tsx` — analytics script and Search Console verification meta render only in production with the env value set.
+- `app/dev/ui/page.tsx` — noindex, absent from sitemap.
+- `ecosystem.config.js` — PM2 fork, 1 instance, NODE_ENV=production, 512M ceiling: correct.
+- `deploy.sh` — fences off main/master/production*; only deploys staging. Production go-live is out-of-band/owner-triggered, not this script.
+
+**Added:**
+- `docs/production-launch.md` — go-live runbook: preparation checklist (verified on staging), production `.env` table (APP_ENV=production, SCREENSHOT_TOKEN unset, analytics + Search Console tokens), DNS/SSL infra hand-off note, post-deploy activation (submit sitemap, confirm analytics) + smoke-test checklist over all public routes, and post-launch verification (screenshot OFF, staging noindex, no secrets).
+- `test/production-launch.test.ts` — launch-readiness tests consolidating acceptance criteria at the env level: production → indexable + analytics/verification exposed; every non-production APP_ENV → noindex; unset analytics/verification → undefined; screenshot bypass denied in production.
+
+**Gates:** `pnpm lint` ✔ (no warnings/errors) · `pnpm typecheck` ✔ (clean). No schema change (skipped prisma generate). Did not run build/test:e2e/test:unit per CLAUDE.md — controller runs full gates.
+
+**Human gate:** production deploy (DNS/SSL + `main` deploy) remains owner-triggered. No `[HUMAN_REQUIRED]` emitted — no infra blocker was hit during preparation; the deploy itself is simply owner-gated by design. Build order 01→25 is now complete pending owner go-live.
+
+---
+
+## 26 — design-system-v2 — DONE (2026-07-18)
+
+**Branch:** `feature/26-design-system-v2` (FEATURE). First step of Phase 4; foundation consumed by 28 and page rebuilds 31–37, 39.
+
+**Scope:** Finalised the navy-dominant design system per `/specs/26-design-system-v2.md` and `/mockups`.
+
+**Changes**
+- **Tokens (`tailwind.config.ts` + `app/globals.css`):** raw palette already matched the mockups; added the exact `--shadow-sm/md/lg` scale from the mockups (`0 2px 10px / 0 14px 40px / 0 30px 70px rgba(15,42,71,…)`) as tailwind `shadow-sm/md/lg` (no prior default usage) while keeping the `soft-*` aliases. Mirrored the raw palette, `--radius:18px`, `--maxw:1320px`, shadow and hover-motion vars into `:root` for faithfulness. Added standardised hover-motion tokens (`duration-hover` 200ms, `ease-hover` cubic-bezier(.2,.8,.2,1)).
+- **Dark mode removed (hard req):** deleted `darkMode:"class"`, the `.dark` CSS block and its dark token set, the `ThemeToggle` component (was only wired into the dev/ui demo, never the real Header) and its export + demo usage, and the `dark:text-red-400` classes in ApplyForm/ContactForm. Grep-clean of `prefers-color-scheme`, `.dark`, `dark:`, `darkMode`, `data-theme`, theme provider/persistence. No toggle rendered anywhere.
+- **Skeleton-only loading (hard req):** rebuilt `Skeleton` primitive with a subtle off-white↔line shimmer (`animate-shimmer` keyframe added to tailwind, halted under reduced-motion) and added composed variants `SkeletonText`, `SkeletonImage`, `SkeletonCard`, `SkeletonTable`, all exported. No full-page preloaders/spinner overlays exist (verified). Inline "Uploading…" button states retained (permitted).
+- **Gradual section blending:** added `.section-blend` / `.section-blend-reverse` (soft 180° paper↔off-white gradients) plus `.section-white` / `.section-offwhite` utilities, and a reusable `<Section tone>` wrapper for the page rebuilds.
+- **Ghost button border (spec §7):** ghost variant now carries a clearly-visible navy-tinted rest border (`border-[1.5px] border-navy/30`, matching the mockup's rgba(15,42,71,.34)); hover state left unchanged.
+- **Typography:** Fraunces + Inter already loaded via `next/font` in the root layout; unchanged.
+
+**Tests:** added `test/design-system-v2.test.ts` (token values match mockups, no dark-mode/theme-toggle grep hits, radius/maxw kept, shadow scale exact, skeleton primitives exported, section-blend utilities present) and extended `components/ui/__tests__/components.test.tsx` for the shimmer + skeleton variants.
+
+**Gates:** `pnpm lint` ✔ · `pnpm typecheck` ✔ (no schema change → no prisma generate). Unit/e2e/build left to the controller.
+
+**Notes/decisions:** kept the light-only semantic CSS-var tokens (`background/surface/foreground/muted/border`) rather than inlining — they now resolve to a single light theme; less churn for existing admin/public markup. Overriding tailwind default `shadow-sm/md/lg` is safe (no existing usages; code uses `soft-*`).
