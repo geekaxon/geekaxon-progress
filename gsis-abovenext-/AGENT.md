@@ -6,6 +6,13 @@
 
 ## 0. Golden rules (read every session)
 
+0. **BUILD ORDER = 01 → 41. The build is NOT complete until step `41-production-launch` is DONE.**
+   - **Step 25 is SUPERSEDED and its spec is deleted.** Production launch is now step **41**.
+   - If PROGRESS.md, cached context, or a leftover file points at `25-production-launch`, that is **stale** — ignore it, do not run it, and continue from the highest completed step in the 26–41 range.
+   - After finishing step N, the next step is **always N+1** in ARCHITECTURE.md §11. **Never** infer the next step by scanning, sorting, or counting the `/specs` folder.
+   - Steps **01–24 are COMPLETE**. Phase 4 (26–39) then launch (40–41) remain.
+   - Never emit "build order complete" before step 41.
+
 1. **One step at a time, in order.** Build only the current build-step from PROGRESS.md's next-step pointer. Never skip ahead, never batch steps.
 2. **The spec is authoritative.** `specs/NN-slug.md` is the source of truth for the current step. If it is **missing or empty**, STOP immediately — end your response with `[HUMAN_REQUIRED]` and do nothing else.
 3. **Foundation first** — the order in §11 is deliberate; platform / design system / SEO core / content model / auth precede the pages and portal.
@@ -15,7 +22,7 @@
 7. **Never auto-deploy production.** You work on `staging`/dummy data only. **Staging is noindex/robots-disallowed.** `main` (production, indexable) is human-gated (owner Telegram command only).
 8. **Design quality is part of "done"** (see §5). A functional-but-ugly UI is NOT done; it must match the finalised GSIS design system.
 9. **Record progress as part of finishing the step** (see §6), BEFORE the checkpoint line, tied to the spec being done — never deferred.
-10. **Continuous mode:** end every completed step with a soft `[CHECKPOINT]`. Stop only with `[HUMAN_REQUIRED]` (missing spec or non-code-fixable infra). The single human gate is production launch (step 25).
+10. **Continuous mode:** end every completed step with a soft `[CHECKPOINT]`. Stop only with `[HUMAN_REQUIRED]` (missing spec or non-code-fixable infra). The single human gate is production launch (**step 41**).
 
 ## 1. Per-step workflow
 
@@ -32,7 +39,7 @@ For the current build-step N:
 
 ## 2. Checkpoint markers (continuous mode)
 
-- **`[CHECKPOINT]`** — end EVERY completed step with this on its own final line. Soft; the controller auto-records + merges to staging + continues (auto-approved after the controller's short window). **Do NOT use `[FIXED_CHECKPOINT]`** in this project — even data-model / auth / settings steps end with a soft `[CHECKPOINT]`. The human gate is at **production deploy (step 25)**, not per-step.
+- **`[CHECKPOINT]`** — end EVERY completed step with this on its own final line. Soft; the controller auto-records + merges to staging + continues (auto-approved after the controller's short window). **Do NOT use `[FIXED_CHECKPOINT]`** in this project — even data-model / auth / settings steps end with a soft `[CHECKPOINT]`. The human gate is at **production deploy (step 41)**, not per-step.
 - **`[HUMAN_REQUIRED]`** — end with this (and nothing after) ONLY when:
   - the current step's `specs/NN-*.md` is missing or empty, OR
   - a deploy/infra failure is **not code-fixable** (server down, SSH/secret/auth failure, DNS/SSL, disk full, email-provider/analytics account, telephony/infra action you cannot perform, anything not fixable by editing code or `deploy.sh`).

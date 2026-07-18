@@ -735,3 +735,22 @@ Preparation + verification of the go-live wiring, plus tests and an owner runboo
 - privacy ✔ / env ✔ (placeholders only; no secrets committed)
 
 WORK TYPE: FEATURE (branch feature/25-production-launch)
+
+## 29 — routing-cleanup — DONE (2026-07-18)
+
+**Goal:** Align the route map with the finalised design — retain campus detail, remove curriculum detail, legal (privacy/terms) and gallery album detail routes, and update nav, links, sitemap, redirects and structured data.
+
+**Decisions:**
+- Deleted route files: `app/curriculum/[slug]/`, `app/legal/` (privacy + terms), `app/gallery/[slug]/`.
+- Deleted orphaned components/lib fully owned by removed routes: `components/legal/*` (4 files), `lib/legal/content.tsx`, `components/curriculum/ProgrammeHero.tsx`, and the orphaned `test/legal.test.tsx`.
+- Kept the shared lib helpers/loaders (`lib/curriculum/seo.ts`, `lib/gallery/seo.ts`, and the by-slug data loaders) — they no longer render dead links, still carry unit coverage, and specs 36/37 (inline curriculum detail, gallery lightbox) are expected to reuse them. Removed only the two sitemap providers that emitted removed-route URLs, pruning the now-unused imports (`canonicalUrl`, `registerSitemapProvider`, `programmePath`/`albumPath`) from the data loaders.
+- Redirects added in `next.config.ts` via `redirects()` — permanent: `/curriculum/:slug`→`/curriculum`, `/legal/privacy`→`/`, `/legal/terms`→`/`, `/gallery/:slug`→`/gallery`.
+- Sitemap: removed the two legal static entries and the curriculum/gallery slug side-effect imports; only the campus dynamic provider remains. Static set is now `/`, `/about`, `/curriculum`, `/campuses`, `/admissions`, `/admissions/apply`, `/gallery`, `/contact` plus published campus slugs.
+- Link/nav sweep: Footer no longer links Campuses, Privacy or Terms (removed the bottom Legal nav too); Home programme tab lost its "Explore programme" detail link; Home gallery slides now link to `/gallery`; `ProgrammeCard` and `AlbumCard` converted from `<Link>` to non-linking `<div>` cards (detail folds inline per spec 29; gallery becomes single-page for spec 37).
+- Admin on-demand revalidation helpers (`curriculumPublicPaths`/`albumPublicPaths`) left unchanged — they push a now-inert `/curriculum/<slug>`/`/gallery/<slug>` path that `revalidatePath` treats as a no-op; not a public link/JSON-LD, deferred to portal finalisation (39).
+
+**Tests:** Updated `ProgrammeCard`/`AlbumCard` unit tests to assert the cards render fields but expose no link. Added `app/__tests__/routing.test.ts` covering (a) all four removed-route redirects are permanent with correct destinations, and (b) the sitemap includes exactly the retained public routes and excludes `/legal/*`, curriculum/gallery slugs and the noindex thank-you page (DB-backed campus provider stubbed).
+
+**Gates:** `pnpm lint` ✔ (no warnings/errors) · `pnpm typecheck` ✔ (clean). Did not run build/unit/e2e per build-loop rules; controller runs full gates.
+
+**Files touched:** deleted `app/curriculum/[slug]/`, `app/legal/`, `app/gallery/[slug]/`, `components/legal/`, `lib/legal/`, `components/curriculum/ProgrammeHero.tsx`, `test/legal.test.tsx`; edited `next.config.ts`, `app/sitemap.ts`, `lib/curriculum/data.ts`, `lib/gallery/data.ts`, `components/ui/Footer.tsx`, `components/home/ProgrammesSection.tsx`, `components/home/GallerySection.tsx`, `components/curriculum/ProgrammeCard.tsx`, `components/gallery/AlbumCard.tsx`, `components/curriculum/__tests__/curriculum.test.tsx`, `components/gallery/__tests__/gallery.test.tsx`; added `app/__tests__/routing.test.ts`.
