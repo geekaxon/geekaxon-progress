@@ -858,3 +858,19 @@ Decisions & implementation:
 Tests (components/admissions/__tests__/admissions.test.tsx): rewritten to DB-shaped fixtures — faqPageJsonLd mirrors published FAQs; Faq accordion a11y (disclosure buttons, first open, toggle); KeyDatesView DB wiring (row-per-date, derived chip, dateLabel fallback, empty state); AdmissionsHero banner logic (chip shown only when on+labelled). next/link mocked via vitest config.
 
 Gates: typecheck ✔ · lint ✔ (fixed one no-unescaped-entities apostrophe in FaqSection). test:unit / build not run per CLAUDE.md (controller runs full gates). No schema change, so no prisma generate needed.
+
+## 34 — admission-form-rebuild — DONE (2026-07-18)
+
+Rebuilt the online admission form (`/admissions/apply`) to the phase-4 mockup and design-system v2. Branch: feature/34-admission-form-rebuild.
+
+**Page/hero.** Replaced the old left-aligned "Online admission form" hero with a centred, light-only page hero: "Apply for Admission" carrying the amber-underline accent, decorative teal/amber blobs, breadcrumb (Home › Admissions › Apply), reassuring subtitle. Header/TopBar/Footer/floating WhatsApp reused. No theme toggle, no preloader.
+
+**Form (ApplyForm.tsx).** Sections: Student details (full name, DOB, **gender select — new**, programme, campus, **current school optional — new**), Parent/guardian (name, relationship, phone, email, address), Additional information (message). Added a plain privacy reassurance line above submit (no link to any /legal/* route). Submit is a navy/amber pill ("Submit Application") with an inline disabled spinner state (not a preloader). Removed a leftover `dark:` error colour. No consent checkbox anywhere (grep-verified).
+
+**Data model.** Added nullable `gender` and `currentSchool` columns to `AdmissionApplication` (migration `20260718130000_admission_form_fields`, additive). Threaded through `apply-schema` (zod: gender required enum Male/Female/Other, currentSchool optional ≤160), `toApplicationData`, the POST route, the email summary (staff notification body), and the portal application detail view (two new Student fields). Backend defence order unchanged (rate-limit → honeypot → zod → published-only programme/campus → persist → staff+ack email via existing sink).
+
+**Tests.** Extended `test/admissions-apply.test.ts` fixtures with gender/currentSchool; added gender-required and blank-current-school validation cases and toApplicationData assertions. New `components/admissions/__tests__/apply-form.test.tsx`: renders DB-driven programme/campus + gender select, asserts NO consent checkbox and NO /legal link, and that the honeypot stays off the tab order (next/navigation mocked).
+
+**Gates.** `pnpm prisma generate` ✔ · typecheck ✔ · lint ✔ (no warnings). Did not run test:unit/e2e/build per CLAUDE.md (controller runs full gates). SEO: unique title/description via buildMetadata (OG/Twitter, staging noindex), single h1, BreadcrumbList JSON-LD, existing sitemap entry; thank-you page remains noindex.
+
+**Decision.** Spec 34 lists gender + current school as form fields but content-models-v2 (spec 30) never added columns for them; chose to add two additive nullable columns rather than fold into free-text, so the data is captured cleanly and shown in the portal. No CODEREF present for this range.
