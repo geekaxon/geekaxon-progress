@@ -1,23 +1,20 @@
-> ⚠️ **PUBLIC FILE** — pushed to the public progress repo. **NO secrets, hostnames, real subdomains, endpoints, or keys — ever.** Placeholders only.
+> ⚠️ **PUBLIC FILE** — no secrets, hostnames, real subdomains, endpoints, or keys. Placeholders only.
 
 # PROGRESS.md — GSIS Website & Admin Portal
 
-> Lean, always-loaded state file. Full detail lives in `PROGRESS-HISTORY.md`.
+> SHORT tracker. Full detail in PROGRESS-HISTORY.md (append-only). Every step ends `[CHECKPOINT]`; only stop is `[HUMAN_REQUIRED]`.
 
-## Current build-step
+## Current Status
 
-`27-asset-system`
-
-## Last completed
-
-`26-design-system-v2` — navy-dominant tokens, dark mode and theme toggle removed, skeleton-only loaders, gradual section blends.
-
-## Next
-
-→ `specs/27-asset-system.md`
+- **Project:** GSIS Website & Admin Portal (AboveNext)
+- **Phase:** 01–24 ✅ · 25 superseded. Now **PHASE 4 (26–39)** — design rebuild, then launch 40–41.
+- **Current build-step:** 28 — shared-components
+- **Last completed:** 27 — asset-system — DONE (2026-07-18)
+- **Next:** 28 — shared-components, then 29 onward in order to 41.
+- **Build order:** 01 → 41. NOT complete until 41 is DONE.
 
 ### Recent steps
 
-- **26 — design-system-v2** — DONE (2026-07-18) — navy-led tokens, dark mode & toggle gone, skeleton-only loaders, section blends, ghost-border fix.
-- **24 — prelaunch SEO audit** — DONE (2026-07-17) — Full-site SEO/performance audit on staging; findings resolved.
-- **23 — admin settings** — DONE (2026-07-17) — Site settings (contact, socials, banner, SEO, email) with audit logging.
+- **27 — asset-system** — DONE (2026-07-18) — canonical swappable asset folders, full favicon/branding set + web manifest, ASSETS.md swap guide.
+- **26 — design-system-v2** — DONE (2026-07-18) — navy-dominant palette, gradient section blending, hover fixes, dark mode removed, skeleton-only loading.
+- **24 — prelaunch-seo-audit** — DONE (2026-07-17) — full-site SEO, performance and accessibility audit on staging; staging stays noindex.

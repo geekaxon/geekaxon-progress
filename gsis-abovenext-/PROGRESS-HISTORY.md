@@ -718,24 +718,24 @@ Full-site SEO / performance / accessibility audit of every public route (admin +
 
 **Human gate:** production deploy (DNS/SSL + `main` deploy) remains owner-triggered. No `[HUMAN_REQUIRED]` emitted — no infra blocker was hit during preparation; the deploy itself is simply owner-gated by design. Build order 01→25 is now complete pending owner go-live.
 
----
+## 27 — asset-system — DONE (2026-07-18)
 
-## 26 — design-system-v2 — DONE (2026-07-18)
+**Branch:** feature/27-asset-system · **Type:** FEATURE
 
-**Branch:** `feature/26-design-system-v2` (FEATURE). First step of Phase 4; foundation consumed by 28 and page rebuilds 31–37, 39.
+Established the canonical, fully-swappable `public/assets/` system so every image, icon, logo and favicon is a plain file the operator can replace with no code change.
 
-**Scope:** Finalised the navy-dominant design system per `/specs/26-design-system-v2.md` and `/mockups`.
+Structure (git mv preserved history): relocated existing assets into `branding/` (logo.png, og-default.jpg), `icons/` (val-1..5, why-1..4, prog-1..5), `pages/` (hero, why, about-1/2, avatar-1..4). Created empty DB-driven/runtime dirs `campuses/ curriculum/ gallery/ testimonials/ uploads/` each with `.gitkeep`. Removed the old flat `README.md`.
 
-**Changes**
-- **Tokens (`tailwind.config.ts` + `app/globals.css`):** raw palette already matched the mockups; added the exact `--shadow-sm/md/lg` scale from the mockups (`0 2px 10px / 0 14px 40px / 0 30px 70px rgba(15,42,71,…)`) as tailwind `shadow-sm/md/lg` (no prior default usage) while keeping the `soft-*` aliases. Mirrored the raw palette, `--radius:18px`, `--maxw:1320px`, shadow and hover-motion vars into `:root` for faithfulness. Added standardised hover-motion tokens (`duration-hover` 200ms, `ease-hover` cubic-bezier(.2,.8,.2,1)).
-- **Dark mode removed (hard req):** deleted `darkMode:"class"`, the `.dark` CSS block and its dark token set, the `ThemeToggle` component (was only wired into the dev/ui demo, never the real Header) and its export + demo usage, and the `dark:text-red-400` classes in ApplyForm/ContactForm. Grep-clean of `prefers-color-scheme`, `.dark`, `dark:`, `darkMode`, `data-theme`, theme provider/persistence. No toggle rendered anywhere.
-- **Skeleton-only loading (hard req):** rebuilt `Skeleton` primitive with a subtle off-white↔line shimmer (`animate-shimmer` keyframe added to tailwind, halted under reduced-motion) and added composed variants `SkeletonText`, `SkeletonImage`, `SkeletonCard`, `SkeletonTable`, all exported. No full-page preloaders/spinner overlays exist (verified). Inline "Uploading…" button states retained (permitted).
-- **Gradual section blending:** added `.section-blend` / `.section-blend-reverse` (soft 180° paper↔off-white gradients) plus `.section-white` / `.section-offwhite` utilities, and a reusable `<Section tone>` wrapper for the page rebuilds.
-- **Ghost button border (spec §7):** ghost variant now carries a clearly-visible navy-tinted rest border (`border-[1.5px] border-navy/30`, matching the mockup's rgba(15,42,71,.34)); hover state left unchanged.
-- **Typography:** Fraunces + Inter already loaded via `next/font` in the root layout; unchanged.
+Favicon/branding set generated from the navy wordmark via ImageMagick (no sharp in env): `logo-white.png` (RGB→white, alpha kept for dark surfaces); square navy `GSIS` tile master → `favicon-512/192/32/16.png`, `apple-touch-icon.png` (180), multi-size `favicon.ico` (16/32/48). Added `site.webmanifest` (short_name GSIS, theme `#0F2A47`, bg `#FFFFFF`, icon refs). Generated marked placeholder photos `principal.jpg` and `page-hero-{about,admissions,campuses,curriculum,gallery,contact}.jpg`.
 
-**Tests:** added `test/design-system-v2.test.ts` (token values match mockups, no dark-mode/theme-toggle grep hits, radius/maxw kept, shadow scale exact, skeleton primitives exported, section-blend utilities present) and extended `components/ui/__tests__/components.test.tsx` for the shimmer + skeleton variants.
+Wiring: root `app/layout.tsx` now exports `metadata.icons` (favicon set + apple-touch + shortcut), `metadata.manifest`, and a `viewport.themeColor = #0F2A47`. `lib/seo.ts` OG default → `/assets/branding/og-default.jpg`, JSON-LD logo → `/assets/branding/logo.png`. `next.config.ts` `images.remotePatterns` tightened to `[]` (local-only, no hotlinking). `.gitignore` now ignores `public/assets/uploads/*` except `.gitkeep`.
 
-**Gates:** `pnpm lint` ✔ · `pnpm typecheck` ✔ (no schema change → no prisma generate). Unit/e2e/build left to the controller.
+Reference migration: updated every source path — Header/Footer logo → branding/; ClayIcon + IconPicker + admin curriculum icon → `/assets/icons/`; Hero/AboutPreview/WhyChooseSection/AboutHero/PrincipalMessage photos → `/assets/pages/`; settings OG placeholder + validation example → branding path; stale path comments fixed. Codebase grep clean of data:image, bundler UUIDs, external image hosts.
 
-**Notes/decisions:** kept the light-only semantic CSS-var tokens (`background/surface/foreground/muted/border`) rather than inlining — they now resolve to a single light theme; less churn for existing admin/public markup. Overriding tailwind default `shadow-sm/md/lg` is safe (no existing usages; code uses `soft-*`).
+`ASSETS.md` (public/assets) written: full table filename → where it appears → recommended dimensions → notes, plus hard rules and missing-image behaviour; flagged as mandatory to update on any future image.
+
+Tests: new `test/asset-system.test.ts` — canonical folders + .gitkeep present; full branding set exists non-empty; webmanifest valid/navy/icons resolve; layout metadata wiring (favicon/apple/manifest/themeColor); asset-path resolution (every static `/assets/...` in app/components/lib resolves; dynamic icon/avatar sets complete); no data:image/external hotlinks. Updated `test/seo.test.ts` (logo→branding) and `components/ui/__tests__/components.test.tsx` (ClayIcon→icons/). Test scan excludes `__tests__` fixtures.
+
+**Gates:** typecheck ✔ · lint ✔ (both run once, clean). test:unit/build not run per standing rules (controller runs full gates). Manual node scan confirmed 0 missing static asset refs, 0 forbidden refs, manifest icons resolve.
+
+**Decisions:** favicons derived as a navy `GSIS` monogram tile (logo is a wide wordmark, illegible at 16px) — clearly brand-derived and legible; all files remain independently swappable. favicon.ico kept under branding/ per spec structure and wired via metadata (no root/app duplicate). Upload-route destinations (campuses/curriculum/gallery/testimonials) left unchanged — already match canonical structure.
