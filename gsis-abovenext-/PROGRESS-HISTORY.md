@@ -874,3 +874,51 @@ Rebuilt the online admission form (`/admissions/apply`) to the phase-4 mockup an
 **Gates.** `pnpm prisma generate` ✔ · typecheck ✔ · lint ✔ (no warnings). Did not run test:unit/e2e/build per CLAUDE.md (controller runs full gates). SEO: unique title/description via buildMetadata (OG/Twitter, staging noindex), single h1, BreadcrumbList JSON-LD, existing sitemap entry; thank-you page remains noindex.
 
 **Decision.** Spec 34 lists gender + current school as form fields but content-models-v2 (spec 30) never added columns for them; chose to add two additive nullable columns rather than fold into free-text, so the data is captured cleanly and shown in the portal. No CODEREF present for this range.
+
+## 35 — campuses-rebuild — DONE (2026-07-18)
+
+Branch: feature/35-campuses-rebuild (FEATURE).
+
+Rebuilt both public campus routes to the Phase-4 design system, keeping the
+slug-based detail route (explicitly retained, unlike curriculum).
+
+Schema: added three additive, portal-editable fields to the Campus model —
+`facilities String[]` (defaults to empty array), `gradeLevels String?`,
+`openingHours String?`. Migration 20260718140000_campus_facilities adds them via
+ALTER TABLE (facilities DEFAULT ARRAY[]::TEXT[] so existing rows stay valid).
+Decision: the spec requires facilities/hours/grade-levels "from the DB" and
+"portal-editable (spec 39 verifies coverage)", and the model lacked them, so they
+were added here and wired end-to-end rather than faked — otherwise those detail
+sections could not be DB-driven. Seed content (seed-data.ts) now includes
+facilities lists, grade levels and hours for both seeded campuses; the seed writer
+spreads the record so no change needed there.
+
+Data/lib: CampusDetail type + detail select extended with the three fields;
+admin CampusInput/normalizeCampusInput/toCampusData extended (facilities parsed
+one-per-line via the existing lines() helper); CampusForm gained a "Campus details"
+section (grade levels, opening hours, facilities textarea) and the edit page maps
+the new fields into the form.
+
+Listing (/campuses): new centred CampusesHero (amber-underlined "Our Campuses"
+h1, eyebrow, subtitle, breadcrumb) replacing the old left-aligned hero; premium
+DB cards with a "View Campus" pill (grid scales beyond two); CTA band; footer +
+floating WhatsApp; centred skeleton loader.
+
+Detail (/campuses/[slug]): CampusHero (unchanged) + Overview (two-column text +
+image with an overview photo from the gallery) + CampusKeyInfo panel (address,
+grade levels, hours, phone, email — each row rendered only when present) +
+CampusFacilities grid (uniform check icon per DB facility) + CampusGallery
+converted to an accessible lightbox (client): role=dialog/aria-modal, focus moves
+to close on open and restores to the opener on close, ←/→ navigation, Esc to close,
+Tab focus-trap, background scroll lock + click-out + per-photo counter +
+CampusMap (address card + mapEmbedUrl iframe) + shared CtaSection. Unknown/
+unpublished slug still 404s via campusBySlugWhere; sitemap/SSG unchanged.
+
+Tests: extended components/campuses/__tests__/campuses.test.tsx with CampusKeyInfo
+(renders/empty), CampusFacilities (renders/empty) and a lightbox a11y test
+(opens on thumbnail click, aria-modal, close-button focus, arrow nav, Esc closes).
+Updated the CampusDetail fixtures in that file and in test/structured-data.test.ts
+for the three new fields.
+
+Gates: `pnpm prisma generate` ✔ · `pnpm lint` ✔ (no warnings) · `pnpm typecheck`
+✔. Did not run build/tests per the build loop (controller runs full gates).
