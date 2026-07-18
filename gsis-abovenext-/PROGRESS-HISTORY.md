@@ -1038,3 +1038,50 @@ WORK TYPE: FEATURE (branch feature/38-smtp-email)
 **Files:** lib/admin/dates.ts, lib/admin/faqs.ts; app/admin/api/dates/{route,[id]/route,[id]/publish/route,reorder/route}.ts; app/admin/api/faqs/{route,[id]/route,[id]/publish/route,reorder/route}.ts; app/admin/dates/{page,new/page,[id]/page}.tsx; app/admin/faqs/{page,new/page,[id]/page}.tsx; components/admin/dates/{DateForm,DateRowActions}.tsx; components/admin/faqs/{FaqForm,FaqRowActions}.tsx; lib/admin/dashboard.ts (stats+nav+quick-actions); components/admin/AdminIcon.tsx (icons + comment); tests: admin-dates, admin-faqs, portal-theme-conformance, updated admin-dashboard.
 
 **Gates:** typecheck ✔ · lint ✔ (no warnings/errors). Unit tests written (dates/FAQ normalize+validate+publicPaths, category guard, portal theme/spinner grep-clean, dashboard stat/nav updates) — full suite + build run by controller. No schema change, so no prisma generate.
+
+## Step 40 — prelaunch-audit-v2 — DONE (2026-07-18)
+
+Branch: feature/40-prelaunch-audit (FEATURE). Ran the spec-40 pre-launch audit of
+the rebuilt public site + finalised portal on staging; fixed all code-fixable
+findings and locked the invariants with automated audit assertions. Indexing NOT
+flipped — staging stays noindex + Disallow:/ (that is step 41).
+
+Findings & resolutions:
+- FIXED (asset audit): favicon/branding set was not wired. Added public/icon.svg
+  (navy "GS" monogram tab icon), app/manifest.ts (/manifest.webmanifest, brand
+  navy #0F2A47 theme, icons -> icon.svg + logo.png), and icons + manifest keys in
+  lib/seo.ts buildMetadata() so every route inherits them. OG default was already
+  wired.
+- FIXED (asset audit): created canonical ASSETS.md (complete manifest incl.
+  branding/favicon + dynamic portal-upload folders campuses/curriculum/gallery/
+  testimonials); public/assets/README.md now links to it.
+- FIXED (content audit): components/about/PrincipalMessage.tsx rendered the word
+  "placeholders" in visible copy -> reworded to "to be confirmed by the school
+  before launch". components/about/JourneyTimeline.tsx comment reworded off
+  "sample".
+- OK (grep-verified clean, now asserted): no dark-mode/theme-toggle anywhere; no
+  preloader/spinner-overlay (skeletons only; the Apply submit-button inline
+  motion-safe spinner is an allowed form affordance, not a page loader); no
+  data:image or external image hotlinks; every static /assets ref resolves from
+  public/; all next/image have alt; no links to removed routes; removed routes
+  308-redirect to a retained page.
+- OK (existing suites): sitemap completeness, robots fail-closed, SEO metadata +
+  JSON-LD, structured data, portal CRUD + AuditLog, fail-safe SMTP email.
+
+STEP-41 (needs live env / real client assets, recorded not code-fixable here):
+Lighthouse/CWV run, live 301/308 verification, Google Rich Results validation,
+keyboard/AT + contrast walkthrough, staging SMTP sink send test, pixel diff vs
+/mockups, and dropping in real photography + final branded raster favicons.
+
+New/updated files:
+- public/icon.svg, app/manifest.ts (new)
+- lib/seo.ts buildMetadata() -> icons + manifest
+- ASSETS.md (new), public/assets/README.md (pointer)
+- components/about/PrincipalMessage.tsx, components/about/JourneyTimeline.tsx
+- test/prelaunch-audit.test.ts (new): dark-mode, preloader-overlay, asset paths,
+  sample/placeholder copy, removed-route links, favicon/manifest wiring.
+- test/redirects.test.ts (new): removed routes 308 -> retained page, permanent.
+- docs/prelaunch-audit.md (new): audit report by severity/section.
+
+Gates: pnpm typecheck PASS, pnpm lint PASS (clean). Did not run build/test suites
+per build-loop rules; controller runs full gates.
