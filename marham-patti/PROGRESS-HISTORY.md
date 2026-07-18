@@ -3257,3 +3257,28 @@ Decisions:
 Tests: @mp/web has NO component/unit test runner (no `test` script, no vitest/jest — consistent with the 78 note that the web package has no runnable harness). The spec's error-path/toast assertion could not be added as an executable test; it is satisfied by construction — the error branch calls toast.error(...) and the JSX contains no inline error-banner element (the old mp-msg mp-msg-error was removed). i18n parity is covered by the @mp/i18n parity spec (both catalogs updated identically).
 
 Gates: pnpm typecheck — green (29/29). pnpm lint — green (incl. design-drift: no retired .mp-* control atoms; (auth) is not a drift SCREEN_ROOT). No schema change → no prisma generate. Did not run test:unit/build/e2e (controller runs full gates). Hex grep over apps/web/app/(auth)/login/vendor = 0; language-switcher grep = 0 (only doc comments).
+
+## 87 — table-and-card-kit — DONE (2026-07-18) — feature/87-table-and-card-kit
+
+**Type:** FEATURE (presentation only, per CODEREF 85-89 hard invariants — no service/guard/policy/RLS/permission/DTO change).
+
+**What:** Brought the Rihaish-style inline row actions and the refined tenant card to the shared `data-list` kit (`packages/ui/src/components/data-list.tsx`), matching `specs/mockups/component-library.html` (rowactions, tcard) and composition in `tenants.png`.
+
+**Kit additions (all additive to DataList; existing consumers unchanged unless they opt in):**
+- New `RowAction<T>` type `{ key, icon, label, onClick, tone?, hidden?, disabled? }`. `label` is both tooltip (`title`) and `aria-label` (icon-only controls).
+- New props `rowActions?: RowAction<T>[]`, `overflowActions?: RowAction<T>[]`, `rowActionsLabel?`. When set, DataList appends a pinned, non-hideable action cell (`w-px whitespace-nowrap`, right-aligned) to every table row rendering `<RowActions>`. The synthetic column never shows in the Columns menu (that iterates the caller's `columns`).
+- Exported `RowActions<T>` component: right-aligned inline-flex cluster of ~28px bordered icon buttons (`ICONBTN_BASE`): neutral `text-muted-foreground` at rest, `hover:bg-muted hover:text-foreground`, borders emphasised on `tr:hover`/`tr:focus-within` (via `group/row` on the row) and on card hover (`group/card`). Danger tone → `text-destructive` + `hover:bg-destructive/10` + tinted border. Optional `⋯` overflow behind a 1px/16px separator opens a Radix Popover of the extras. Every action `stopPropagation()`s so it never triggers a clickable row/card.
+- Exported `DataCard` component + `DataCardProps`: white logo tile (42px, initials fallback on muted/teal-deep) + name + muted mono slug → hairline divider → meta pill row → metric (22px bold tabular) + muted sub-line → `actions` overlaying the metric foot, revealed on `group-hover/card`/`group-focus-within/card`; on `(hover:none)` the actions pin below the metric, always visible (touch reachability). Card wrapper in DataList upgraded to the library chrome: `group/card`, `shadow-sm` at rest → hover lift (`-translate-y-0.5` + `shadow-lg` + `border-border-strong`).
+- Index exports updated (`RowActions`, `DataCard`, `RowAction`, `DataCardProps`).
+
+**Applied:**
+- Tenants (`app/(vendor)/vendor/tenants/page.tsx`): table gets inline View (eye) + Edit (pencil) → per-tenant detail route (existing router nav, no new behaviour); card view rebuilt on `<DataCard>` with status/preset/whitelabel pills + city meta, commission metric, and `<RowActions>` at the base.
+- Packages (`.../packages/page.tsx`): hand-rolled Edit-button column replaced by `rowActions` Edit (pencil) → existing `startEdit`.
+
+**Scoping note:** listings (approve/reject), domains (activate/disable), admins (role/status + roles editor) and audit ("view N changes" count button) expose domain-specific stateful actions, not the generic View/Edit/Delete model; they already render through DataList/DataTable (no raw `<table>` anywhere — the real §5 gate), so they were left as-is rather than icon-ified in a way that would strip their labels/semantics and violate "presentation only, fires existing handler". Analytics per-tenant table has no per-row action today.
+
+**i18n:** added `vendor.common.{view,edit,delete,more}` to en.json AND ur.json (parity kept — verified key-set equality; vendor UI stays EN-only but the catalog must match).
+
+**Tests:** extended `packages/ui/src/components/data-list.spec.tsx` — asserts the action cell renders View/Edit/Delete controls (10 rows/page), that clicking Edit fires the handler with the row, that an inline action does NOT trigger `onRowClick`, and that overflow extras hide behind the `⋯` menu.
+
+**Gates:** `pnpm lint` green (incl. design-drift + i18n eslint); `pnpm typecheck` green (29 tasks; @mp/ui rebuilt dist). No hex literals in the changed component/pages (grep clean). test:unit/build/e2e left to controller.

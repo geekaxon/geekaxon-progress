@@ -7,13 +7,13 @@
 ## Current Status
 - **Project:** Marham Patti — multi-tenant white-label healthcare platform (Ganatra go-live 1 Aug 2026).
 - **Phase:** 1–84 ✅. Now **PHASE 9 (85–89) — vendor console design** to owner-approved mockups (/specs/mockups/, CODEREF 85-89). [LAUNCH-CRITICAL] 85–87 first.
-- **Last completed:** **86 — login-redesign** (2026-07-18) — vendor sign-in rebuilt: centred card, vertical logo, icon fields, show/hide, error toast, loading button.
-- **Next:** **87 — table-and-card-kit** — /specs/87-table-and-card-kit.md.
-- **Branches:** through feature/84 merged to staging; feature/85 + feature/86-login-redesign built (merge pending).
+- **Last completed:** **87 — table-and-card-kit** (2026-07-18) — inline View/Edit/Delete row icon buttons and a refined tenant card that lifts on hover with actions at its base.
+- **Next:** **88 — dashboard-and-analytics** — /specs/88-dashboard-and-analytics.md.
+- **Branches:** through feature/84 merged to staging; feature/85, 86, 87 built (merge pending).
 
 ### Recent steps
+- **87 — table-and-card-kit** — DONE (2026-07-18) — inline row action buttons and a hover-lift card, wired into the tenants and packages lists.
 - **86 — login-redesign** — DONE (2026-07-18) — centred auth card on a neutral page, vertical logo, icon fields, show/hide password, error toast, EN-only.
 - **85 — brand-assets-and-shell** — DONE (2026-07-18) — real logo via the resolver; sidebar header aligned to the top bar; collapsed icon rail.
-- **84 — detailed-logging** — DONE (2026-07-18) — vendor audit search, filters, before/after, export; tenant audit with clinical payloads redacted.
 
 > Older steps in PROGRESS-HISTORY.md.
