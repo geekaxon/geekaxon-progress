@@ -966,3 +966,44 @@ Rebuilt the Gallery and Contact pages to their mockups (`/mockups/gallery.html`,
 **Gates:** `pnpm lint` ✔ (no warnings/errors) · `pnpm typecheck` ✔ (clean). Did not run test/build (controller runs full gates). No PROGRESS-HISTORY read-back; appended only.
 
 WORK TYPE: FEATURE (branch feature/37-gallery-contact-rebuild)
+
+## 38 — smtp-email — DONE (2026-07-18)
+
+Branch: feature/38-smtp-email. Replaced the console-stub email sink with real SMTP
+delivery (nodemailer) plus branded HTML/text templates.
+
+Files:
+- package.json: added nodemailer + @types/nodemailer.
+- lib/env.ts: added EmailConfig, resolveEmailConfig(env), isEmailDeliverable() —
+  SMTP config resolved from env; EMAIL_ENABLED fails closed to OFF; port defaults 587.
+- lib/email/transport.ts (new): nodemailer singleton (lazy, rebuilt only if config
+  changes), deliver() that NEVER throws — disabled/unconfigured → redacted log; real
+  send with one retry then give up + log error TYPE only. deliveryLogLine() is a pure,
+  PII-free formatter (label + count + messageId; never to/subject/body).
+- lib/email/layout.ts (new): light-theme inline-CSS branded shell (navy #0F2A47) +
+  matching plain-text renderer from one EmailContent; logo referenced by absolute
+  SITE_URL; HTML-escapes user values; missing values render as em dash.
+- lib/auth/email.ts: sendEmail delegates to deliver(); password-reset now branded
+  HTML+text with CTA + expiry notice; re-exports OutgoingEmail.
+- lib/admissions/apply-email.ts, lib/contact/contact-email.ts: staff + acknowledgement
+  now render branded HTML+text via layout, pass PII-free logLabel; dispatch logic
+  unchanged (skip staff when no recipients; ack when submitter email present).
+- .env.example: documented SMTP_HOST/PORT/SECURE/USER/PASSWORD/FROM_NAME/FROM_EMAIL/
+  EMAIL_ENABLED placeholders + staging-safety note (disable or use a sink mailbox).
+- test/email.test.ts (new): config parsing (enabled/port/secure/deliverable), fail-safe
+  (disabled → resolves, no PII in log), no-PII logging (deliveryLogLine), template render
+  (HTML+text, navy, absolute image src only, dash for null, HTML escaping).
+
+Decisions:
+- deliver() is fail-safe by contract (catches all, never throws) so routes need no
+  change: the AdmissionApplication/ContactInquiry row is committed before dispatch and
+  an SMTP failure can never 500 / roll back the submission.
+- Logs carry NO raw PII: never log to/subject (subject holds applicant name)/body — only
+  a caller-supplied logLabel, recipient count, and SMTP messageId.
+- Recipients still resolve from Settings.emailRecipients in the routes (unchanged);
+  empty list → skip staff mail, still send submitter acknowledgement.
+- Contact submitter acknowledgement kept always-on (the per-Settings toggle is spec 39).
+- Emails reference the logo by absolute SITE_URL/assets/logo.png (never relative).
+
+Gates: lint ✔ · typecheck ✔ (both clean). build/tests left to controller (per CLAUDE.md).
+WORK TYPE: FEATURE (branch feature/38-smtp-email)
