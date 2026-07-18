@@ -8,13 +8,13 @@
 
 - **Project:** GSIS Website & Admin Portal (AboveNext)
 - **Phase:** 01–24 done · 25 superseded. Now **PHASE 4 (26–39)** design rebuild, then launch 40–41.
-- **Current build-step:** 41 — DONE. Build order complete.
-- **Last completed:** 41 — production-launch — DONE (2026-07-18)
-- **Next:** none — go-live is owner-triggered (Telegram) and needs DNS/SSL/server (human hand-off).
-- **Build order:** 01 → 41 COMPLETE. Step 25 is superseded and deleted.
+- **Current build-step:** 29 — routing-cleanup
+- **Last completed:** 28 — shared-components — DONE (2026-07-18)
+- **Next:** 29 — routing-cleanup, then 30 onward in order to 41.
+- **Build order:** 01 → 41. NOT complete until 41 is DONE. Step 25 is superseded and deleted.
 
 ### Recent steps
 
-- **40 — prelaunch-audit-v2** — DONE (2026-07-18) — ran the full pre-launch audit on staging: wired the favicon and branding set, cleared placeholder copy, and locked the audit checks; staging stays hidden.
-- **41 — production-launch** — DONE (2026-07-18) — verified the fail-closed go-live wiring, wrote the launch runbook, and locked the launch invariants in tests; actual deploy stays human-gated.
-- **28 — shared-components (rebuild)** — DONE (2026-07-18) — rebuilt header, footer, buttons, cards, skeletons, section, WhatsApp float and page pieces to match the finalised design mockup.
+- **28 — shared-components** — DONE (2026-07-18) — header without theme toggle, cleaned footer, buttons, cards, skeletons and floating WhatsApp button.
+- **27 — asset-system** — DONE (2026-07-18) — every image, icon, logo and favicon served from public assets and swappable by file replacement.
+- **26 — design-system-v2** — DONE (2026-07-18) — navy-dominant palette, gradient section blending, hover fixes, dark mode removed, skeleton-only loading.
