@@ -1007,3 +1007,34 @@ Decisions:
 
 Gates: lint ✔ · typecheck ✔ (both clean). build/tests left to controller (per CLAUDE.md).
 WORK TYPE: FEATURE (branch feature/38-smtp-email)
+
+## 39 — portal-finalization — DONE (2026-07-18)
+
+**Branch:** feature/39-portal-finalization (FEATURE)
+
+**Goal:** Finalise the approved Admin Portal — add the two missing content editors (Admission Dates, FAQs), confirm portal-wide theme/loading conformance, and verify every public dynamic surface has a portal home. No redesign.
+
+**New — Admission Key Dates (`/admin/dates`):**
+- Full CRUD over `AdmissionDate` (spec 30). List + `new` + `[id]` edit pages; shared `DateForm` and `DateRowActions` client components mirroring the approved testimonials pattern.
+- Fields: title (req), dateLabel free-text (req), optional calendar startDate (`<input type=date>`, validated as a real ISO date), description, published toggle. Numeric `order` via up/down reorder (transactional order-swap).
+- Permission-gated: page requires `dates.view`, all mutations require `dates.edit`; edit controls hidden when the role lacks edit (though every role with view also has edit today).
+- API routes under `app/admin/api/dates` (POST create, PATCH/DELETE `[id]`, POST `[id]/publish`, POST `reorder`), Node runtime, all audited and revalidating `/admissions`.
+- `lib/admin/dates.ts` holds the pure helpers (normalize/validate/isIsoDate/toDateInputValue/publicPaths) + server-only Prisma reads.
+
+**New — FAQs (`/admin/faqs`):**
+- Full CRUD over `Faq` (spec 30). List groups by category (canonical order: Admissions/General/Curriculum/Campus) with a server-side category filter via `?category=`; `new` + `[id]` edit pages; shared `FaqForm` (category `<select>`) and `FaqRowActions`.
+- Fields: question (req), answer textarea (req), category, published toggle. Order is WITHIN a category — reorder swaps same-category neighbours only; moving a FAQ to a new category resets its order to the end of that category (avoids collisions).
+- Permission-gated on `faqs.view` (page) / `faqs.edit` (mutations). API routes under `app/admin/api/faqs`, Node runtime, audited, revalidating `/admissions`.
+- `lib/admin/faqs.ts` holds the category catalog/labels, pure normalize/validate helpers and server-only Prisma reads.
+
+**Theme + loading conformance:** The portal (`app/admin`, `components/admin`, `lib/admin`) was already single-light-theme and spinner-free — grep found no `dark:`, `prefers-color-scheme`, `data-theme`, theme provider/context, `ThemeToggle`, or `animate-spin`/`Spinner`/`Preloader` in portal scope. New screens stream their list bodies inside `Suspense` with shape-matched `Skeleton` fallbacks. Added a regression guard test (`test/portal-theme-conformance.test.ts`) that walks portal source and asserts no dark-mode/spinner patterns are ever reintroduced. Note: the only remaining dark-mode code lives in the isolated design-system demo (`app/dev/ui` + `components/ui/ThemeToggle`), which is NOT part of the portal and intentionally out of this module's scope.
+
+**Coverage audit (all rows verified to have a portal home):** campuses, curriculum, gallery (alt already required in `lib/admin/gallery.ts`), testimonials, applications, inquiries, users, settings (contact/socials/WhatsApp/map, Admissions-Open banner, SEO/email recipients) — all pre-existing; Admission Dates + FAQs added this step. `/admissions` renders `KeyDates` + `FaqSection` from the published loaders, so revalidating `/admissions` surfaces edits. No orphaned legal/policy admin screens exist.
+
+**Nav / dashboard / icons:** Added sidebar entries "Admission dates" (`dates.view`) and "FAQs" (`faqs.view`); two dashboard stat cards (published dates + FAQs counts) and two quick actions ("Add date"/"Add FAQ"); new `dates` (calendar) and `faqs` (help) icons in `AdminIcon`.
+
+**Decisions:** Followed the approved portal styling exactly (teal accent tokens as used across every existing screen) rather than restyling — spec's overriding rule is "do not redesign, complete and polish only". Used server-rendered category-filter links (no client state) for accessibility/simplicity.
+
+**Files:** lib/admin/dates.ts, lib/admin/faqs.ts; app/admin/api/dates/{route,[id]/route,[id]/publish/route,reorder/route}.ts; app/admin/api/faqs/{route,[id]/route,[id]/publish/route,reorder/route}.ts; app/admin/dates/{page,new/page,[id]/page}.tsx; app/admin/faqs/{page,new/page,[id]/page}.tsx; components/admin/dates/{DateForm,DateRowActions}.tsx; components/admin/faqs/{FaqForm,FaqRowActions}.tsx; lib/admin/dashboard.ts (stats+nav+quick-actions); components/admin/AdminIcon.tsx (icons + comment); tests: admin-dates, admin-faqs, portal-theme-conformance, updated admin-dashboard.
+
+**Gates:** typecheck ✔ · lint ✔ (no warnings/errors). Unit tests written (dates/FAQ normalize+validate+publicPaths, category guard, portal theme/spinner grep-clean, dashboard stat/nav updates) — full suite + build run by controller. No schema change, so no prisma generate.
