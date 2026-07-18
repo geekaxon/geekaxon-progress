@@ -837,3 +837,24 @@ ASSET-PATH NOTES / GAPS (spec references vs repo reality):
 - PORTAL-DATA gap: no DB model exists for milestones/timeline entries or the achievement stats/counters or the principal's message — these remain static marketing copy in-component (clearly marked as illustrative/placeholder). If the client needs to edit them, a content model is required (flagged here rather than hardcoded silently).
 
 Gates: pnpm lint ✔ (no warnings/errors), pnpm typecheck ✔ (tsc --noEmit clean). Presentation step — no unit tests added. build/e2e left to the controller.
+
+## Step 33 — admissions-rebuild — DONE (2026-07-18)
+
+Spec: /specs/33-admissions-rebuild.md (mockup /mockups/admissions.html; spec wins). Branch: feature/33-admissions-rebuild.
+
+Rebuilt /admissions to the mockup, light-theme only, with Key Dates and FAQs driven from the DB (models from spec 30) and portal-editable banner/contact/socials from Settings.
+
+Decisions & implementation:
+- Page (app/admissions/page.tsx): server component + ISR (revalidate=300). Fetches Settings via getHomeData. Sections in spec order: hero → 5-step process → requirements → key dates → fees note → FAQs → CTA band, plus shared top banner strip, TopBar, Header, Footer, floating WhatsApp button. BreadcrumbList JSON-LD at page level; FAQPage JSON-LD emitted from inside FaqSection so it reflects only published FAQs.
+- Hero (AdmissionsHero.tsx): rebuilt centred/airy with decorative colour blobs, breadcrumb, single <h1> "Admissions" with amber underline, "Apply for Admission" CTA, and an "Admissions Open [year]" chip rendered only when Settings.admissionsBannerOn && admissionsBannerYear (passed as bannerOn/bannerLabel props).
+- Process (AdmissionSteps.tsx): new dedicated 5-step animated timeline Enquire → Apply → Assessment → Offer → Enrolment (British spelling per spec) — NOT the home AdmissionProcess, whose steps differ.
+- Requirements (Requirements.tsx): rebuilt to two checklist cards (Documents needed / Eligibility & age criteria) with inline check ticks and header icons; content moved to REQUIREMENT_GROUPS in lib/admissions/content.ts.
+- Key Dates: DB-driven from getPublishedAdmissionDates (published, ordered). Split into pure KeyDatesView.tsx (no Prisma import — unit-testable; compact UTC date chip derived from startDate, falls back to dateLabel; graceful empty state) and thin async KeyDates.tsx wrapper. Wrapped in <Suspense fallback={KeyDatesSkeleton}>.
+- FAQs (FaqSection.tsx): async server component loads getPublishedFaqs("ADMISSIONS"); renders FAQPage JSON-LD + accessible accordion or empty state; wrapped in <Suspense fallback={FaqSkeleton}>. Faq.tsx trimmed to just the accordion <ul> (client, aria-expanded/aria-controls/keyboard, animated chevron); section chrome now owned by FaqSection.
+- Fees (FeesNote.tsx): informational only, no payment logic. Rewrote content.ts FEES_NOTE to remove the old "Sample placeholder text" disclaimer; new copy: "No payments are processed on this website. Final figures are confirmed by the school...". Removed the hardcoded FAQS/REQUIREMENTS placeholder arrays from content.ts (FAQs now DB-only) and cleaned the "SAMPLE PLACEHOLDER" header comment.
+- Content rule honoured: grep of components/admissions + content.ts + page shows no sample/placeholder/example/lorem wording in rendered copy (remaining hits are ApplyForm input placeholder attrs on the separate /apply page).
+- SEO: unique title/description via buildMetadata; single <h1>; OG/Twitter defaults; BreadcrumbList + DB-driven FAQPage JSON-LD; /admissions already in sitemap; staging noindex via robotsMeta.
+
+Tests (components/admissions/__tests__/admissions.test.tsx): rewritten to DB-shaped fixtures — faqPageJsonLd mirrors published FAQs; Faq accordion a11y (disclosure buttons, first open, toggle); KeyDatesView DB wiring (row-per-date, derived chip, dateLabel fallback, empty state); AdmissionsHero banner logic (chip shown only when on+labelled). next/link mocked via vitest config.
+
+Gates: typecheck ✔ · lint ✔ (fixed one no-unescaped-entities apostrophe in FaqSection). test:unit / build not run per CLAUDE.md (controller runs full gates). No schema change, so no prisma generate needed.
