@@ -3153,3 +3153,65 @@ Three parts, all inside the vendor console tenant-detail screen `apps/web/app/(v
 Fixed the failing `pnpm test:unit` gate. Root cause was NOT a DB/env issue: build-step 80 added a `subscriptions.tenantHasWhitelabel(t.id)` call inside `VendorConsoleService.listTenants`, but the in-memory `StubSubscriptionService` in apps/api/src/vendor/__fakes__.ts had no such method, so vendor.spec.ts failed with `tenantHasWhitelabel is not a function`. Added `whitelabelTenants: Set<string>` + `async tenantHasWhitelabel()` to the stub (mirrors the real service: no subscription ⇒ false).
 Verified boot-time reconciles are already DB-less-safe for the unit suite: VendorModule.onApplicationBootstrap and SubscriptionsModule.onApplicationBootstrap both wrap onBoot() in try/catch, and PlatformPermissionService.onBoot() is itself crash-proof (logs, never throws). No unit spec bootstraps AppModule — all full-app bootstraps live in *.e2e.spec.ts (test:e2e, not test:unit) — so the unit suite never requires a live Postgres. No boot-hook changes were needed.
 Gates: pnpm lint PASS, pnpm typecheck PASS, pnpm test:unit PASS (109 suites, 1231 tests, no live DB).
+
+## 81–84 — post-launch (feature/81-84-post-launch) — DONE 2026-07-18
+
+Bundled POST-LAUNCH batch (spec /specs/81-84-post-launch.md, companion 70-84-CODEREF).
+Most of the underlying machinery already shipped in 55 (impersonation) + 70 (logEvent/
+audit); these four are polish/consistency deltas layered on top.
+
+**81 — login-as-tenant.** Verified the 55 foundation already meets acceptance: VENDOR_OWNER
+starts a reason-required, time-boxed session from tenant-detail's Support tab (consent flag
+`platform.impersonation`, persistent countdown banner, two-sided START/END audit); the audit
+interceptor stamps `impersonatedBy` on every action and `mirrorImpersonation` echoes a
+metadata-only row to the platform stream, so writes are flagged and before→after is captured
+via `buildAuditEvent`. The remaining gap — "surfaced in the tenant's own audit" — is closed by
+the 84 tenant-facing change below (a Support-session badge). No new impersonation code needed;
+the destructive-action guard + isolation model are untouched.
+
+**82 — analytics-consistency.** Per-tenant analytics table reached full 70 table-kit parity:
+added `renderCard` (list/card view toggle) + `storageKey` to the DataList in
+apps/web/app/(vendor)/vendor/analytics/page.tsx, plus a local `CardStat` helper (bookings/
+revenue/users/balance, right-aligned tabular-nums, churn badge). "—" empties already present on
+trend/churn cells and the chart/donut empty states.
+
+**83 — vendor-design-pass.** No mockups were provided (spec: "if mockups are provided … match
+them"), so the heavy mockup-driven redesign of the login screen is deferred to when Claude
+Design mockups land. Delivered the safe, tokens-only, behaviour-preserving slice: a premium
+centre-total overlay inside the analytics bookings-by-source donut (scoped locally to
+SourceCard so no shared component regresses; §E3 honoured). Tokens only, no hex.
+
+**84 — detailed-logging.** Vendor audit viewer gained search-by-tenant-NAME (the 71/audit ask):
+new `tenantName` filter parsed in vendor.dto → controller → `AuditViewerFilter`; the oversight
+service resolves the name to an id set (`repo.tenantIdsByName`, demo tenants excluded, capped
+200; no match → zero rows) and batch-resolves every row's display name (`tenantsByIds`). Rows
+now show the tenant NAME (id on hover) and the CSV export carries a `tenantName` column.
+before→after: the VENDOR stream (operator metadata only, never clinical) now projects its
+`summary.changes` diff as a typed `AuditFieldChange[]` on `PlatformAuditRow`; the viewer shows a
+"View (n)" affordance opening a Before→after dialog. TENANT rows still carry NO diff/summary —
+clinical redaction preserved by omission (Do-NOT-break). Tenant-facing /admin/audit
+(AuditExplorer) now uses the shared `formatDate` human formatter and surfaces a Support-session
+badge when a row was written under impersonation (`impersonatedBy`, already returned by /audit).
+
+**Decisions.** (1) Playwright: the repo has NO Playwright/browser harness (confirmed — no
+playwright dep/config, tests are jest+supertest). Introducing one is a large, separate infra
+change; followed existing conventions instead and extended the jest oversight suite. The spec's
+"Playwright renders" bullets are recorded as not-yet-satisfiable here. (2) before→after in the
+VENDOR view is limited to the operator (vendor_audit_logs) stream, which is metadata-only by
+construction — this honours both acceptance §1 (before→after where captured) and Do-NOT-break
+(vendor views metadata-only). (3) 83 full login/dashboard redesign deferred pending mockups.
+
+**Files.** api: vendor/vendor.types.ts (AuditViewerFilter.tenantName/tenantIds, PlatformAuditRow
+.tenantName/.changes, AuditFieldChange), vendor.dto.ts, vendor-oversight.controller.ts,
+vendor.repositories.ts (tenantIdsByName, tenantIds filter, summary→changes, extractAuditChanges),
+oversight.service.ts (resolveTenantScope/withTenantNames, CSV tenantName col), vendor-oversight
+.spec.ts (fake tenantIdsByName/tenantsByIds + 4 new cases, updated CSV header + redaction
+assertions). web: (vendor)/vendor/console.ts (types), (vendor)/vendor/audit/page.tsx (name
+filter, name display, changes column + diff dialog), (vendor)/vendor/analytics/page.tsx
+(renderCard + CardStat + donut centre-total), (app)/admin/audit/AuditExplorer.tsx (formatDate +
+Support badge). i18n: en.json + ur.json — vendor.audit.{filterTenantName,filterTenantName
+Placeholder,colChanges,viewChanges,changesTitle,changeField,changeFrom,changeTo} (EN-only values,
+both files for parity) + flat auditSupport.
+
+**Gates.** pnpm typecheck ✅ (29 tasks). pnpm lint ✅ (0 errors; 1 pre-existing unrelated warning
+in doctor-portal.repositories.ts). Did not run test:unit/test:e2e/build (controller runs them).
