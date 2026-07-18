@@ -1085,3 +1085,147 @@ New/updated files:
 
 Gates: pnpm typecheck PASS, pnpm lint PASS (clean). Did not run build/test suites
 per build-loop rules; controller runs full gates.
+
+---
+
+## Step 41 — production-launch — DONE (2026-07-18)
+
+**Branch:** feature/41-production-launch (WORK TYPE: FEATURE)
+**Spec:** /specs/41-production-launch.md (FINAL STEP · HUMAN-GATED)
+
+### Nature of the step
+Final build step. The agent prepares and verifies the go-live configuration on
+staging; it never deploys `main` itself. Production deploy is owner-triggered
+(explicit Telegram command) and gated on infra (DNS/SSL/server) the agent cannot
+perform in code. Almost all launch machinery was already in place from steps
+03/05/38/39/40 (and the superseded step-25 attempt), so this step was a live
+verification + documentation + test-hardening pass rather than new feature code.
+
+### Verification performed (all ✔, reviewed live)
+- **Indexability fail-closed** — `lib/env.ts`: production ONLY when APP_ENV is
+  exactly "production"; staging/missing/"prod"/"PRODUCTION"/" production" fall
+  back to staging/noindex. `isIndexable = isProduction`.
+- **robots.txt** (`app/robots.ts`) — production: allow `/` + sitemap + host;
+  every other env disallows `/`.
+- **Robots meta** (`lib/seo.ts` robotsMeta / buildMetadata) — index,follow only
+  in production; noindex,nofollow otherwise, applied site-wide.
+- **Canonical/OG** — from NEXT_PUBLIC_SITE_URL (trailing slash stripped).
+- **Removed-route redirects** (`next.config.ts`) — /curriculum/:slug,
+  /gallery/:slug, /legal/privacy, /legal/terms all 308 → retained pages; absent
+  from the sitemap.
+- **Analytics** (`components/Analytics.tsx`) — loads only when
+  isProduction && NEXT_PUBLIC_ANALYTICS_SRC.
+- **Search Console** (`app/layout.tsx`) — verification meta only when
+  isProduction && SEARCH_CONSOLE_VERIFICATION.
+- **Screenshot bypass** (`lib/auth/screenshot.ts`) — OFF in production
+  (staging-only, exact-string match, GET/HEAD, constant-time compare).
+- **deploy.sh** — production-branch fence (main/master/production/prod*/
+  *production*) exits before any work; never clones (pull/reset of an existing
+  clone); no seed, no content reset.
+- **ecosystem.config.js** — single forked gsis-web PM2 app, next start on $PORT,
+  NODE_ENV=production, restart (not reload).
+- **.env.example** — placeholders only for DB, APP_ENV, JWT_SECRET,
+  SCREENSHOT_TOKEN, SMTP, analytics, Search Console; no real secrets committed.
+
+### Changes made
+- `docs/production-launch.md` — rewrote the runbook for step 41 (was headed
+  step 25). Added the **Nginx reverse-proxy mapping** (proxy_pass to app port
+  with Host / X-Real-IP / X-Forwarded-For / X-Forwarded-Proto + WebSocket
+  Upgrade/Connection headers; warning not to add static blocks that shadow app
+  routes or /assets; X-Forwarded-Proto=https must reach the app), the
+  clone-once + manual-seed / no-content-reset note, ecosystem.config.js
+  verification, SMTP-to-real-recipients env, and the full post-launch smoke-test
+  checklist (200 + indexable, redirects, contact+admissions email real
+  recipients, admin login + content edit reflects, favicon/OG/assets + no
+  mixed-content/404, no dark-mode CSS/theme toggle/preloaders, screenshot bypass
+  off, HTTPS enforced, staging stays noindex).
+- `test/production-launch.test.ts` — re-pointed header to spec 41; added two
+  locks: removed routes still 308-redirect to a retained page, and deploy.sh
+  fences off production branches and never seeds (reads the shell file and
+  asserts the fence + absence of any prisma seed invocation). Kept the existing
+  env-indexability / analytics / Search Console / screenshot-off groups.
+
+### Gates
+- `pnpm lint` ✔ (no ESLint warnings or errors)
+- `pnpm typecheck` ✔ (tsc --noEmit clean)
+- Per CLAUDE.md, did NOT run test:unit / build (controller runs full gates).
+  New/updated tests: production-launch (env indexable, analytics+SC wiring,
+  Analytics loader, screenshot-off, removed-route redirects, deploy.sh fence).
+
+### Terminal state
+Code-side preparation is complete and clean. The remaining go-live actions —
+DNS, SSL, server provisioning, and the owner's explicit Telegram deploy of
+`main` — are infra + human-gated and cannot be performed by the agent. Per the
+spec (item 4 / Do-NOT-break) this is a hand-off, so the step ends
+[HUMAN_REQUIRED] for the go-live, not an approval gate. Project build scope
+ends here (per spec: after launch → debug, client review, handover).
+
+## 28 — shared-components (CORRECTIVE RE-RUN) — DONE (2026-07-18)
+
+Re-run of step 28 with the finalised design HTML now available as the authoritative
+visual reference. Source of truth: specs/mockups/homepage.html (a self-unpacking
+bundle; extracted the JSON template → 3 <style> blocks; block 2 = the component
+design system, block 0 = Fraunces/Inter @font-face). Matched exact tokens
+(navy #0F2A47, navy-deep #0A1E33, teal #0E8A7A, teal-bright #14A594, amber #F5A623,
+off-white #F7F9FB, line #E4EAEF, radius 18px, shadows sm/md/lg, maxw 1320px).
+
+Spec corrections applied over the mockup: removed the header theme toggle (never
+reintroduced), no dark mode / prefers-color-scheme carried over, footer excludes
+Campuses / Privacy / Terms and any WhatsApp social icon, skeletons only (no
+preloader/spinner overlay).
+
+Files rebuilt (kept existing paths under components/ui so all 31–39 consumers keep
+importing from @/components/ui — no page-local copies):
+- Button.tsx — pill, 1.5px rail, diagonal shine sweep, arrow-nudge, lift+shadow.
+  Variants realigned to spec: primary=navy fill, secondary=teal, amber accent,
+  ghost=navy-tinted outline VISIBLE at rest (border-navy/[0.34]). Added onDark
+  (white primary / translucent-white ghost for dark bands) and a loading inline
+  submit state (disabled + aria-busy + small spinner — not a preloader).
+- Card.tsx — 18px radius, shadow-sm at rest → shadow-md on hover with lift;
+  variants content/glass/media.
+- Header.tsx — floating translucent pill (blur 16, bg white/70→/90 scrolled,
+  border white/60, exact shadows), sticky top:0, logo-only left (52px / 44px
+  mobile), 7-item nav Home·About·Admissions·Campuses·Curriculum·Gallery·Contact
+  with navy scaleX underline + active state (usePathname), primary Apply CTA,
+  animated burger→X, top slide-down mobile menu (aria-modal, Esc, focus-in,
+  click-away, scroll-lock). No theme toggle.
+- Footer.tsx — navy-deep rounded-28 floating card with shadow-lg; glowing white
+  logo; Explore quick links (exclusions enforced); Get-in-Touch contact +
+  socials pulled from Settings props (contactEmail/contactPhone/addressLines/
+  socials) — not hardcoded; reuses SocialIcon; credit "Built with ♥ by AboveNext"
+  → https://abovenext.com. Dropped the old columns/FooterColumn API (no consumers).
+- Skeleton.tsx — shimmer sweep (animate-shimmer from --line/--off-white) plus the
+  family: SkeletonText / SkeletonImage / SkeletonCard / SkeletonTable.
+- WhatsAppButton.tsx (aliased WhatsAppFloat) — 58px #25D366 float, pulse ring
+  (animate-wa-pulse), hover tooltip.
+New shared pieces (exported from components/ui/index.ts):
+- Section.tsx — tone (transparent/paper/off-white/navy/navy-deep) + width + padding,
+  so pages never hand-roll section backgrounds; light bands ride the global body
+  white↔off-white gradient (unchanged in globals.css).
+- Breadcrumbs.tsx — semantic trail + BreadcrumbList JSON-LD (via breadcrumbJsonLd).
+- PageHero.tsx — eyebrow + title with amber→teal underline accent + subtitle +
+  breadcrumb.
+- CtaBand.tsx — teal→navy gradient box with radial glows and onDark buttons.
+
+Wiring: added wa-pulse + shimmer keyframes to tailwind.config.ts. Passed
+settings-driven contact/socials into <Footer> on the 9 public pages that already
+load settings (home, about, admissions, curriculum, gallery, campuses,
+campuses/[slug], contact, apply); error/not-found/thank-you/dev-ui leave Footer
+prop-less (graceful, no contact block).
+
+Tests (components/ui/__tests__/components.test.tsx): mocked next/navigation
+usePathname; added header full-nav-order + no-theme-toggle, footer
+Campuses/Privacy/Terms exclusion + Settings socials (no WhatsApp), button variants
++ ghost rest-border + loading busy-state, skeleton shimmer + family coverage.
+
+Gates: pnpm typecheck ✔, pnpm lint ✔ (both clean). Did not run test:unit/build per
+build-loop rules — controller runs full gates. Grep confirms no theme-toggle/
+dark-mode/preloader code in the component layer.
+
+WORK TYPE: FIX (branch fix/28-shared-components-rebuild)
+
+## FIX (2026-07-18) — production-launch test: file URL resolution
+- Gate `pnpm test:unit` failed: 1 test in test/production-launch.test.ts ("deploy.sh never targets production") threw `TypeError: The URL must be of scheme file` at `fileURLToPath(new URL("../deploy.sh", import.meta.url))`. In this vitest setup import.meta.url is not a file:// URL, so path resolution blew up before any deploy.sh assertion ran.
+- Fix (test-only): resolve deploy.sh via `join(process.cwd(), "deploy.sh")`, matching the existing repo convention (prelaunch-audit.test.ts, portal-theme-conformance.test.ts both use process.cwd()). Dropped the now-unused node:url import; added node:path join.
+- deploy.sh content unchanged — all three of its assertions (protected-branch fence, refusal message, no-seed) already held.
+- Verified: `npx vitest run test/production-launch.test.ts` → 10/10 pass. `pnpm lint` clean, `pnpm typecheck` clean.
