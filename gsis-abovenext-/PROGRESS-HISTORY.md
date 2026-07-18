@@ -922,3 +922,24 @@ for the three new fields.
 
 Gates: `pnpm prisma generate` ✔ · `pnpm lint` ✔ (no warnings) · `pnpm typecheck`
 ✔. Did not run build/tests per the build loop (controller runs full gates).
+
+## 36 — curriculum-rebuild — DONE (2026-07-18)
+
+**Branch:** feature/35-campuses-rebuild (continued build branch; controller merges).
+
+**Goal:** Rebuild `/curriculum` as a single, self-contained page presenting the full five-stage learning journey with complete programme detail inline, driven entirely from the published `Programme` model. Detail route stays removed (spec 29).
+
+**Decisions:**
+- New page structure: `CurriculumHero` (server) → `CurriculumJourney` (client) → shared `CtaSection`. Retired the old flat card grid (`CurriculumList`/`ProgrammeCard` left in place only so their existing unit tests stay meaningful; they are no longer imported by the page).
+- `CurriculumJourney` unifies the mockup's "Five Stages" journey overview and "Programme Details" sections around one `active` state. The five stage nodes form a real ARIA tablist (roving tabindex; ←/→/↑/↓ move, Home/End jump), each `aria-controls` its detail panel. Selected stage is navy-forward (navy fill, amber number badge) per the Home tab fix (spec 31); inactive nodes are light/outline.
+- Every programme's full detail panel is rendered into the DOM (only the selected one is shown, the rest carry `hidden`) so the page is complete for crawlers and all five programmes' subjects/descriptions are present without JS. The active panel re-keys on selection to replay the `animate-fade-up` transition.
+- Field mapping from the record: clay icon `prog-N` (positional fallback via `programmeIcon`), eyebrow "Stage 0N · {stage}", `name` heading, `ageRange` amber pill, `summary` as the lead line, `subjects` as "Curriculum areas" chips, `description` as the "What to expect" block.
+- Data: added `getPublishedProgrammeDetails()` to the curriculum loader (published + ordered, projecting description/subjects/image); the page now calls it instead of the card-only loader. Empty state: tasteful "being prepared" card when nothing is published.
+- Updated `loading.tsx` to skeleton the new hero + journey nodes + detail card (skeletons only, no preloader).
+- Left the `/curriculum/:slug → /curriculum` permanent redirect (already in next.config from spec 29) untouched; sitemap already emits `/curriculum` only.
+
+**Files:** `app/curriculum/page.tsx`, `app/curriculum/loading.tsx`, `components/curriculum/CurriculumHero.tsx` (new), `components/curriculum/CurriculumJourney.tsx` (new), `lib/curriculum/data.ts` (+`getPublishedProgrammeDetails`), `components/curriculum/__tests__/curriculum.test.tsx` (+CurriculumJourney suite: DB wiring, tablist a11y click+keyboard, single visible panel, no detail links, empty state).
+
+**Gates:** lint ✔ (no warnings/errors) · typecheck ✔ (tsc --noEmit clean). Did not run build/test:unit/test:e2e per token-discipline rules; controller runs full gates.
+
+**Design self-check:** light theme only, no theme toggle, no dark-mode CSS, no preloader; single `<h1>` in the hero with amber underline; breadcrumb JSON-LD + OG/Twitter via `buildMetadata`; next/image (ClayIcon) with descriptive alt; no link points to `/curriculum/[slug]` (grep-verified — only the seo helper `programmePath` referenced, in tests).
