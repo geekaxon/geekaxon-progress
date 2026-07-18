@@ -754,3 +754,35 @@ WORK TYPE: FEATURE (branch feature/25-production-launch)
 **Gates:** `pnpm lint` ✔ (no warnings/errors) · `pnpm typecheck` ✔ (clean). Did not run build/unit/e2e per build-loop rules; controller runs full gates.
 
 **Files touched:** deleted `app/curriculum/[slug]/`, `app/legal/`, `app/gallery/[slug]/`, `components/legal/`, `lib/legal/`, `components/curriculum/ProgrammeHero.tsx`, `test/legal.test.tsx`; edited `next.config.ts`, `app/sitemap.ts`, `lib/curriculum/data.ts`, `lib/gallery/data.ts`, `components/ui/Footer.tsx`, `components/home/ProgrammesSection.tsx`, `components/home/GallerySection.tsx`, `components/curriculum/ProgrammeCard.tsx`, `components/gallery/AlbumCard.tsx`, `components/curriculum/__tests__/curriculum.test.tsx`, `components/gallery/__tests__/gallery.test.tsx`; added `app/__tests__/routing.test.ts`.
+
+## 30 — content-models-v2 — DONE (2026-07-18)
+
+**Branch:** feature/30-content-models-v2 (FEATURE)
+
+**Goal:** Add the portal-managed content types the finalised Admissions page needs (Admission Key Dates + FAQs) with permissions, an additive migration and clean final seed copy; audit existing models for dynamic-surface completeness.
+
+**Schema (prisma/schema.prisma):**
+- New enum `FaqCategory { ADMISSIONS GENERAL CURRICULUM CAMPUS }`.
+- New model `AdmissionDate` (title, dateLabel authored text, optional startDate for sorting, description, order, published, timestamps, updatedById) with `@@index([published, order])`.
+- New model `Faq` (question, answer @db.Text, category, order, published, timestamps, updatedById) with `@@index([category, published, order])`.
+- Audit result: existing models (Campus, Programme, GalleryAlbum/Image, Testimonial, Settings) already cover every dynamic element in mockups/admissions.html — no field gaps found, so no fields added. The admissions "fee structure" note is marketing copy pointing to the admissions team (no fee model needed).
+
+**Migration:** prisma/migrations/20260718120000_content_models_v2/migration.sql — additive only (CREATE TYPE + two CREATE TABLE + two CREATE INDEX). No changes to existing tables; existing content survives. `prisma generate` ran clean.
+
+**Permissions (lib/auth/permissions.ts):** added dates.view, dates.edit, faqs.view, faqs.edit to the catalog and to EDITOR (content-level). ADMIN/SUPER_ADMIN already hold ALL. Reconciled on boot via existing PERMISSION_CATALOG upsert.
+
+**Seed (prisma/seed-data.ts, prisma/seed.ts):**
+- Added 5 admissionDates (applications open → enrolment closes, dates matching the mockup, 2026-09-01 … 2027-04-15) and 6 ADMISSIONS faqs (the 4 questions from the mockup + apply-window + campus-visit), answers written as final copy with no "sample answer" prefixes.
+- REWROTE all existing seed copy (campuses, programmes, gallery, testimonials, settings) to finished launch content: real institutional emails @gsis.edu.pk, plausible phones/addresses (Lahore), real asset paths under /assets/ (about-*, prog-1..5, avatar-*, hero, why), programme icons switched from invalid clay-* keys to prog-1..5, named testimonials. Added contactHours to seed settings.
+- Zero occurrences of sample/placeholder/example across both seed files (grep-verified).
+- Seed writer now delete-then-recreate's admissionDate + faq rows (no natural unique key), parsing startDate strings to Date.
+
+**Data access:** lib/admissions/dates.ts `getPublishedAdmissionDates()` (published-only, order then startDate) and lib/admissions/faqs.ts `getPublishedFaqs(category?)` (published-only, ordered, optional category filter). Both server-only, DB-resilient try/catch returning [] like the other loaders.
+
+**Tests:**
+- test/auth-permissions.test.ts: new EDITOR dates/faqs grant test; extended the exact-keys assertion.
+- test/seed.test.ts: new admission-dates + faqs shape/ordering/publish tests, a "mirrors Admissions page questions" test, switched the PII test from @example.com to @gsis.edu.pk, and a "no sample/placeholder/example wording" guard over all seed collections.
+
+**Gates:** prisma generate ✔ · lint ✔ (no warnings/errors) · typecheck ✔. Did not run test:unit/build per CLAUDE.md (controller runs full gates).
+
+**Notes:** content.ts static FAQs left untouched — the Admissions page rewiring to DB-driven dates/FAQs is spec 33's job, not this step.
