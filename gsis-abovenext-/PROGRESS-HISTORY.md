@@ -697,45 +697,68 @@ Full-site SEO / performance / accessibility audit of every public route (admin +
 ### Gates
 - `pnpm lint` ✔ (no warnings/errors) · `pnpm typecheck` ✔ (clean). No schema.prisma change → no prisma generate. Did not run build/test:unit/e2e per AGENT.md (controller runs full gates).
 
-## 25 — production-launch — DONE (2026-07-17)
+## 25 — production-launch — DONE (2026-07-18)
 
-**Type:** FEATURE (branch feature/25-production-launch). Human-gated launch step: the actual production deploy of `main` happens ONLY on the owner's explicit Telegram command — the agent prepares and verifies, never auto-deploys.
+**Type:** FEATURE (branch feature/25-production-launch). Final build step. HUMAN-GATED: the actual `main`/production deploy happens ONLY on the owner's explicit Telegram command — the agent prepares and verifies on staging and does NOT auto-deploy production.
 
-**Findings (all production behaviour was already code-complete + fail-closed from prior steps; step 25 verified it and documented go-live):**
-- `lib/env.ts` — production is `APP_ENV === "production"` exactly; everything else fails closed to staging/noindex. `isIndexable`, `ANALYTICS_SRC`, `SEARCH_CONSOLE_VERIFICATION` derive from env.
-- `app/robots.ts` / `lib/seo.ts#robotsMeta` — production emits `allow:/` + sitemap + host and `index,follow`; staging/missing → `disallow:/` + `noindex,nofollow`.
-- `lib/auth/screenshot.ts` — screenshot preview bypass is OFF unless raw `APP_ENV === "staging"`; production denies even a matching token (verified).
-- `components/Analytics.tsx` + `app/layout.tsx` — analytics script and Search Console verification meta render only in production with the env value set.
-- `app/dev/ui/page.tsx` — noindex, absent from sitemap.
-- `ecosystem.config.js` — PM2 fork, 1 instance, NODE_ENV=production, 512M ceiling: correct.
-- `deploy.sh` — fences off main/master/production*; only deploys staging. Production go-live is out-of-band/owner-triggered, not this script.
+**Spec:** specs/25-production-launch.md.
 
-**Added:**
-- `docs/production-launch.md` — go-live runbook: preparation checklist (verified on staging), production `.env` table (APP_ENV=production, SCREENSHOT_TOKEN unset, analytics + Search Console tokens), DNS/SSL infra hand-off note, post-deploy activation (submit sitemap, confirm analytics) + smoke-test checklist over all public routes, and post-launch verification (screenshot OFF, staging noindex, no secrets).
-- `test/production-launch.test.ts` — launch-readiness tests consolidating acceptance criteria at the env level: production → indexable + analytics/verification exposed; every non-production APP_ENV → noindex; unset analytics/verification → undefined; screenshot bypass denied in production.
+### What this step is
+Preparation + verification of the go-live wiring, plus tests and an owner runbook. No new product surface — the launch machinery was scaffolded earlier (robots/SEO in 03, analytics/Search-Console env in 03, screenshot bypass in 05). This step confirms it is all correct and fail-closed, and documents the human-gated deploy.
 
-**Gates:** `pnpm lint` ✔ (no warnings/errors) · `pnpm typecheck` ✔ (clean). No schema change (skipped prisma generate). Did not run build/test:e2e/test:unit per CLAUDE.md — controller runs full gates.
+### Pre-deploy verification (all reviewed live — correct)
+- lib/env.ts — `APP_ENV === "production"` is the single indexability switch; staging/missing/near-miss ("prod", "PRODUCTION") fail closed to staging/noindex. isProduction/isIndexable/isStaging derived from it.
+- app/robots.ts — production: allow `/` + sitemap + host; everything else disallow `/` (fail-closed).
+- lib/seo.ts robotsMeta() — index,follow in prod; noindex,nofollow otherwise; applied site-wide by buildMetadata(). canonicalUrl() from NEXT_PUBLIC_SITE_URL (trailing slash stripped).
+- components/Analytics.tsx — renders the script only when isProduction && NEXT_PUBLIC_ANALYTICS_SRC set; silent on staging/dev.
+- app/layout.tsx — metadata.verification = { google } only when isProduction && SEARCH_CONSOLE_VERIFICATION set.
+- lib/auth/screenshot.ts — screenshot preview is OFF in production (staging-only exact match, GET/HEAD, constant-time compare, fail-closed).
+- deploy.sh — dangerous-command fence refuses main/master/production/prod* branches; only ever deploys staging. Production go-live is a separate owner-run action, not this script.
+- .env.example — placeholders only; all prod launch vars present (APP_ENV, NEXT_PUBLIC_SITE_URL, NEXT_PUBLIC_ANALYTICS_SRC, SEARCH_CONSOLE_VERIFICATION, SCREENSHOT_TOKEN, JWT_SECRET, DATABASE_URL, seed admin). No real secrets committed.
 
-**Human gate:** production deploy (DNS/SSL + `main` deploy) remains owner-triggered. No `[HUMAN_REQUIRED]` emitted — no infra blocker was hit during preparation; the deploy itself is simply owner-gated by design. Build order 01→25 is now complete pending owner go-live.
+### Files added
+- test/production-launch.test.ts — locks the launch invariants as a unit: env indexability fail-closed across APP_ENV values; analytics + Search-Console tokens resolve from env (undefined when empty); verification-meta gate (isProduction && token); Analytics loader renders nothing on staging / prod-without-src and loads the script in prod-with-src (next/script mocked, rendered via react-dom/server); screenshot bypass OFF in production.
+- docs/production-launch.md — go-live runbook: pre-deploy verification summary, production env vars to set server-side, infra hand-off (DNS/SSL = owner/ops), owner-triggered go-live steps (submit sitemap, confirm analytics, smoke tests), and post-launch verification (robots allow, no noindex, screenshot bypass off, staging still noindex, no secrets exposed).
 
-## 27 — asset-system — DONE (2026-07-18)
+### Decisions
+- No auto-deploy: honored the single human gate. Ended with [CHECKPOINT] after preparation; did not touch main, did not run deploy.
+- SCREENSHOT_TOKEN documented as "leave UNSET in production" (belt-and-braces on top of the code-level fail-closed).
+- Did not run test:unit/build (per CLAUDE.md §6 — controller runs full gates). Ran lint + typecheck once.
 
-**Branch:** feature/27-asset-system · **Type:** FEATURE
+### Gates
+- typecheck ✔ (tsc --noEmit clean)
+- lint ✔ (no ESLint warnings or errors)
+- build ➖ (controller runs)
+- tests ➖ authored (production-launch.test.ts + existing robots/seo/auth-screenshot cover prod→indexable and screenshot-off-in-prod); controller runs the suite
+- SEO ✔ (production indexable path verified: robots allow + index,follow + canonical to prod host; staging stays noindex)
+- responsive/design ➖ (no UI change)
+- privacy ✔ / env ✔ (placeholders only; no secrets committed)
 
-Established the canonical, fully-swappable `public/assets/` system so every image, icon, logo and favicon is a plain file the operator can replace with no code change.
+WORK TYPE: FEATURE (branch feature/25-production-launch)
 
-Structure (git mv preserved history): relocated existing assets into `branding/` (logo.png, og-default.jpg), `icons/` (val-1..5, why-1..4, prog-1..5), `pages/` (hero, why, about-1/2, avatar-1..4). Created empty DB-driven/runtime dirs `campuses/ curriculum/ gallery/ testimonials/ uploads/` each with `.gitkeep`. Removed the old flat `README.md`.
+## 28 — shared-components — DONE (2026-07-18)
 
-Favicon/branding set generated from the navy wordmark via ImageMagick (no sharp in env): `logo-white.png` (RGB→white, alpha kept for dark surfaces); square navy `GSIS` tile master → `favicon-512/192/32/16.png`, `apple-touch-icon.png` (180), multi-size `favicon.ico` (16/32/48). Added `site.webmanifest` (short_name GSIS, theme `#0F2A47`, bg `#FFFFFF`, icon refs). Generated marked placeholder photos `principal.jpg` and `page-hero-{about,admissions,campuses,curriculum,gallery,contact}.jpg`.
+Rebuilt the shared component layer so every page rebuild (31–37, 39) composes from one consistent source. Branch: feature/28-shared-components.
 
-Wiring: root `app/layout.tsx` now exports `metadata.icons` (favicon set + apple-touch + shortcut), `metadata.manifest`, and a `viewport.themeColor = #0F2A47`. `lib/seo.ts` OG default → `/assets/branding/og-default.jpg`, JSON-LD logo → `/assets/branding/logo.png`. `next.config.ts` `images.remotePatterns` tightened to `[]` (local-only, no hotlinking). `.gitignore` now ignores `public/assets/uploads/*` except `.gitkeep`.
+**Layout components (new `components/layout/`):**
+- `Header.tsx` — floating, sticky-on-scroll, translucent-blur, logo-only (`/assets/logo.png`), NO theme toggle. Canonical `NAV_ITEMS` in fixed order Home · About · Admissions · Campuses · Curriculum · Gallery · Contact, amber hover-underline, active-page indication via `usePathname`. Primary (navy) "Apply for Admission" CTA. Mobile slide-in panel: `aria-expanded`/`aria-controls`, `role=dialog aria-modal`, Esc-to-close, Tab focus-trap, scroll-lock, focus restored to opener.
+- `Footer.tsx` — navy-deep floating surface. Quick links deliberately EXCLUDE Campuses/Privacy/Terms; social icons from `parseSocialLinks(Settings.socialLinks)` which never yields WhatsApp; contact (email/phone/hours/address) from Settings props; "Built with ♥ by AboveNext" → https://abovenext.com (no tracking params). Legal nav removed from the bottom bar.
+- `Section.tsx` — owns white↔off-white gradient blending (tone white/soft/blend, blend up/down), container width + padding presets.
+- `Breadcrumbs.tsx` — semantic trail + matching `BreadcrumbList` JSON-LD (via `lib/seo.breadcrumbJsonLd`).
+- `PageHero.tsx` — inner-page title with amber underline, subtitle, breadcrumb slot.
+- `CtaBand.tsx` — shared teal→navy gradient CTA box.
 
-Reference migration: updated every source path — Header/Footer logo → branding/; ClayIcon + IconPicker + admin curriculum icon → `/assets/icons/`; Hero/AboutPreview/WhyChooseSection/AboutHero/PrincipalMessage photos → `/assets/pages/`; settings OG placeholder + validation example → branding path; stale path comments fixed. Codebase grep clean of data:image, bundler UUIDs, external image hosts.
+**UI components (`components/ui/`):**
+- `Button.tsx` — spec redefines variants: primary=navy fill, secondary=teal (swapped from prior), amber, and ghost with a clearly-visible navy-tinted border AT REST (`border-2 border-navy/25`, hover deepens). Tactile hover/shine/arrow retained.
+- `Card.tsx` — variants content/glass/media; `--shadow-sm` at rest → `--shadow-lg` on hover when interactive.
+- `Skeleton.tsx` — primitive + `SkeletonText`/`SkeletonImage`/`SkeletonCard`/`SkeletonTable`; shimmer gradient border↔off-white. No preloaders/spinners anywhere.
+- `WhatsAppFloat.tsx` — renamed from WhatsAppButton; number from Settings, renders null when empty; fixed bottom-right on public pages, never mounted in the portal.
+- Barrel adds `ScrollReveal` (alias of `Reveal`), the new skeleton exports, and re-exports the layout components; keeps a `WhatsAppButton = WhatsAppFloat` back-compat alias for existing pages pending rebuild.
 
-`ASSETS.md` (public/assets) written: full table filename → where it appears → recommended dimensions → notes, plus hard rules and missing-image behaviour; flagged as mandatory to update on any future image.
+**Removals / cleanup:** deleted `components/ui/{Header,Footer,ThemeToggle,WhatsAppButton}.tsx`; removed residual `dark:` classes from ContactForm/ApplyForm; updated `app/dev/ui` to drop ThemeToggle and use WhatsAppFloat. Grep confirms no theme-toggle/dark-mode/preloader code remains in `components/`.
 
-Tests: new `test/asset-system.test.ts` — canonical folders + .gitkeep present; full branding set exists non-empty; webmanifest valid/navy/icons resolve; layout metadata wiring (favicon/apple/manifest/themeColor); asset-path resolution (every static `/assets/...` in app/components/lib resolves; dynamic icon/avatar sets complete); no data:image/external hotlinks. Updated `test/seo.test.ts` (logo→branding) and `components/ui/__tests__/components.test.tsx` (ClayIcon→icons/). Test scan excludes `__tests__` fixtures.
+**Decisions:** logo path kept at the real asset `/assets/logo.png` (spec text mentioned `/assets/branding/logo.png`, which does not exist after step 27). Existing public pages still call `<Header/>`/`<Footer/>`/`<WhatsAppButton/>` with no/compatible props; they will be wired to Settings and rebuilt in 31–37.
 
-**Gates:** typecheck ✔ · lint ✔ (both run once, clean). test:unit/build not run per standing rules (controller runs full gates). Manual node scan confirmed 0 missing static asset refs, 0 forbidden refs, manifest icons resolve.
+**Tests:** rewrote `components/ui/__tests__/components.test.tsx` — header full nav + order, no theme toggle, mobile menu aria-expanded; footer AboveNext credit + Campuses/Privacy/Terms exclusion + socials-without-WhatsApp; button primary/secondary/ghost-border variants; skeleton primitives. Mocks `next/navigation.usePathname`.
 
-**Decisions:** favicons derived as a navy `GSIS` monogram tile (logo is a wide wordmark, illegible at 16px) — clearly brand-derived and legible; all files remain independently swappable. favicon.ico kept under branding/ per spec structure and wired via metadata (no root/app duplicate). Upload-route destinations (campuses/curriculum/gallery/testimonials) left unchanged — already match canonical structure.
+**Gates:** typecheck ✔ · lint ✔ (no warnings). Did not run build/tests per loop rules (controller runs full gates).

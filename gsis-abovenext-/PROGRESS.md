@@ -7,14 +7,14 @@
 ## Current Status
 
 - **Project:** GSIS Website & Admin Portal (AboveNext)
-- **Phase:** 01–24 ✅ · 25 superseded. Now **PHASE 4 (26–39)** — design rebuild, then launch 40–41.
-- **Current build-step:** 28 — shared-components
-- **Last completed:** 27 — asset-system — DONE (2026-07-18)
-- **Next:** 28 — shared-components, then 29 onward in order to 41.
-- **Build order:** 01 → 41. NOT complete until 41 is DONE.
+- **Phase:** 01–24 done · 25 superseded. Now **PHASE 4 (26–39)** design rebuild, then launch 40–41.
+- **Current build-step:** 29 — routing-cleanup
+- **Last completed:** 28 — shared-components — DONE (2026-07-18)
+- **Next:** 29 — routing-cleanup, then 30 onward in order to 41.
+- **Build order:** 01 → 41. NOT complete until 41 is DONE. Step 25 is superseded and deleted.
 
 ### Recent steps
 
-- **27 — asset-system** — DONE (2026-07-18) — canonical swappable asset folders, full favicon/branding set + web manifest, ASSETS.md swap guide.
+- **28 — shared-components** — DONE (2026-07-18) — one source for header, footer, buttons, cards, skeletons, sections, WhatsApp float and page pieces; no theme toggle.
+- **27 — asset-system** — DONE (2026-07-18) — every image, icon, logo and favicon served from public assets and swappable by file replacement.
 - **26 — design-system-v2** — DONE (2026-07-18) — navy-dominant palette, gradient section blending, hover fixes, dark mode removed, skeleton-only loading.
-- **24 — prelaunch-seo-audit** — DONE (2026-07-17) — full-site SEO, performance and accessibility audit on staging; staging stays noindex.

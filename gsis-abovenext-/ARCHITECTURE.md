@@ -151,7 +151,12 @@ Rules: stable lowercase hyphenated filenames; replacing a file updates the site 
 
 > One step at a time, foundation first. Each step has a `specs/NN-slug.md`. **Every completed step ends with a soft `[CHECKPOINT]`** — the single human gate is production launch (final step).
 >
-> **Completion rule (controller must honour):** the build is complete ONLY when the FINAL step below is DONE. After finishing step N, the next step is always **N+1** in this list. PROGRESS.md must always name an explicit `Current build-step` and `Next-step pointer` (e.g. `→ specs/27-asset-system.md`); a vague pointer is a bug, not a stop signal.
+> **Completion rule (controller MUST honour — read this before choosing the next step):**
+> - The build is complete **ONLY when step `41-production-launch` is DONE**. Nothing before 41 ends the build.
+> - After finishing step N, the next step is **always N+1 in this list**. Never infer the next step by scanning or sorting the `/specs` folder.
+> - **Step 25 is SUPERSEDED and its spec file is deleted.** Production launch is now step **41**. If any state file, cached context, or leftover file points at `25-production-launch`, that is stale — ignore it and continue from the highest completed step in the 26–41 range.
+> - Steps **01–24 are COMPLETE**. The live build order continues at **26**.
+> - PROGRESS.md must always name an explicit `Current build-step` and a `Next` pointer naming the next spec (e.g. `27 — asset-system`). A vague, empty, or "complete" pointer before step 41 is a bug, not a stop signal.
 
 **FOUNDATION (platform base) — COMPLETE**
 1. `01-foundation-nextjs` · 2. `02-design-system` · 3. `03-seo-core` · 4. `04-content-model` · 5. `05-admin-auth`
