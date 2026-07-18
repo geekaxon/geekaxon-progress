@@ -786,3 +786,24 @@ WORK TYPE: FEATURE (branch feature/25-production-launch)
 **Gates:** prisma generate ✔ · lint ✔ (no warnings/errors) · typecheck ✔. Did not run test:unit/build per CLAUDE.md (controller runs full gates).
 
 **Notes:** content.ts static FAQs left untouched — the Admissions page rewiring to DB-driven dates/FAQs is spec 33's job, not this step.
+
+## 31 — home-rebuild — DONE (2026-07-18)
+
+**Spec:** /specs/31-home-rebuild.md (mockup /mockups/homepage.html authoritative). Branch: feature/31-home-rebuild.
+
+**Context found:** The home page already existed as a full set of DB-wired Tailwind section components (Hero, Values, About, Programmes, Campuses, Why, Process, Stats, Gallery, Testimonials, CTA) plus shared Header (already no theme toggle, spec 28), Footer, TopBar, WhatsAppButton, MediaImage, ClayIcon, SocialIcon. getHomeData already batches settings/campuses/programmes/albums/testimonials from the DB with safe fallbacks. So this step was a targeted rebuild-to-mockup + the two spec FIXes rather than a green-field build; the existing well-built, on-brand sections were kept and the gaps closed.
+
+**Changes:**
+- Programmes (§6): new client component ProgrammeTabs — navy tabbed panel matching the mockup (image + clay icon + stage number + name + age + summary + subject pills), content expands in place. FIX: clearly-visible active tab (solid white pill, bold navy text, teal underline indicator) vs subtle inactive; full keyboard a11y — roving tabindex, ←/→/↑/↓ wrap, Home/End, aria-selected/controls. ProgrammesSection rewritten to a full-bleed navy section with a decorative radial wash kept behind content (pointer-events-none, -z-0). Removed the broken "View full curriculum" button (→ /curriculum route dropped in spec 29) and any programme detail link.
+- Stats (§10, z-index FIX): StatsSection rebuilt as a full-bleed navy-gradient "By the Numbers" band with five glass cards (icon + AnimatedCounter + label). The two decorative gradient circles are now pointer-events-none and -z-0 (render BEHIND the cards) with the content wrapper lifted to z-10, so every card — including the first — is fully hoverable. Dropped the prototype "sample figures" disclaimer.
+- Hero: removed the leftover "Sample figure — replace before launch." prototype marker.
+- globals.css: stripped the .dark token block (site is light-only; no dark-mode CSS/toggle) and added the gradual top-to-bottom section-blend background on <body> (fixed attachment) so light bands meet with no hard edge. Navy sections paint over it.
+- Tests (components/home/__tests__/home.test.tsx): added StatsSection import + shared PROGRAMMES fixture; new coverage — (a) programmes do not link to a removed detail route, (b) exactly one active tab with roving tabindex and ←→ arrow navigation swapping aria-selected + panel content (tab a11y), (c) stats decorative accents are pointer-events-none/-z-0 behind a z-10 content wrapper and (d) no "sample" disclaimer.
+
+**Kept / verified (already correct):** all dynamic content DB-driven via getHomeData (programmes, campuses, gallery, testimonials, settings contact/socials/WhatsApp, admissions banner on/off + year); campus cards link to /campuses/[slug] (detail retained); next/image with descriptive alt throughout; MediaImage skeleton/fallback (no preloaders); SEO gate — homepage unique title/description, single <h1> (Hero) with section <h2>s, EducationalOrganization JSON-LD (root layout) + WebSite JSON-LD (home), OG/Twitter defaults, sitemap "/" entry, fail-closed staging noindex (robotsMeta + robots.ts). Home is a server component with revalidate=300 (ISR).
+
+**Gates:** pnpm lint ✔ (no warnings/errors) · pnpm typecheck ✔ (tsc --noEmit clean). No schema change, so no prisma generate. test:unit/e2e/build left for the controller per CLAUDE.md.
+
+**Notes/decisions:** Stats are not in the spec's portal-editable dynamic-data list, so they remain sensible in-code constants (no "sample" markers) rather than DB-backed. Kept the codebase's established Tailwind component system instead of porting the mockup's raw semantic CSS + FontAwesome, to stay consistent with every other page and avoid a parallel styling system. tailwind.config darkMode:"class" left as-is (harmless: no .dark class is ever applied; the only dark: utilities live in two admin form components, off the home page).
+
+WORK TYPE: FEATURE (branch feature/31-home-rebuild)
