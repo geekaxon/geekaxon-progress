@@ -807,3 +807,33 @@ WORK TYPE: FEATURE (branch feature/25-production-launch)
 **Notes/decisions:** Stats are not in the spec's portal-editable dynamic-data list, so they remain sensible in-code constants (no "sample" markers) rather than DB-backed. Kept the codebase's established Tailwind component system instead of porting the mockup's raw semantic CSS + FontAwesome, to stay consistent with every other page and avoid a parallel styling system. tailwind.config darkMode:"class" left as-is (harmless: no .dark class is ever applied; the only dark: utilities live in two admin form components, off the home page).
 
 WORK TYPE: FEATURE (branch feature/31-home-rebuild)
+
+---
+
+## Step 32 — about-rebuild — DONE (2026-07-18)
+
+Spec: /specs/32-about-rebuild.md (AUTHORITATIVE). Visual ref: /mockups/about.html + about-desktop.png. Branch: feature/32-about-rebuild. WORK TYPE: FEATURE.
+
+Rebuilt /about as dynamic Next.js components matching the mockup, light-theme only, server component + ISR (revalidate 300). Page chrome (AdmissionsBanner, TopBar, Header, Footer, WhatsAppButton) reads Settings via getHomeData(); no theme toggle, no preloader (Reveal + skeleton system already in place).
+
+Section order now matches the mockup:
+1. AboutHero (rewritten) — centred PAGE HERO: breadcrumb (Home › About), single <h1> "About GSIS" with amber underline under "GSIS", subtitle. Airy light layout with faint teal/amber radial blobs; no hero photo (mockup shows none).
+2. OurStory (new) — overlapping about-1/about-2 images + "1992 Established" teal chip, eyebrow "Our story", "A school built on care and curiosity", two paragraphs, 3-item check-list, "Explore our campuses" button. Mirrors home AboutPreview styling.
+3. MissionVision (updated) — added icon chips (target + eye SVGs), title "Mission & Vision", eyebrow "What drives us", paired cards Our Mission / Our Vision.
+4. CoreValues (new, about-specific) — 5 Cards with clay icons (val-1..5) reusing home Values styling but the mockup's content (Quality Education, Experienced Faculty, Safe & Secure, Character Building, Future Ready). Home ValuesSection is no longer imported here.
+5. PrincipalMessage (rewritten) — designed silhouette placeholder card with "30+ Years of leadership" navy chip + signed pull-quote (A. Rahman / The Principal, GSIS).
+6. JourneyTimeline (rewritten) — alternating zig-zag: single left rail on mobile, centred spine + cards alternating sides on desktop, amber year labels. 5 milestones (1992→Today).
+7. StatsSection — reused home component (dark navy band, glass cards, animated counters; prefers-reduced-motion respected via AnimatedCounter/Reveal).
+8. CtaSection — reused home component (teal→navy gradient, Apply for Admission CTA).
+
+New about component: components/about/Breadcrumbs.tsx (centre-aligned variant of the shared breadcrumb, matching BreadcrumbList JSON-LD). Breadcrumb JSON-LD label changed "About Us" → "About" to match the visible crumb.
+
+SEO gate: unique title ("About Us") + description, single <h1>, alt text on all images, OG/Twitter + robots via buildMetadata, BreadcrumbList JSON-LD, /about already in sitemap, staging noindex via robotsMeta(). All satisfied.
+
+ASSET-PATH NOTES / GAPS (spec references vs repo reality):
+- Spec cites /assets/pages/page-hero-about.jpg, /assets/pages/principal.jpg, /assets/icons/val-1..5.png. Those dirs do NOT exist; the repo uses a flat public/assets/ (home rebuild convention). Clay icons resolve via ClayIcon → /assets/val-N.png (present). about-1/about-2.jpg present.
+- No page-hero-about.jpg exists and the mockup shows no hero photo, so the hero is image-free by design.
+- No principal.jpg exists → rendered a graceful designed silhouette placeholder (matching the mockup, which is also a placeholder) instead of a broken next/image. GAP: client to supply the real principal portrait; swap the placeholder card for a photo when available.
+- PORTAL-DATA gap: no DB model exists for milestones/timeline entries or the achievement stats/counters or the principal's message — these remain static marketing copy in-component (clearly marked as illustrative/placeholder). If the client needs to edit them, a content model is required (flagged here rather than hardcoded silently).
+
+Gates: pnpm lint ✔ (no warnings/errors), pnpm typecheck ✔ (tsc --noEmit clean). Presentation step — no unit tests added. build/e2e left to the controller.
