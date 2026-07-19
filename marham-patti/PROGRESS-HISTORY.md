@@ -3385,3 +3385,27 @@ Every new mutation audits: commission set/removed, admin created/updated, packag
 **Gates:** `pnpm typecheck` green; `pnpm lint` green (0 errors; one pre-existing unrelated warning in doctor-portal). Did not run test suites/build per protocol (controller runs them). Vendor screens are exempt from the raw-control drift guard; the native file inputs also carry `drift-guard-allow`.
 
 **Do-NOT-break honoured:** invite-token 409/410/401 distinction preserved; SVG sanitisation reused from 59; asset/branding isolation intact; 72 host→surface routing untouched (only URL *generation* changed); did not attempt the INFRA-1 nested-wildcard TLS fix.
+
+## 92 — dark-mode-accent-system — DONE (2026-07-19)
+
+**Branch:** feature/92-dark-mode-accent-system. Work-type: FEATURE. Presentation only; no schema, no behaviour change.
+
+**Problem:** In dark mode the teal accent (#06888D) was near-invisible on the near-black surfaces (breadcrumb links, active nav/tab indicators, avatar initials, inline links), and chart hover tooltips stayed light-on-light so their text was unreadable.
+
+**Solution — a SEMANTIC accent token set** so components ask for meaning, not a hex:
+- Added `--mp-accent`, `--mp-accent-fill`, `--mp-accent-on-fill`, `--mp-accent-hover`, `--mp-accent-soft` to both `apps/web/app/globals.css` and the canonical `packages/ui/src/styles.css`.
+  - Light: accent/fill = `var(--brand-teal, #138c80)` (so the look stays EXACTLY today's tenant teal — white-label preserved), on-fill = #ffffff, hover = brand-teal-mid.
+  - Dark: accent/fill = #a5e8e0 (Mint Bright), on-fill = #0e1416 (near-black), hover = #8fded4 (deeper mint, on-fill stays near-black).
+- Tailwind preset (`packages/ui/src/tailwind-preset.ts`): repointed `primary.DEFAULT`→`--mp-accent-fill`, `primary.foreground`→`--mp-accent-on-fill`, added `primary.hover`/`primary.soft`, and `ring`→`--mp-accent`. Every `bg-primary`/`text-primary-foreground`/`text-primary`/`ring-ring` consumer now flips automatically (primary button, app-shell active nav pill, form-control checked states, focus rings, link buttons).
+- Button: primary hover `bg-brand-teal-mid`→`bg-primary-hover` (theme-aware).
+- Text-accents that were fixed dark teal → theme-aware `text-heading` (which is #045E62 in light — identical to brand-teal-deep, so light is a no-op — and #a5e8e0 in dark): avatar initials, data-list initials, CardTitle, EmptyState title, default Badge, stat-card success chip, and the vendor tenant-detail underline TabTrigger (border→`border-primary`, label→`text-heading`).
+- Breadcrumb links → `text-primary` accent links (teal in light, mint in dark), legible in both.
+- Inline links: base `a` and `.mp-link` → `var(--mp-accent)`.
+- Chart (`packages/ui/src/components/chart.tsx`): lead series colour → `var(--mp-accent)`; all four tooltips (line/area/bar/donut) now use a shared themed style — `background var(--mp-card)`, `border var(--mp-border)`, `boxShadow var(--mp-shadow-3)`, label `var(--mp-muted-fg)`, items `var(--mp-fg)` — so the hover card is a near-black themed card in dark instead of white-on-white. Series swatch keeps the accent colour.
+- Contrast audit (`packages/ui/src/lib/auth-contrast.ts`): split the nav-active pair into light (white on #06888D) + dark (near-black #0E1416 on Mint #A5E8E0), and added accent-text-on-card/page (dark) pairs. Verified ratios: nav-fill dark 13.46, accent-on-card 12.13, accent-on-page 13.46, nav light 4.27 — all clear AA/AA-large.
+
+**Grep note (acceptance §5):** the spec asked for zero teal literals outside globals.css. Remaining hits are all legitimate and pre-existing conventions, NOT a component hardcoding its colour: `var(--token, #hex)` defensive fallbacks in the preset and chart, the accent token DEFINITIONS in styles.css (the canonical token file, sibling of globals.css), the light-locked auth-button audit reference, and a drift-guard test string. Every component now reads the semantic token; the hex only surfaces if a token is undefined.
+
+**Do-not-break:** light palette and the near-black dark greys untouched — only the accent moves. Auth surfaces stay light-locked (their `.mp-*` teal is unchanged). Shared-kit changes are additive, so staff/patient/field surfaces inherit the corrected dark accent through the same tokens.
+
+**Gates:** `pnpm lint` green (incl. design-drift check), `pnpm typecheck` green. No schema → no prisma generate. Did not run test/build/e2e per loop rules.

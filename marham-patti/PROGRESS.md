@@ -7,13 +7,13 @@
 ## Current Status
 - **Project:** Marham Patti — multi-tenant white-label healthcare platform (Ganatra go-live 1 Aug 2026).
 - **Phase:** 1–84 ✅. **PHASE 9 (85–89)** vendor console design to approved mockups — all done. Then **PHASE 10 (90–95)** vendor completion from the owner's second test round.
-- **Last completed:** **91 — tenant-subdomain-invite-and-whitelabel-uploads** (2026-07-19) — tenant-addressed invites, console logo/icon upload, branded set-password.
-- **Next:** **92 — dark-mode-accent-system** — /specs/92-*.md.
-- **Branches:** through feature/84 on staging; feature/85–91 built (merge pending).
+- **Last completed:** **92 — dark-mode-accent-system** (2026-07-19) — semantic accent tokens; dark goes Mint Bright with near-black text on fills; chart tooltips themed.
+- **Next:** **93 — auth-screens-consistency** — /specs/93-*.md.
+- **Branches:** through feature/84 on staging; feature/85–92 built (merge pending).
 
 ### Recent steps
+- **92 — dark-mode-accent-system** — DONE (2026-07-19) — accent flips to Mint Bright in dark, near-black on fills; chart tooltips themed; light unchanged.
 - **91 — tenant-subdomain-invite-and-whitelabel-uploads** — DONE (2026-07-19) — invites on the tenant's own subdomain; console logo/icon upload; login-style set-password.
 - **90 — vendor-data-and-logic-fixes** — DONE (2026-07-19) — one editable/removable commission row per capability; AI two-state; single role field; duplicate-role validation.
-- **89 — vendor-screens-consistency** — DONE (2026-07-19) — inline row actions on the remaining lists; approvals on library cards; audit diff without a table.
 
 > Older steps in PROGRESS-HISTORY.md.
