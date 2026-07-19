@@ -3355,3 +3355,33 @@ Branch: feature/90-vendor-data-and-logic-fixes. WORK TYPE: FIX. Owner re-test ro
 
 ### logEvent
 Every new mutation audits: commission set/removed, admin created/updated, package update path unchanged. Gates green.
+
+---
+
+## 91 — tenant-subdomain-invite-and-whitelabel-uploads — DONE (2026-07-19)
+
+**Work type:** FEATURE. **Branch:** feature/91-tenant-subdomain-invite-and-whitelabel-uploads (stacked on feature/90). **Spec:** specs/91-*.md; CODEREF 90-95 §C.7/§C.8/§E.
+
+**Problem (owner test round 2):** (1) invite links pointed at the platform apex instead of the tenant's own subdomain, and the set-password screen didn't match the login design; (2) logo/app-icon upload from spec 77 was invisible in both Create-Tenant and the Branding tab.
+
+**2.1 Tenant-addressed invites.** New pure `buildInviteUrl({token,slug,base,customDomain})` (apps/api/src/vendor/invite-url.ts): ACTIVE custom domain (78) wins → else `<slug>.<base>` → else relative path (local dev). New injectable `InviteLinkService.forTenant(tenantId,token)` resolves the address via `TenantDomainRepository.inviteAddress(tenantId)` (single platform-scoped read: slug + first ACTIVE domain). Both duplicated private `inviteUrl` helpers in vendor-console + vendor-team services deleted; all four call sites (createTenant, resetOwner, createUser, resetUserPassword) now go through the service. Removed now-unused AppConfig/APP_CONFIG/platformBaseDomain from both services. Copy affordance + "Invite link copied" toast added to the owner-reset and team-invite panels (the create-tenant success panel already had Copy; its hint now states email isn't configured so the link is sent manually).
+
+**2.2 Set-password screen = login design.** Rewrote apps/web/app/invite/{BrandedInviteScreen,InviteForm}.tsx off the legacy `mp-auth*` shell onto the vendor-login composition (86): centred card on a neutral page, vertical logo lockup (tenant `<img>` override when whitelabel, else platform `<Logo variant="vertical">`), title+subtitle, @mp/ui `PasswordInput` (password + confirm, icon-led, show/hide), full-width `Button` with `Loader2` submitting state, wrapped in `ToastProvider`. Transient errors (mismatch, generic) are toasts; the 71 consumed/expired/invalid + no-token states are terminal, in-card, friendly. Kept the EN/UR toggle (tenant surfaces are bilingual). Added i18n keys confirmPassword + passwordMismatch (EN+UR).
+
+**2.3 Logo + app-icon upload (console).** New endpoints `POST/DELETE /vendor/tenants/:id/branding/asset` (parseBrandingAsset DTO: kind logo|icon, mime SVG/PNG, base64, 512 KB cap). `VendorConsoleService.uploadBrandingAsset/removeBrandingAsset`: whitelabel gate (`tenantHasWhitelabel`, server-side, same as the colour editor), `validateAssetUpload` + `sanitizeSvg` (spec 59) BEFORE storage, store via `LocalAssetStore` (data: URL staging fallback), record a tenant-scoped `BrandAsset` (new `VendorRepository.upsertBrandAsset/deleteBrandAsset` under `runWithTenant`), then point LIVE `logoKey`/`iconKey` at the asset via `brand.updateProfile`, audit `vendor.tenant.branding_asset_set/removed`. Logo → `horizontal` slot, icon → `appIcon` slot. Web: `BrandAssetUploader` in the Branding tab (whitelabel) + `BrandFilePicker` in Create-Tenant (captured pre-provision, uploaded once the tenant exists), both with current-asset preview + Replace/Remove and client-side type/size/(icon)square guards. Non-whitelabel Branding tab now prints an explicit "Whitelabel is not included in this tenant's package (<package>)" line so the section is never silently missing.
+
+**Rendering fix:** `isRenderableTenantLogo` (Logo.tsx) and the invite `renderableLogo` guard rejected `data:` URLs, so 77's uploaded marks (stored as sanitised data: URLs by LocalAssetStore) never rendered — the root of the owner's "can't see the logo" complaint. Both guards now also accept `data:image/`.
+
+**Decisions (logged, not escalated):** (a) The console applies logo/icon LIVE via brand.updateProfile rather than routing through the 59 approval queue — consistent with how the console already applies colours in setBranding; the platform owner is the approver, so a self-approval loop would be noise. Tenant self-serve (PersonalizationClient) is unchanged and still routes REVIEW-class public marks through approvals. (b) Dimension ("square") validation is client-side (server has no image decoder); the server still enforces type + size + SVG-sanitise, which is the authoritative 59 pipeline. (c) No circular module import: VendorModule reuses the ASSET_STORE token + LocalAssetStore/asset-store primitives by FILE import (PersonalizationModule imports VendorModule, so importing PersonalizationModule back would cycle); it binds its own `{provide: ASSET_STORE, useClass: LocalAssetStore}`.
+
+**Schema/RLS:** no schema change. Assets ride the existing `brand_assets` table under the `marketplace_isolation` RLS policy; both new repo methods use `runWithTenant`, so tenant A can never read/write tenant B's asset (isolation by construction, same proof surface as 59).
+
+**Flags:** whitelabel remains a per-package capability (SubscriptionPackage.whitelabel), gated server-side; unrelated to the `platform.fullPersonalization` flag (which gates 59 self-serve).
+
+**Tests written:** invite-url.spec.ts (subdomain host, custom-domain preference, blank-domain fallback, no-apex, relative dev fallback); vendor-branding-asset.spec.ts (whitelabel Forbidden gate, SVG script stripped-before-store, logo→logoKey/horizontal, icon→iconKey/appIcon, Remove clears pointer+asset). Updated vendor.spec.ts + vendor-team.service.spec.ts to the tenant-addressed invite expectations and the new service constructors (real InviteLinkService with a fake domain repo); trial-autosuspend.spec.ts constructor updated.
+
+**i18n:** confirmPassword/passwordMismatch (EN+UR); vendor.detail brand asset keys brandLogo/brandLogoHint/brandAppIcon/brandAppIconHint/brandAssetUpload/Replace/Remove/None/Uploaded/Removed/Sanitised/TypeError/SizeError/SquareError/UploadError + whitelabelPackageLine (EN+UR, vendor console renders EN). Parity verified (en/ur key sets equal).
+
+**Gates:** `pnpm typecheck` green; `pnpm lint` green (0 errors; one pre-existing unrelated warning in doctor-portal). Did not run test suites/build per protocol (controller runs them). Vendor screens are exempt from the raw-control drift guard; the native file inputs also carry `drift-guard-allow`.
+
+**Do-NOT-break honoured:** invite-token 409/410/401 distinction preserved; SVG sanitisation reused from 59; asset/branding isolation intact; 72 host→surface routing untouched (only URL *generation* changed); did not attempt the INFRA-1 nested-wildcard TLS fix.

@@ -7,13 +7,13 @@
 ## Current Status
 - **Project:** Marham Patti — multi-tenant white-label healthcare platform (Ganatra go-live 1 Aug 2026).
 - **Phase:** 1–84 ✅. **PHASE 9 (85–89)** vendor console design to approved mockups — all done. Then **PHASE 10 (90–95)** vendor completion from the owner's second test round.
-- **Last completed:** **90 — vendor-data-and-logic-fixes** (2026-07-19) — commission upsert/remove, two-state AI, one role per admin, clean duplicate-role error.
-- **Next:** **91 — tenant-subdomain-invite-and-whitelabel-uploads** — /specs/91-*.md.
-- **Branches:** through feature/84 on staging; feature/85–90 built (merge pending).
+- **Last completed:** **91 — tenant-subdomain-invite-and-whitelabel-uploads** (2026-07-19) — tenant-addressed invites, console logo/icon upload, branded set-password.
+- **Next:** **92 — dark-mode-accent-system** — /specs/92-*.md.
+- **Branches:** through feature/84 on staging; feature/85–91 built (merge pending).
 
 ### Recent steps
+- **91 — tenant-subdomain-invite-and-whitelabel-uploads** — DONE (2026-07-19) — invites on the tenant's own subdomain; console logo/icon upload; login-style set-password.
 - **90 — vendor-data-and-logic-fixes** — DONE (2026-07-19) — one editable/removable commission row per capability; AI two-state; single role field; duplicate-role validation.
 - **89 — vendor-screens-consistency** — DONE (2026-07-19) — inline row actions on the remaining lists; approvals on library cards; audit diff without a table.
-- **88 — dashboard-and-analytics** — DONE (2026-07-18) — no-data stat variant, plotted-point charts and a chart empty state on Oversight and Analytics.
 
 > Older steps in PROGRESS-HISTORY.md.
