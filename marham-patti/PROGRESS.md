@@ -7,13 +7,13 @@
 ## Current Status
 - **Project:** Marham Patti — multi-tenant white-label healthcare platform (Ganatra go-live 1 Aug 2026).
 - **Phase:** 1–84 ✅. **PHASE 9 (85–89)** vendor console design to approved mockups — all done. Then **PHASE 10 (90–95)** vendor completion from the owner's second test round.
-- **Last completed:** **89 — vendor-screens-consistency** (2026-07-19) — remaining vendor lists get inline row actions; approvals re-skinned onto library cards.
-- **Next:** **90 — vendor-data-and-logic-fixes** — /specs/90-vendor-data-and-logic-fixes.md.
-- **Branches:** through feature/84 merged to staging; feature/85–89 built (merge pending).
+- **Last completed:** **90 — vendor-data-and-logic-fixes** (2026-07-19) — commission upsert/remove, two-state AI, one role per admin, clean duplicate-role error.
+- **Next:** **91 — tenant-subdomain-invite-and-whitelabel-uploads** — /specs/91-*.md.
+- **Branches:** through feature/84 on staging; feature/85–90 built (merge pending).
 
 ### Recent steps
+- **90 — vendor-data-and-logic-fixes** — DONE (2026-07-19) — one editable/removable commission row per capability; AI two-state; single role field; duplicate-role validation.
 - **89 — vendor-screens-consistency** — DONE (2026-07-19) — inline row actions on the remaining lists; approvals on library cards; audit diff without a table.
-- **88 — dashboard-and-analytics** — DONE (2026-07-18) — no-data stat variant, plotted-point charts, labelled bars and a chart empty state on Oversight and Analytics.
-- **87 — table-and-card-kit** — DONE (2026-07-18) — inline row action buttons and a hover-lift card, wired into the tenants and packages lists.
+- **88 — dashboard-and-analytics** — DONE (2026-07-18) — no-data stat variant, plotted-point charts and a chart empty state on Oversight and Analytics.
 
 > Older steps in PROGRESS-HISTORY.md.

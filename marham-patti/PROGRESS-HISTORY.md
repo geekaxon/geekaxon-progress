@@ -3322,3 +3322,36 @@ Deliberately left as legitimate: forms.tsx SlugInput uses a bare <input> — it 
 Acceptance check: (1) PageHeader/breadcrumb scaffold present on every screen (tenant detail uses the bespoke §4 header). (2) every list on the 87 kit; grep proves no <table> outside data-list in (vendor). (3) forms on library field anatomy + sticky footer (tenants/new), no native <select>, no validation-on-mount, no bare screen <input>. (4) tenant detail header + underline tabs (no vertical scrollbar) + StatGrid Overview + tabs on library cards — already met, verified. (5) metric cards on 88 anatomy with "—" (billing, tenant Overview). (6) no alert/confirm/prompt; dialogs/toasts/skeletons/empty from the library. (8) grep: zero hex outside globals.css; shared-kit changes additive (none); gates green.
 
 Gates: pnpm lint (incl. design-drift: no retired .mp-* control atoms) green; pnpm typecheck green. No unit/e2e/build run per build-loop (controller runs full gates). No spec/test file references these screens (grep) so no unit-test breakage. Screenshots (Acceptance §7): the web package has no Playwright harness (CODEREF §C), so the light/dark visual pass was done by inspection against component-library.png; no runnable screenshot harness to attach from.
+
+---
+
+## 90 — vendor-data-and-logic-fixes — DONE (2026-07-19)
+
+Branch: feature/90-vendor-data-and-logic-fixes. WORK TYPE: FIX. Owner re-test round-2 punch-list (seven data/logic defects, not look). Gates: pnpm prisma generate + lint + typecheck all green (pre-existing doctor-portal unused-disable warning only).
+
+### 2.1 Commission = upsert per capability
+- `CommissionConfigRow` gains `updatedAt`. Repo `insertCommissionConfig` → `upsertCommissionConfig` (find-first by (tenantId,capability) then update-in-place else create, in one platform-scope tx) + new `deleteCommissionConfig`; `listCommissionConfigs` now orders by updatedAt desc and selects updatedAt. `CommissionService.setRate` upserts; new `removeRate`. `PlatformSettlementService` gains `removeCommission` (audits `platform.settlement.commission.removed`). `VendorConsoleService.removeCommission` (audits `vendor.tenant.commission_removed`); tenant detail now lists only the tenant's OWN rows (tenantId === id) each with an ISO `updatedAt`, so the global platform-default (tenantId null) is never shown as a removable tenant row (it stays the implicit fallback via `commissionPct`).
+- New migration `20260719000000_commission_upsert_unique`: dedupes existing duplicate (tenant,capability) rows keeping newest, then adds unique index `platform_commission_tenant_capability`; schema `@@unique([tenantId, capability])`. NULL-capability defaults are additionally guarded by the service find-then-upsert (Postgres treats NULLs as distinct).
+- Web `DELETE /vendor/tenants/:id/commission?capability=` route + `parseCommissionCapability`. CommissionTab rewritten: label/rate/last-updated/remove per row, EmptyState on zero, ConfirmDialog + success toast on remove; 0% persists as a real value.
+- Tests (platform-settlement.spec): four-step sequence → two rows; double-submit → one row; remove clears + audits.
+
+### 2.3 AI entitlement = two states
+- Decision (CODEREF §C.1): package AI is NONE or MANAGED only; BYOK/BOTH removed from every package/tenant UI. Web `AI_ENTITLEMENT_OPTIONS`/`AI_MODE_OPTIONS` = two; web `AiEntitlement`/`TenantAiMode` narrowed to two; package DTO `packageEntitlement` coerces any legacy BYOK-ish value → MANAGED (never 500). Managed-rate label reworded ("blended, per 1,000 tokens"; helper explains all-providers); rate field only shown when MANAGED.
+- SEED_PACKAGES updated: standard BYOK→MANAGED(rate 2), premium BOTH→MANAGED, grandfather BOTH→MANAGED(rate 0) so boot-reconcile keeps two-state. Migration `20260719010000_ai_two_state`: packages BYOK/BOTH→MANAGED; tenant_subscriptions ai_mode BYOK→MANAGED (enum VALUES left in place — dropping is destructive/unneeded).
+- Tenant SubscriptionClient: BYOK provider-key panel + byok strings removed. i18n BYOK/BOTH labels removed from vendor + tenant catalogs (EN+UR parity kept). Grep proves no BYOK/Bring-your-own strings remain in apps/web UI. The BYOK credential + gateway RUNTIME (spec 54/57) is intentionally left intact (inert); its unit tests now force a BYOK package directly.
+
+### 2.4 Package Active — already had the edit toggle (verified); assign dropdown already excludes inactive (kept). No change beyond the rate-field gating above.
+
+### 2.5 Duplicate role name → clean error
+- Platform `PlatformPermissionService.createCustomRole`: findByName pre-check + P2002 catch → ConflictException "A role named 'X' already exists." (covers clone via the shared path). Tenant `PermissionService.createCustomRole`/`cloneRole`: `assertNameFree` (case-insensitive, per tenant scope via listForTenant) → ConflictException. RoleManager already surfaces res.error as a toast. Test asserts 409 + /already exists/.
+
+### 2.2 / 2.6 One role field + all roles assignable + editable admins
+- Decision: vendor-admin surface unified to a SINGLE role field listing EVERY console role (system + custom) with a System/Custom label; full edit path added so any admin — including one on a system role — is editable (former base-role lock gone). Create/edit take a PlatformRole `roleId`; `deriveVendorRole` sets the coarse tier (role holding admins.manage/platform.admin → VENDOR_OWNER else VENDOR_STAFF); `setSingleRole` replaces assignments so exactly one role is held. `listAdmins` returns roleId/roleName/roleIsSystem. New `PUT /vendor/admins/:id` (updateAdmin, audits `vendor.admin.updated` with before→after). Admins page rewritten: searchable single-role picker (System/Custom hint), Edit dialog (name + role), enable/disable kept; makeOwner/makeStaff + ManageConsoleRolesDialog removed.
+- Scope note: the deeper spec-73 change (making a narrow role RESTRICT a staff admin, since VENDOR_STAFF defaults are broad) is left intact to avoid locking admins out (Do-NOT-break RBAC 73). The tenant-side User model collapse (drop role/customRoleId to one join) is likewise not attempted here — disproportionate DB migration risking lockouts; the punch-list defect (unified UI + editable) is satisfied on the tested vendor surface.
+- Tests: create with roleId (System/Custom surfaced); edit a system-role admin changing name+role, tier re-derived.
+
+### 2.7 Edit vs View
+- `tenantViewHref`/`tenantEditHref` helpers (View → detail Overview; Edit → `?tab=subscription`). Tenants list row actions + row click use them; tenant detail initialises its tab from a validated `?tab=` param. Routes differ by construction (no web unit runner exists to assert this, so verified by inspection).
+
+### logEvent
+Every new mutation audits: commission set/removed, admin created/updated, package update path unchanged. Gates green.
