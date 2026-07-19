@@ -3409,3 +3409,22 @@ Every new mutation audits: commission set/removed, admin created/updated, packag
 **Do-not-break:** light palette and the near-black dark greys untouched — only the accent moves. Auth surfaces stay light-locked (their `.mp-*` teal is unchanged). Shared-kit changes are additive, so staff/patient/field surfaces inherit the corrected dark accent through the same tokens.
 
 **Gates:** `pnpm lint` green (incl. design-drift check), `pnpm typecheck` green. No schema → no prisma generate. Did not run test/build/e2e per loop rules.
+
+## 93 — auth-screens-consistency — DONE (2026-07-19)
+
+**Branch:** feature/93-auth-screens-consistency. **Type:** FEATURE. Presentation only; no auth behaviour changed (lockout, OTP TTL/attempts, reset-token validity, sessions untouched).
+
+**What shipped (spec 93 goals):**
+1. **Logo sizing.** Login vertical lockup now 120px tall on desktop, scaled via `--mp-logo-h: clamp(84px,20vw,120px)` on a new `.mp-login-logo` wrapper so it never crowds the card at 360/768. Vendor sidebar horizontal lockup 28→34px and collapsed insignia 30→34px.
+2. **Inverted variant pairing — fixed once in the resolver.** `platformLogo(variant, mode)` in `packages/brand/src/index.ts` now maps the ACTIVE THEME to the OPPOSITE-ink file (artwork named for ink, not background): light theme → `*-dark.svg`, dark theme → `*-light.svg`, for every variant (vertical, horizontal, insignia, text) and inherited by `platformFavicon`. Every consumer (`<Logo>`, sidebar, login) inherits it; no per-component override.
+3. **`<Logo>` sizing token.** Height now flows through the inherited `--mp-logo-h` custom property (prop is the default; a parent var overrides), so responsive sizing is a token not a magic number. All existing callers unchanged (fallback to their px value).
+4. **2FA (VendorTwoFactorPanel) rebuilt** on the login card composition: library `Input` (numeric, autofocus, paste, 6-digit), full-width `Button` with a submitting/`verifying` state, "Incorrect or expired code" now a `toast.error` (inline `mp-msg-error` removed entirely), and a resend affordance that raises its own toast (enroll → regenerate QR + success toast; verify → info hint toast, since TOTP has nothing to re-send).
+5. **Forgot/reset rebuilt** (`reset/ResetForm.tsx` + `page.tsx`, dropped `AuthShell`): centred card on the neutral `mp-vendor-login` page, 120px vertical lockup, title + one-line subtitle, icon-led library email/clinic/password fields, full-width primary button + submitting state, toast feedback for success ("If that email exists, we've sent a reset link") and confirm/failure, back-to-sign-in link. EN/UR toggle preserved (staff also reach this screen) with token carried across.
+
+**i18n:** added EN+UR keys `verifying`, `twoFaResend`, `twoFaResendHint`, `twoFaSetupRefreshed`, `resetNewPrompt`, `resetLinkSent`, `passwordResetDone`. Reused existing `invalidCode` for the 2FA toast (via `authErrorMessage`).
+
+**Tests:** `packages/ui/src/lib/brand-shell.spec.ts` — updated resolver assertions to the inverted mapping in BOTH directions for horizontal + vertical (+ insignia/text/favicon); added source-level guards that the 2FA panel raises `toast.error`/`toast.info` and has no `mp-msg-error`, and that the reset screen uses the login composition (`variant="vertical"`, `mp-vendor-login`, `backToLogin`) with toast success+error and no inline `mp-msg-*`.
+
+**Decisions recorded:** reset (`/login/reset`) is shared by staff + vendor logins; rebuilt it on the login composition (an upgrade for both, EN/UR retained) rather than forking a vendor-only reset — no dedicated vendor reset endpoint exists. Resend on a TOTP screen is a hint toast (no OTP to re-send). Invite/set-password (91) already login-styled and inherits the corrected mark pairing via `<Logo>` — left as is (tenant branding still wins per do-not-break). Other surface shells (AppShell/Entrance/Platform) left at their own sizing; only the vendor sidebar sizing was in the punch-list.
+
+**Gates:** `pnpm typecheck` green (29/29). `pnpm lint` green incl. design-drift (no retired `.mp-*` control atoms). No schema change. No hex outside globals.css.
