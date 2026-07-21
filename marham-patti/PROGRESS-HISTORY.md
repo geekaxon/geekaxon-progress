@@ -3557,3 +3557,29 @@ The tenant's OWN in-app admin Users screen (apps/web/app/(app)/admin/users/UserM
 **Gates:** `pnpm prisma generate` ✔ · `pnpm lint` ✔ (16/16) · `pnpm typecheck` ✔ (29/29). Did not run test:unit/e2e/build per CLAUDE.md (controller runs full gates).
 
 WORK TYPE: FEATURE (branch feature/98-pharmacy-data-models-and-migrations)
+
+## 99 — pharmacy-settings-and-configuration — DONE (2026-07-21) — WORK TYPE: FEATURE (branch feature/99-pharmacy-settings-and-configuration)
+
+**Base branch note:** step 99 depends on the `PharmacySettings`/`Counter` models from step 98, which are on `feature/98` and not yet on `staging`. Branched `feature/99` off `feature/98` so the models + migration are present; recorded and proceeded per the fully-autonomous mandate. The pre-existing staging working-tree WIP (step-98 vendor duplicates) was stashed before switching (`git stash` entry "staging-wip-before-step99"); that work is already committed on feature/98, so nothing is lost.
+
+**Spec/CODEREF:** built to spec 99 + CODEREF §C.1 (nothing hardcoded — a settings surface drives tax/credit/rx/counters) and §C.4/§C.5/§C.6/§C.7.
+
+**Shared (@mp/shared, pure, browser-safe) — `pharmacy-settings.ts`:**
+- `EffectivePharmacySettings` shape + `PHARMACY_SETTINGS_DEFAULTS` (tax 0, credit off, rx WARN, single counter, restocking 0) — mirrors the DB column defaults so a zero-config tenant works.
+- `resolveEffectiveSettings(tenantRow, branchRow)` — field-level precedence **branch → tenant → defaults**; clamps rates to [0,100] and coerces a bad rxHandling back to WARN.
+- Read helpers for the enforcement contract: `allowedSaleMethods` (CREDIT only when enabled), `effectiveLineTaxRate` (per-medicine override else default), `restockingFeeAmount`. `RX_HANDLING_MODES` + `isRxHandling` guard.
+- Enforcement contract documented in the module header: tax→101/102/104, credit→101/102/106/110, rxHandling→102, multiCounter+counters→100/110, restockingFee→108.
+
+**@mp/db:** re-exported `RxHandling, ReturnReason, ReturnStatus, DayCloseStatus` from the single entrypoint (step 98 added the enums to schema but never re-exported them).
+
+**Permissions (@mp/shared/permissions.ts):** added TENANT key `pharmacy.settings.manage` (flag-gated by `pharmacy.pos`); granted to ADMIN + PHARMACIST defaults (TENANT_OWNER gets it via the all-TENANT set). Reads need only the flag; writes need the key.
+
+**API — new sibling module `apps/api/src/pharmacy-settings/`:** constants, dto (full-replacement settings PUT + counter create/update, class-validator-free), repository seam + Prisma impl (tenant-scoped via runWithTenant; manual find-then-update/create for the NULLABLE `(tenant_id, branch_id)` unique so the tenant-level upsert is reliable; Decimal→number at the boundary), service (the `resolve()` seam later steps inject + call; `getSettingsView`, `updateSettings`, counter CRUD scoped to the primary branch, `requireBranch` guard), controller (`GET/PUT /pharmacy/settings`, `GET/POST /pharmacy/settings/counters`, `PUT /pharmacy/settings/counters/:id` — flag-gated class, `pharmacy.settings.manage` on every write, `@Audited` mutations). Registered `PharmacySettingsModule` in app.module (exports the service).
+
+**Web — `apps/web/app/(app)/pharmacy/settings/`:** server `page.tsx` (locale-aware heading, tenant-branded shell) + `PharmacySettingsClient.tsx` — reads the resolved settings, edits tax %, credit toggle, rx-handling select (with per-mode helper text), multi-counter toggle revealing counter management (add/rename/activate-deactivate), restocking fee %; every setting has plain-English helper text. Non-admins get a read-only view (fields disabled + note) via `usePermission`; shared kit + tokens give light/dark + responsive; no hex outside globals.css.
+
+**i18n:** full `pharmacySettings.*` namespace added to en.json + ur.json (parity), plain-English owner-friendly copy.
+
+**Tests:** `pharmacy-settings.service.spec.ts` (fake tenant-partitioned repo) proves defaults, tenant/branch precedence, read model, write round-trip, cross-tenant isolation (§6), counter lifecycle + no-branch guard, and the pure read helpers + clamp behaviour. Extended `packages/db/pharmacy-models-isolation.spec.ts` with a migration-level RLS proof for `pharmacy_settings` (tenant sees only its row; WITH CHECK blocks a cross-tenant write).
+
+**Gates:** `pnpm prisma generate` (branch switch) OK; `pnpm lint` clean (one pre-existing unrelated warning in doctor-portal); `pnpm typecheck` green. Did not run test:unit/e2e/build per CLAUDE.md (controller runs full gates). UI design self-check by inspection: tenant-branded, EN+UR, light+dark, responsive, tokens-only.

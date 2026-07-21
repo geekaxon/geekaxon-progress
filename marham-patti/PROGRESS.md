@@ -6,14 +6,14 @@
 
 ## Current Status
 - **Project:** Marham Patti — multi-tenant white-label healthcare platform (Ganatra go-live pending).
-- **Phase:** 1–97 ✅ (vendor console, under owner testing). Now **PHASE 12 (98–112)** — the Pharmacy module: first tenant operational module (standalone retail POS + inventory + purchase + customers + returns + day-close). CODEREF 98-112.
-- **Last completed:** **98 — pharmacy-data-models-and-migrations**.
-- **Next:** **99 — pharmacy-settings-and-configuration** — /specs/99-pharmacy-settings-and-configuration.md.
+- **Phase:** 1–97 ✅ (vendor console). Now **PHASE 12 (98–112)** — the Pharmacy module (standalone retail POS + inventory + purchase + customers + returns + day-close). CODEREF 98-112.
+- **Last completed:** **99 — pharmacy-settings-and-configuration**.
+- **Next:** **100 — module-aware-app-shell-and-counter-selection** — /specs/100-module-aware-app-shell-and-counter-selection.md.
 - **Branches:** through feature/97 on staging. Pharmacy on feature/98…112.
 
 ### Recent steps
+- **99 — pharmacy-settings-and-configuration** — DONE (2026-07-21) — resolver + admin-gated settings screen for tax, credit, prescriptions, counters, restocking fee, with zero-config defaults.
 - **98 — pharmacy-data-models-and-migrations** — DONE (2026-07-21) — additive retail schema: customers+credit, returns, counters, day-close, settings — all tenant-scoped under RLS.
-- **97 — vendor-ui-fixes-round-3** — DONE — tenant logo/branding fixes, palette colours, dark breadcrumbs, vendor PWA icon, blended AI rate, plain-English AI task copy.
-- **96 — host-aware-routing-and-tenant-branding** — DONE — host×path routing matrix, tenant branding on tenant surfaces, relative API base URL.
+- **97 — vendor-ui-fixes-round-3** — DONE — tenant logo/branding fixes, palette colours, vendor PWA icon, blended AI rate, plain-English AI copy.
 
 > Older steps: PROGRESS-HISTORY.md.
