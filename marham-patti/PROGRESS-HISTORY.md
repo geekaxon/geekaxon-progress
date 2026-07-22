@@ -3790,3 +3790,25 @@ headline stats, search + supplier/status filters), the new-purchase entry (suppl
 `pnpm typecheck` — green (29/29). `pnpm lint` — green (fixed 3 hardcoded-string + 1 design-drift
 `mp-card` findings; remaining warning is pre-existing in doctor-portal, unrelated). test:unit /
 e2e / build left for the controller per AGENT rules.
+
+## 106 — suppliers-list-and-ledger — DONE (2026-07-22)
+
+**Branch:** feature/106-suppliers-list-and-ledger. **Work type:** FEATURE.
+
+Built the pharmacy supplier desk on top of 105's purchase records (PurchaseOrder + PurchaseItem + SupplierPayment), extending the existing pharmacy module rather than forking (CODEREF §B). New web route `/pharmacy/suppliers` (page + SuppliersClient), nav item `navPharmacySuppliers` under the pharmacy group (flag `pharmacy.pos`, perm `pharmacy.sell`).
+
+**Schema decision (deviation recorded):** the spec header said "Schema: none", but §2.4 + Acceptance §4 require persisting contact person, address and notes — columns the Supplier table lacked (CODEREF §B lists only name/phone/terms/openingBalance/active). Added three NULLABLE columns `contact_person` / `address` / `notes` via migration `20260722010000_supplier_contact_fields`. Additive DDL only, no DELETE/backfill, so the RLS-bypass rule (CODEREF §D) does not apply; the existing forced-RLS policy on `suppliers` carries over. Ran `pnpm prisma generate`.
+
+**Shared (`packages/shared/src/pharmacy-purchase.ts`):** added pure, deterministic helpers `buildSupplierLedger` (opening + purchases as debits − payments as credits → running balance, sorted oldest-first, opening/purchase/payment tie-break), `supplierSummary` (lifetime trade, outstanding = opening + trade − paid, last activity dates) and `supplierListStats` (total outstanding of positive balances, paid-this-month, due-this-week via the existing `purchaseStats`). Reconciles to the paisa with 105.
+
+**API (pharmacy module):** Supplier repo row/DTO/service/fakes widened with contactPerson/address/notes/openingBalance/createdAt; added `updateSupplier`, `listSupplierPayments`, optional `paidAt` on supplier payments. Service methods `listSupplierSummaries`, `supplierLedger`, `updateSupplier`, `recordSupplierPayment`. Controller routes under `pharmacy/purchase`: `GET suppliers/summary`, `GET suppliers/:id`, `GET suppliers/:id/ledger` (read = pharmacy.sell); `POST suppliers/:id` (edit), `POST suppliers/:id/payments` (record payment) role-locked to `pharmacy.stock.adjust` and `@Audited`. Literal `suppliers/summary` declared before `suppliers/:id`.
+
+**Web:** SuppliersClient — StatGrid (outstanding/paid-month/due-week), search + owed/settled filter + sort outstanding-first, desktop table + mobile cards with owed highlighted (`mp-pinv-low` / danger pill), a supplier Drawer with contact details + running-ledger table + inline record-payment (with a "Full" shortcut filling the outstanding, method, date, reference) + Edit, and an add/edit Drawer (name*, contact, phone*, address, terms, opening balance, notes, active switch). Reuses `mp-ppur-*`/`mp-pinv-*` atoms; added `.mp-ppur-detail-meta` + `.mp-psup-head` (tokens only). Money is `Rs …`, whitelabel-safe (no hardcoded identity).
+
+**i18n:** EN+UR `psup*` block + `navPharmacySuppliers` (parity kept).
+
+**Tests:** `apps/api/src/pharmacy/supplier-ledger.spec.ts` — pure ledger/summary/stats math + service (create persists all fields, opening seeds ledger, ledger reconciles with a recorded purchase, record-payment writes a SupplierPayment + reduces balance + shows in ledger, list stats + outstanding-first sort + owed highlight, partial edit, 404s). Also seeded fake `createSupplierPayment`/`createSupplier` for the new fields + paidAt.
+
+**Gates:** `pnpm typecheck` green; `pnpm lint` green (only a pre-existing doctor-portal warning). Did not run test:unit/e2e/build per standing rules — controller runs full gates.
+
+**Notes for 108:** purchase-return credits should ride into the ledger as payment-shaped credits (the ledger already treats any SupplierPayment as a credit); wire the return credit note through `createSupplierPayment` or an equivalent credit movement so `buildSupplierLedger` picks it up without change.
