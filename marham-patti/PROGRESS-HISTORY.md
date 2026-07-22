@@ -3908,3 +3908,24 @@ in doctor-portal). i18n EN/UR parity ✓, both catalogs valid JSON. Did not run 
 by inspection against `specs/mockups/pharmacy/reports-dayclose.*`.
 
 **WORK TYPE: FEATURE (branch feature/109-reports)**
+
+## 110 — day-close-and-cashier-reconciliation — DONE (2026-07-22)
+Branch: feature/110-day-close-and-cashier-reconciliation. WORK TYPE: FEATURE. Schema: none (reuses spec-98 models DayClose/CashCount/Counter/PharmacySettings — all pre-provisioned + RLS).
+
+### Decisions
+- **Per-counter attribution via accrual (settled).** `Sale`/`SaleReturn` carry no `counterId` and no per-tender split (schema frozen to 98), yet acceptance §4 requires multi-counter closes that SUM in a consolidated view — impossible from Sale rows alone. So each sale/refund accrues its real tender split (cash / card+online / credit) and cash refunds onto its counter's OPEN `DayClose` row at commit time. The day total (cash+card+credit) == the sale total, so day-close reconciles with reports (109) on totals; the cash/card split is now REAL (109 still folds card into cash — left untouched, its card=0 is documented and totals still match). Invoice/refund COUNTS are read-time branch-day figures (exact for single-counter Ganatra; branch-level under multi-counter — documented limitation of the frozen schema).
+- **Lock is enforced at the write path.** `commitPosSale`, cart `finalize`, and `createSaleReturn` resolve the counter (requested `x-counter-id`, else the branch's auto-provisioned "Counter 1"), assert the counter's business day is not CLOSED before posting, and accrue after. A CLOSED day rejects new sales/refunds (REOPENED accepts them). Accrual sits inside the idempotency callback so a replayed offline sale never double-accrues.
+- **Reopen window** = 12h (`REOPEN_WINDOW_HOURS`), pure `canReopenDayClose`; reopen is a supervisor action (`pharmacy.stock.adjust`), `@Audited`. Close/count are `pharmacy.cashier`.
+- **Business day** = UTC-midnight of the sale instant; `(tenantId, counterId, businessDate)` is unique (one close per till per day, from the 98 schema).
+- Money math is pure in `@mp/shared` (reuses billing's `denominationTotal`/`shiftExpectedCash`/`shiftVariance`); expected cash = float + cash sales − cash refunds; over/short = counted − expected → BALANCED/OVER/SHORT (green/amber/red).
+
+### Files
+- `packages/shared/src/pharmacy-dayclose.ts` (new) + index export — PKR denomination ladder, expected-cash, denomination sum, variance + state/tone, reopen-window check, `buildZReport` (thermal+A4 model, tenant-branded).
+- `apps/api/src/pharmacy/pharmacy.repositories.ts` — DayCounter/DayClose/CashCount rows + abstract methods + Prisma impl (counters, findDayClose/ById, listDayCloses/ForDate, listCashCounts, accrueDayClose, writeReconciliation, reopenDayClose) wrapped in runWithTenant; `__fakes__.ts` mirrors them.
+- `apps/api/src/pharmacy/pharmacy.service.ts` — day-close view types + `dayCloseCurrent`/`recordDayCount`/`closeDay`/`reopenDay`/`zReportView` + private helpers (businessDateOf, resolveDayCounter, assertCounterPostable, dayStats, buildDayCloseView, buildConsolidated, ensureOpenDayClose, buildZReportView); accrual+lock hooks in commitPosSale, finalize, createSaleReturn.
+- `apps/api/src/pharmacy/pharmacy.dto.ts` — `parseDayCloseReconcile`; `pharmacy.controller.ts` — `PharmacyDayCloseController` (GET current, POST count, POST close, POST :id/reopen, GET :id/z-report) reading `x-counter-id`; registered in `pharmacy.module.ts`.
+- `apps/web/app/(app)/pharmacy/day-close/{page.tsx,DayCloseClient.tsx,ZReport.tsx}` (new) — reconcile screen (summary tiles, denomination counter with coins grouped, live over/short chip, sticky close bar, recent list, consolidated table, multi-counter picker) + Z-report overlay (58/80mm thermal + A4, branded from `report.branding`). `globals.css` `mp-pdcl-*` block (tokens only). `nav.ts` day-close item (pharmacy.cashier). i18n: 56 `pdcl*` keys + `navPharmacyDayClose`, EN+UR parity.
+- Tests: `apps/api/src/pharmacy/dayclose.spec.ts` — pure math (denomination sum, expected cash, balanced/short/over states, reopen window, Z-report whitelabel) + service (split reconciles with sales, close snapshots + LOCKS, short-drawer flag, reopen within/past window, cash-refund shrinks expected, multi-counter independent close + consolidated sum, tenant isolation).
+
+### Gates
+- `pnpm typecheck` — 29/29 PASS. `pnpm lint` — 16/16 PASS. (test:unit/e2e left to the controller per AGENT rules.) UI self-check by inspection against specs/mockups/pharmacy/reports-dayclose.* — layout, green/amber/red over/short, thermal+A4 Z-report, light/dark, EN+UR.
