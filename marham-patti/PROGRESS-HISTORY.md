@@ -3586,3 +3586,26 @@ WORK TYPE: FEATURE (branch feature/98-pharmacy-data-models-and-migrations)
 
 ## 10 — offline-core — RE-ISSUED, VERIFIED ALREADY COMPLETE (2026-07-21) — NO-OP
 Controller re-issued foundation step 10 (offline-core) while the project is at step 100 (phases 1–97 + pharmacy 98–99 done). Verified the module is fully present and satisfies every spec acceptance criterion: `SyncIdempotency` model (clientActionId @unique) in packages/db/prisma/schema.prisma; NestJS sync module apps/api/src/sync/ (controller with GET /sync/changes?since, GET /sync/conflicts, POST /sync/demo/upsert w/ Idempotency-Key, POST /sync/demo/stock compensating-write); client offline core packages/offline/src (enqueue, requiresNetwork) + apps/web/lib/offline.tsx / offline-db.ts (IndexedDB, useSyncStatus) + offline-indicator.tsx; admin demo apps/web/app/(app)/admin/sync/. Tests exist: sync.e2e.spec.ts, offline.spec.ts. Per CLAUDE.md "a completed step is NEVER rebuilt" — no code changed, no branch created, no gates run. Skipped as a no-op.
+
+## 100 — Module-Aware App Shell & Counter Selection — DONE (2026-07-22)
+**Branch:** feature/100-module-aware-app-shell-and-counter-selection · **WORK TYPE: FEATURE** · Schema: none · RLS ➖ (shell/presentation only; all data stays tenant-scoped downstream).
+
+**Problem.** Staff use one PWA whose modules follow the tenant's package, and a multi-counter pharmacy needs each staff member bound to a till at shift start (spec 100 §2).
+
+**Change.**
+- *Module-awareness* was already delivered by the flag-first nav registry (spec 40, `apps/web/lib/nav.ts` + `visibleNav`): a standalone-pharmacy tenant (pharmacy.* flags, no clinic/lab flags) already renders only the Pharmacy group and hides Lab/Clinic and clinic-only tabs; a full-clinic tenant (all flags) shows all groups; `NAV_GROUPS` already carries empty-until-enabled `lab`/`clinic` slots. So this step did NOT add dead nav links to the not-yet-built pharmacy sub-routes (suppliers/customers/returns/reports/day-close) — those routes and their nav entries land with their own steps (101–112), keeping the repo's "no orphan routes/nav" rule intact.
+- *Counter/till selection* (the new work):
+  - `packages/ui/src/components/counter-select.tsx` — pure `resolveCounter(multiCounter, counters, selectedId)` decision (off / auto / active / prompt) + presentational `CounterOptionList`; exported from the `@mp/ui` barrel. Unit-tested in `counter-select.spec.tsx` (matrix incl. stale-selection re-prompt + option render/onPick).
+  - `apps/web/lib/counter.ts` — session-scoped `mp.pharmacy.counter` stash (read/store/clear + `activeCounterId`), separate from `mp.auth`.
+  - `apps/web/lib/api.ts` — attaches `x-counter-id` on every authed call so a sale/receipt/day-close binds to the till server-side (specs 101/108/110).
+  - `apps/web/components/shell/CounterControl.tsx` — reads `GET /pharmacy/settings` (99), reconciles persistence, shows the active-counter chip with a Switch (confirm → picker), forces a required pick when 2+ tills and none chosen, auto-binds a lone counter, and no-ops when multi-counter is off or the Pharmacy module isn't enabled. Wired into the shell top bar; cleared on logout.
+  - `apps/web/app/globals.css` — `.mp-counter-badge` chip (tokens only, light/dark, responsive).
+  - i18n: 8 new keys EN+UR parity (counterSelect*/counterSwitch*/counterBadgeLabel/counterListLabel/counterCancel).
+
+**Judgement calls (decide + record, no escalation):**
+1. *No dead pharmacy sub-nav now.* The spec's full Pharmacy group list (Overview…Day close) enumerates the eventual module; wiring links to routes that 404 today would break the vertical-smoke/no-orphan rule and have no page test. Each future step adds its own route + nav entry additively. Shell stays "ready" because the registry is a single additive list.
+2. *Binding via `x-counter-id` header.* Chosen as the seam so downstream write steps read the counter uniformly without threading it through every call site; harmless/forward-compatible before those servers exist. Persisted in localStorage (survives reload within the session) and cleared on logout.
+3. *Auto-select a single active counter even when multiCounter is on* (CODEREF §C.7 "single-counter branch auto-selects counter 1") — only prompt when 2+ active tills exist and none is chosen, so a one-till store is never nagged.
+4. *Staff name in the chip* ("Counter 2 · Imran" in the mockup) omitted — `GET /auth/me`/SessionContext carries no display name; showing a fabricated/blank name would be worse than the counter name alone. Chip shows the counter name honestly; name can be added when the session exposes it.
+
+**Flags:** Pharmacy surface gated on `pharmacy.pos` (the counter control renders only when enabled and only reads the flag-gated settings endpoint). No new flags. **i18n:** +8 keys EN+UR. **Gates:** `pnpm typecheck` + `pnpm lint` green locally; unit tests written in `@mp/ui` (controller runs the suites).

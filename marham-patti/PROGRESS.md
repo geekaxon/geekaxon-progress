@@ -7,13 +7,13 @@
 ## Current Status
 - **Project:** Marham Patti — multi-tenant white-label healthcare platform (Ganatra go-live pending).
 - **Phase:** 1–97 ✅ (vendor console). Now **PHASE 12 (98–112)** — the Pharmacy module (standalone retail POS + inventory + purchase + customers + returns + day-close). CODEREF 98-112.
-- **Last completed:** **99 — pharmacy-settings-and-configuration**.
-- **Next:** **100 — module-aware-app-shell-and-counter-selection** — /specs/100-module-aware-app-shell-and-counter-selection.md.
+- **Last completed:** **100 — module-aware-app-shell-and-counter-selection**.
+- **Next:** **101 — pos-cart-and-checkout** — /specs/101-pos-cart-and-checkout.md.
 - **Branches:** through feature/97 on staging. Pharmacy on feature/98…112.
 
 ### Recent steps
+- **100 — module-aware-app-shell-and-counter-selection** — DONE (2026-07-22) — counter/till picker bound to the session, shown in shell, carried downstream; nav stays module-aware by flags.
 - **99 — pharmacy-settings-and-configuration** — DONE (2026-07-21) — resolver + admin-gated settings screen for tax, credit, prescriptions, counters, restocking fee, with zero-config defaults.
 - **98 — pharmacy-data-models-and-migrations** — DONE (2026-07-21) — additive retail schema: customers+credit, returns, counters, day-close, settings — all tenant-scoped under RLS.
-- **97 — vendor-ui-fixes-round-3** — DONE — tenant logo/branding fixes, palette colours, vendor PWA icon, blended AI rate, plain-English AI copy.
 
 > Older steps: PROGRESS-HISTORY.md.
