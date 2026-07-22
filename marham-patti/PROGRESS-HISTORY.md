@@ -3976,3 +3976,33 @@ settings; POS wires the unambiguous subset (inc/dec act on the first cart line).
 warning in doctor-portal). No schema change (KeyboardShortcut predates 111), so no migration /
 prisma generate. UI design self-check by inspection (no browser here): tokens only, @mp/ui
 components, light/dark + RTL via shared kit; screenshots are the controller's gate step.
+
+## 112 — realtime-notifications — DONE (2026-07-22)
+
+**Work type:** FEATURE (branch feature/112-realtime-notifications). PHASE 12 item 15 — the LAST authored step in the current build order.
+
+**Goal:** wire realtime delivery of pharmacy events (low-stock, batch-expiry, prescription-ready, sale-synced/failed, supplier-payment-due, credit-over-limit) into the staff app — live (SSE), in-app (notification centre + toasts), and PWA push — strictly tenant-scoped with role/actor routing. Additive to the existing `notifications` engine (spec 09 outbound WA/SMS/email + delivery logs), which is a different concern and was NOT forked.
+
+**Decisions**
+- Realtime is a genuinely distinct concern from the outbound engine, but per spec §4 (extend, don't fork) it lives INSIDE the `notifications` module as sibling files, not a new module.
+- Pure routing lives in `@mp/shared/pharmacy-notifications.ts` (kind catalog → severity + i18n keys + role routing + `tenantChannel` + `isRecipient`), shared verbatim by the API fan-out/SSE-filter and the web bell so who-sees-what can never drift. Kinds/severities mirror the new Prisma enums byte-for-byte.
+- Tenant isolation is STRUCTURAL: the pub/sub channel key is derived only from tenantId; a subscriber cannot name another tenant's channel. Role/actor routing is a second filter via the shared `isRecipient` predicate, used identically by the fan-out and the stream.
+- Bus is a pluggable seam (`RealtimeBus`): in-memory RxJS default (sufficient for Ganatra's single instance); a Redis pub/sub adapter binds to the same DI token for multi-instance fan-out with no service change.
+- Push is a pluggable port (`PushSender`): no-op default that degrades gracefully (in-app SSE still works); a VAPID/web-push sender binds to `PUSH_SENDER` once keys are provisioned (infra, not code — consistent with SMTP/gateway being out of scope, CODEREF §G). No new npm deps added.
+- Notification centre model: `Notification` (the raised event + routing) + `NotificationReceipt` (per-user delivery + read state, fanned out at raise) so a role broadcast is unread independently per pharmacist and mark-read is per-user. `PushSubscription` stores endpoints. All tenantId-scoped under canonical apply_tenant_rls (migration 20260722030000, additive DDL only — no DML on RLS tables, so the 61/90 RLS-bypass rule does not apply).
+- Source wiring: `RealtimeService` is exported and injected `@Optional()` (fail-soft, guarded) into the 104 inventory service — low-stock fires on a reducing adjustment that lands in the low band (the crossing event, not a poll); batch-expiry fires when a received batch is already in the near-expiry band. The other five kinds have typed emitters ready on `RealtimeService` for their sources (sale-sync from the client offline-reconcile seam 102; supplier/credit from 106/107); the subsystem raises/routes/delivers them identically. Every emit is `void ...?.emit()` so a notification failure never breaks a stock/sale write (do-not-break: offline/sync correctness).
+- Web: `NotificationBell` in the app-shell top bar (unread badge + dropdown centre, mark-one/all-read), an SSE client hook consuming the stream via `apiFetch` + ReadableStream (Bearer auth; native EventSource can't send it) with bounded-backoff reconnect, a toast per live event (severity→variant), and best-effort push registration (VAPID key via `NEXT_PUBLIC_VAPID_PUBLIC_KEY`). Added `ToastProvider` to the (app) layout so the imperative toast bridge is mounted app-wide. Service worker gained `push` + `notificationclick` handlers. EN+UR i18n parity (10 new keys each), tokens-only CSS (`.mp-notif-*`), light/dark, RTL-safe.
+
+**Files**
+- `packages/shared/src/pharmacy-notifications.ts` (+ index export) — pure catalog/routing/channel/predicate.
+- `packages/db/prisma/schema.prisma` — enums NotificationKind/NotificationSeverity; models Notification, NotificationReceipt, PushSubscription. Migration `20260722030000_realtime_notifications`.
+- `apps/api/src/notifications/`: notifications.realtime.constants.ts, .bus.ts, .push.ts, .realtime.repositories.ts, .realtime.service.ts, .realtime.dto.ts, .realtime.controller.ts, .realtime.spec.ts; module + index wired.
+- `apps/api/src/pharmacy-inventory/`: service (emit low-stock/expiry) + module (import NotificationsModule).
+- `apps/web/`: lib/notifications.ts, components/shell/NotificationBell.tsx (+ AppShell mount), app/(app)/layout.tsx (ToastProvider), public/sw.js (push handlers), app/globals.css (.mp-notif-*), packages/i18n en/ur.
+
+**Endpoints (all ride global JwtAuthGuard; personal — no @RequirePermission):**
+`GET /notifications/realtime/stream` (SSE), `GET .../center`, `GET .../unread-count`, `POST .../center/:id/read`, `POST .../center/read-all`, `POST .../push/subscribe`, `DELETE .../push`.
+
+**Verification:** `pnpm prisma generate` OK; `pnpm typecheck` green; `pnpm lint` green (0 errors; the lone warning is a pre-existing unused eslint-disable in doctor-portal, not this step). New unit spec `notifications.realtime.spec.ts` covers pure routing, role fan-out + live delivery, actor-only targeting, cross-tenant isolation, unread/mark-read/mark-all, and push subscribe/unsubscribe. `pnpm test:unit`/`build` left to the controller per AGENT.
+
+**END OF THE PHARMACY BLOCK.** No spec beyond 112 exists. PROGRESS.md "Next" set to the stop instruction; a further build-step request must end with [HUMAN_REQUIRED].
