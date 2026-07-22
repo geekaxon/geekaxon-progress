@@ -3634,3 +3634,57 @@ Controller re-issued foundation step 10 (offline-core) while the project is at s
 **Gates:** `pnpm typecheck` — 29/29 pass. `pnpm lint` — pass (fixed one hardcoded-text lint by replacing a literal "Rx" badge with an AlertTriangle icon; remaining is a pre-existing unrelated warning in doctor-portal). Did not run test:unit/test:e2e/build per standing rules (controller runs full gates). Schema unchanged → no prisma generate. UI self-check by inspection: tokens-only (no hex), shared kit components (Card/Badge/Button/Input/EmptyState/SkeletonCard), responsive flex-wrap + sticky total bar, RTL via shell dir, EN+UR parity. Screenshots (light/dark, desktop/mobile) deferred to the browser CI harness (no browser in this session; build/e2e are controller-run).
 
 **Files:** packages/shared/src/pharmacy-pos.ts (new), packages/shared/src/index.ts, apps/api/src/pharmacy/pos-helpers.spec.ts (new), apps/api/src/pharmacy/pharmacy.repositories.ts, apps/api/src/pharmacy/pharmacy.service.ts, apps/api/src/pharmacy/pharmacy.controller.ts, apps/api/src/pharmacy/__fakes__.ts, apps/web/app/(app)/pharmacy/pos/page.tsx (new), apps/web/app/(app)/pharmacy/pos/PosClient.tsx (new), apps/web/lib/nav.ts, packages/i18n/src/messages/{en,ur}.json.
+
+## 102 — pos-payment-receipt-and-stock-decrement — DONE (2026-07-22)
+
+**Branch:** feature/102-pos-payment-receipt-and-stock-decrement (FEATURE). Schema: none (uses 98).
+
+**What shipped.** The POS checkout that actually moves money + stock, on top of 101's cart.
+
+- Pure shared logic — `packages/shared/src/pharmacy-payment.ts` (exported from index):
+  - `splitPaymentSummary` — settle with one/several tenders (cash tender→exact change, card,
+    credit, split); reports applied, change, shortfall, settled, per-method breakdown + creditAmount.
+  - `paymentPolicyError` — settings-allowed methods (CREDIT only when creditEnabled), credit needs a
+    registered customer (walk-in blocked), tenders settle exactly (change only from cash over-tender).
+  - `checkCreditLimit` — projects balance, flags over-limit (warn, never a block; 0 limit = no headroom).
+  - `rxRequirement` / `rxConfirmationError` / `rxConfirmationLog` — 99 rxHandling off/warn/warn+attach:
+    confirm required (+reference under WARN_ATTACH), never a hard block (CODEREF §C.4); audit payload.
+  - `buildThermalReceipt` + `ReceiptBranding` — tenant-branded 58/80mm receipt MODEL, no hardcoded id.
+- API — extended the pharmacy module (no new module, additive per §B):
+  - `PharmacyService.commitPosSale` — re-resolves price/tax/requiresRx from the medicine master
+    (never trusts client numbers), totals with 101's shared math, enforces rx + payment policy,
+    then commits under `sync.runIdempotent(clientActionId)`: FEFO allocate → fail-clean guard so
+    stock never goes negative (batch shortfall / aggregate on-hand) → createSale + compensating
+    stock/batch decrement + logged SALE movements (reusing the finalize seam). Returns sale +
+    PaymentSummary + credit flag + rx log + tenant-branded receipt + `replayed`.
+  - `posReceipt` — reprint from the stored sale (branding + items + total; method split not persisted).
+  - New `PharmacyPosController` at `pharmacy/pos` (flag pharmacy.pos + perm pharmacy.sell):
+    `GET medicines/:id/batches`, `POST sales` (Idempotency-Key required, @Audited), `GET sales/:id/receipt`.
+  - `parseCommitPosSale` DTO; injected `PharmacySettingsService` (imported PharmacySettingsModule).
+- Web — `/pharmacy/pos`: new `PaymentPanel` (methods incl. split, cash change, credit + limit flag,
+  rx confirm/attach; Pay disabled on the same rule the server rejects on) and `ThermalReceipt`
+  (58/80mm, tenant letterhead, print via scoped @media print, width reprint). Wired PosClient's Pay
+  button → payment phase → commit (stable idempotency key reused on retry) → receipt phase → new sale.
+- i18n — EN+UR parity for pharmacyPos.method/rxConfirm/payment/receipt.
+
+**Tests.** `pos-payment.spec.ts` (pure: split/change exact, policy incl. credit gating, credit-limit
+flag, rx off/warn/warn+attach, whitelabel receipt no hardcoded id). `pos-checkout.spec.ts` (service
+over fakes + faithful idempotency seam: FEFO decrement soonest-first, replay = one sale/one decrement,
+never-negative concurrent-consumption fail, credit gate end-to-end, rx block→confirm, receipt branding
++ reprint).
+
+**Gates.** pnpm typecheck ✅, pnpm lint ✅ (fixed: web Button variant `primary`, i18n for mm label,
+@mp/ui Checkbox over raw input). Did NOT run test:unit/e2e/build per standing rules.
+
+**Decisions / boundaries.**
+- Schema frozen to 98 (spec says "Schema: none"): Sale has no payment-method / counter / rx columns.
+  The payment split, change, rx confirmation, counter + walk-in customer are computed at commit and
+  carried on the returned receipt + preserved across replay via the idempotency store — NOT persisted
+  as Sale columns. Day-close (110) needs the precise method split (Do-NOT-break): it will either add
+  the persistence or read the idempotency payload; flagged for 110, not blocked here.
+- Registered-customer credit ledger is 106/107 (not built): credit is gated (enabled + a named
+  customer) and the pure limit check + server flag are in place; full ledger settlement lands in 106/107.
+- Concurrency: the never-negative guard is check-then-decrement (fails cleanly when a lot is already
+  drained at check time — the tested case). True DB-level row-lock atomicity is out of scope here.
+- Screenshots (Acceptance §7): design self-check by inspection against clinic-staff-components mockup
+  (payment panel + thermal 58/80mm); browser capture pending visual QA.
