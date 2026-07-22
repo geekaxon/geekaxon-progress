@@ -3688,3 +3688,23 @@ never-negative concurrent-consumption fail, credit gate end-to-end, rx block→c
   drained at check time — the tested case). True DB-level row-lock atomicity is out of scope here.
 - Screenshots (Acceptance §7): design self-check by inspection against clinic-staff-components mockup
   (payment panel + thermal 58/80mm); browser capture pending visual QA.
+
+## 103 — inventory-list-and-medicine-detail — DONE (2026-07-22)
+
+**Branch:** feature/103-inventory-list-and-medicine-detail. **Work type:** FEATURE. Schema: none (uses 98 Medicine extensions + Batch/StockMovement/Stock) — no migration, no prisma generate.
+
+**What shipped (the pharmacist's stock command centre, spec 103):**
+- **Shared (`packages/shared/src/pharmacy-inventory.ts`):** pure `belowMinStock(qty, minStock)` (null minStock → never low, matches schema) and `inventoryStats(rows)` rolling the four stat-strip counts (total / low-stock / expiring ≤90d / out-of-stock; out-of-stock is NOT double-counted as low). Unit-tested in `apps/api/src/pharmacy/pharmacy-inventory-helpers.spec.ts`.
+- **API (pharmacy module, extended — not forked):**
+  - `MedicineRow`/`NewMedicine`/`MEDICINE_SELECT`/`toMedicine` now carry `minStock`, `shelfLocation`, `active` (taxRate/requiresRx already present). New repo reads: `listMedicines`, `getAllStock`, `listBatchExpiries`, `listMedicineBatches`, `listMovements` (+ `MovementRow`/`MedicineBatchRow` types); Fake repo + `seedBatch(extra)` updated.
+  - DTO: `parseCreateMedicine`/`parseUpdateMedicine` extended to validate+persist `taxRate` (0–100%), `minStock` (int≥0), `shelfLocation`, `requiresRx`, `active`.
+  - Service: `inventoryList()` → `{ branchId, nearExpiryDays, stats, rows }` (per-medicine qty, lowStock vs its own minStock, outOfStock, nearestExpiry + band); `medicineDetail()` → all fields + FEFO-sorted batch list (band-coded) + below-min/expiring/expired/out banner + 50-row movement history. FEFO ordering matches POS (expiry asc).
+  - Controller: `GET /pharmacy/medicines/inventory` (declared before `:id/...`), `GET /pharmacy/medicines/:id/detail`; `parseMedicineQuery` also reads `branchId`. Gated by existing `pharmacy.pos` flag + `pharmacy.sell` permission (same as medicine CRUD) → absent for Lab/Clinic-only verticals, tenant-scoped by RLS.
+  - e2e: full-record create persists all fields; list stat strip + low/near-expiry/out signals; detail FEFO order + banner + history; cross-tenant isolation.
+- **Web (`apps/web/app/(app)/pharmacy/inventory/`):** new server page + `PharmacyInventoryClient` (tr/lang island). Stat strip (StatCard/StatGrid), sticky search/scan bar that the header collapses to on scroll (mobile, CSS + scrollY listener), category/low/expiring/out filters + sort, **desktop table / mobile cards** with low-stock (amber) + expiry (StatusPill amber/red) signals, right **Drawer** detail (facts grid, warning banner, FEFO batches, movement history, Edit), and add/edit **Drawer** form with sticky submit persisting every field incl. taxRate/minStock/requiresRx/shelfLocation/active. Nav entry `/pharmacy/inventory` added to `apps/web/lib/nav.ts`. Scoped `.mp-pinv-*` CSS in globals.css (tokens only, light+dark, RTL logical props). 70 new i18n keys added to en+ur (parity 1678/1678).
+
+**Decision — "category":** spec §2.3 lists a distinct "category" field but the header says *Schema: none* and Medicine (98) has no category column; acceptance §3's persist list omits it. So the **Category filter is driven by the `form` (dosage-form) field** — the store's categorical axis under the frozen schema — and the form keeps a single `form` field. No schema change. Revisit if a real category column is ever added.
+
+**Not touched:** POS medicine search still returns all (active filter for POS is a 98/101 concern, left as-is to avoid breaking 101). Existing `/inventory` (spec 28 batch/recon/valuation ops) is a separate screen, untouched.
+
+**Gates:** `pnpm typecheck` green; `pnpm lint` green (only a pre-existing unrelated unused-eslint-disable warning in doctor-portal). Did not run test:unit/e2e/build (controller runs full gates). i18n parity gate green.
