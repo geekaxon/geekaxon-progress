@@ -3858,3 +3858,53 @@ Rather than branch the shared ledger builders, credit-note settlements flow thro
 `pnpm db:generate` OK. `pnpm typecheck` — 29/29 tasks pass. `pnpm lint` — 0 errors (1 pre-existing unrelated warning in doctor-portal.repositories.ts). Did NOT run test:unit/e2e/build (controller runs full gates). Design self-check by inspection: reused mp-ppur*/mp-pinv*/StatCard/StatGrid/Drawer/StatusPill; tokens only (inline print styles use var(--mp-*, fallback) exactly like the existing ThermalReceipt.tsx); light+dark via tokens; EN+UR parity; responsive table wrap (matches the purchase screen).
 
 WORK TYPE: FEATURE (branch feature/108-returns-sale-and-purchase)
+
+## 109 — reports — DONE (2026-07-22)  [feature/109-reports]
+
+**What:** Pharmacy → Reports (spec 109). A read-only insight hub: ONE date-range control
+(today / this week / this month / custom) drives six report sections, each reconciling to the
+paisa with the source records — sales summary + smooth gradient trend, profit (revenue − COGS)
++ trend, stock value (cost + retail) with top-moving mini bars, expiry buckets (30/60/90 +
+value at risk), supplier ledger summary (total owed / due this week / top creditors), and
+best-sellers ranked by quantity AND revenue. Whitelabel A4 print via a resolved tenant
+letterhead (§C.2, no hardcoded identity).
+
+**Design decisions:**
+- **Pure reconciling math** in `packages/shared/src/pharmacy-reports.ts` (browser-safe, no node
+  imports): `resolveReportRange` (UTC half-open `[from,to)`; week = rolling 7 days, month =
+  calendar month), `isInRange`, `rangeDays`, `salesSummary`/`salesTrend`, `profitReport`/
+  `profitTrend`, `stockReport`, `expiryReport`, `supplierLedgerSummary`, `topSelling`. Reuses
+  existing helpers (`round2`, `lineProfit`, `profitMargin`, `valuation`, `expiryBucket`,
+  `valueAtRisk`, `belowMinStock`) so figures agree with 103/104/106/107/108. Exported from the
+  shared barrel.
+- **Payment split:** only `Sale.creditAmount` is persisted, so `credit` is exact and `cash`
+  absorbs the immediate (non-credit) remainder; `card` stays 0 with a code note until the
+  day-close till model (110) persists per-tender totals. `cash + card + credit == totalSales`.
+- **Profit** is discount-exclusive line revenue (unitPrice×qty) − cost×qty, matching the existing
+  per-sale profit view (§6); `grossProfit == revenue − cogs` holds by construction.
+- **Expiry** buckets via the SAME `expiryBucket`/`valueAtRisk` as 104's near-expiry, so
+  `reports.expiry.totalValueAtRisk == nearExpiry(within=90).totalValueAtRisk` (proven in tests).
+- **API:** `PharmacyService.reports(tenantId, range, from, to)` assembles all sections + the
+  resolved letterhead (`brand.resolveFor`). New `PharmacyReportsController` at `GET
+  /pharmacy/reports` gated `pharmacy.pos` + `pharmacy.sell` (read-only; owner + pharmacist both
+  hold it), tenant-scoped by RLS. New `parseReportsQuery` DTO (custom range needs from+to).
+  Registered in `pharmacy.module.ts`. NO schema change (read-only aggregation).
+- **Web:** `apps/web/app/(app)/pharmacy/reports/{page,ReportsClient,ReportsCharts}.tsx`. Server
+  shell renders heading in persisted locale; client island fetches `/pharmacy/reports`. Charts
+  are the established `@mp/ui/chart` `AreaChartCard`/`BarChartCard`, pulled via `next/dynamic`
+  (ssr:false) to keep recharts out of the initial JS budget; theme-token colours (light+dark
+  correct). Date-range control is a sticky responsive segmented group + custom date inputs
+  (adapted the mockup's mobile bottom-sheet to a responsive control; spec wins on behaviour).
+  Whole hub prints A4 via `.mp-prep-doc` + a print-only tenant letterhead. Nav entry
+  `/pharmacy/reports` (icon `spark`). Tokens-only CSS appended to `globals.css` (`.mp-prep-*`).
+- **i18n:** 52 new EN+UR keys (`prep*` + `navPharmacyReports`), parity verified.
+- **Tests:** `apps/api/src/pharmacy/reports.spec.ts` — pure range/fold logic + service
+  reconciliation over the fake repo (sales total == Σ in-range sales; profit == revenue − COGS;
+  expiry == 104 near-expiry; stock counts; custom-range narrowing; branding resolved).
+
+**Gates:** `pnpm typecheck` ✓ (29/29), `pnpm lint` ✓ (0 errors; 1 pre-existing unrelated warning
+in doctor-portal). i18n EN/UR parity ✓, both catalogs valid JSON. Did not run test:unit/e2e/build
+(controller runs full gates). Screenshots deferred (no browser in this session); design self-check
+by inspection against `specs/mockups/pharmacy/reports-dayclose.*`.
+
+**WORK TYPE: FEATURE (branch feature/109-reports)**

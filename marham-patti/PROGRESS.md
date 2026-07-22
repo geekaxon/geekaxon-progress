@@ -7,13 +7,13 @@
 ## Current Status
 - **Project:** Marham Patti — multi-tenant white-label healthcare platform (Ganatra go-live pending).
 - **Phase:** 1–97 ✅ (vendor console). Now **PHASE 12 (98–112)** — the Pharmacy module (standalone retail POS + inventory + purchase + customers + returns + day-close). CODEREF 98-112.
-- **Last completed:** **108 — returns-sale-and-purchase**.
-- **Next:** **109 — reports** — /specs/109-reports.md.
+- **Last completed:** **109 — reports**.
+- **Next:** **110 — day-close-and-cashier-reconciliation** — /specs/110-day-close-and-cashier-reconciliation.md.
 - **Branches:** through feature/97 on staging. Pharmacy on feature/98…112.
 
 ### Recent steps
+- **109 — reports** — DONE (2026-07-22) — one date range drives sales/profit/stock/expiry/supplier/best-seller reports with gradient charts; every figure reconciles with the records; whitelabel A4 print.
 - **108 — returns-sale-and-purchase** — DONE (2026-07-22) — sale returns refund + restock the original batch; purchase returns credit the supplier; idempotent + whitelabel prints.
 - **107 — customers-credit-and-ledger** — DONE (2026-07-22) — credit-gated customer desk with over-limit gauge, ledger reconciling credit sales + payments, record payment, add/edit; wired the 102 customer link.
-- **106 — suppliers-list-and-ledger** — DONE (2026-07-22) — supplier desk with outstanding highlighted + stats, running ledger reconciling purchases + payments, record payment, add/edit.
 
 > Older steps: PROGRESS-HISTORY.md.
