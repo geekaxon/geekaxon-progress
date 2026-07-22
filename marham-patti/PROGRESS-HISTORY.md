@@ -3929,3 +3929,50 @@ Branch: feature/110-day-close-and-cashier-reconciliation. WORK TYPE: FEATURE. Sc
 
 ### Gates
 - `pnpm typecheck` — 29/29 PASS. `pnpm lint` — 16/16 PASS. (test:unit/e2e left to the controller per AGENT rules.) UI self-check by inspection against specs/mockups/pharmacy/reports-dayclose.* — layout, green/amber/red over/short, thermal+A4 Z-report, light/dark, EN+UR.
+
+## 111 — keyboard-shortcuts — DONE (2026-07-22) — feature/111-keyboard-shortcuts
+
+**Scope:** Per-user keyboard shortcuts for the pharmacy POS + navigation (spec 111). System
+defaults ship in code and work with zero setup; each staff member overrides personally. The
+effective map = defaults + this user's overrides, resolved identically on API + browser.
+
+**Shared (packages/shared/src/pharmacy-shortcuts.ts):** the single source of truth. 15
+shortcut-able actions (POS: newSale F1, focusSearch F2, addToCart F3, applyDiscount F4,
+increment/decrement Ctrl+Arrows, holdSale F6, resumeSale F7, takePayment F8, printReceipt F9;
+nav: Alt+I/P/R/D for Inventory/Purchases/Reports/Day-close; ui.help "?"). Conflict-free by
+construction (module-load assertion). Combo grammar: normalizeCombo (canonical modifier order
+Ctrl+Alt+Shift+Meta + key; symbol keys carry their own Shift so "?" stays "?"), comboFromEvent
+(capture), isAllowedShortcutCombo (rejects bare letters/digits and RESERVED_COMBOS like Ctrl+C,
+Ctrl+R, F5…), resolveEffectiveShortcuts (defaults + overrides, corrupt rows fall back to
+default), findShortcutConflict, matchShortcut. Exported from index.ts.
+
+**API (apps/api/src/pharmacy-shortcuts/):** new module registered in app.module. Uses the
+existing `KeyboardShortcut` model (98), `(tenantId, userId, actionKey)` unique. Repo:
+list/set(upsert)/deleteOne/deleteAll, all under runWithTenant + userId scope (RLS + per-user).
+Service: getMap, rebind (404 unknown action, 400 invalid/reserved, 409 conflict — prevented not
+overwritten), resetOne, resetAll. Controller GET/PUT :actionKey/DELETE :actionKey/DELETE, rides
+`pharmacy.pos` flag ONLY (no permission gate — personal map), writes @Audited. Spec:
+pharmacy-shortcuts.service.spec.ts — defaults, rebind/reset round-trip + persist, conflict/
+reserved/bare-key rejection, cross-user AND cross-tenant isolation, and the pure combo grammar.
+
+**Web:** lib/use-shortcuts.tsx — usePharmacyShortcuts(handlers) fetches the effective map, binds
+ONE global keydown listener, yields to text fields (input/textarea/select/contentEditable),
+desktop-only (skips touch-primary via matchMedia hover:none+pointer:coarse), "?" toggles help,
+Esc closes. Wired into pharmacy/pos/PosClient.tsx (replaced the placeholder "/"-focus handler
+the authors left for 111) mapping to the SAME actions the buttons drive (Do-NOT-break — no new
+outcomes, no RBAC bypass). pos/ShortcutsHelp.tsx — the discoverable overlay (Modal, grouped,
+themed key caps via Badge). New route pharmacy/shortcuts (page + KeyboardShortcutsClient) — the
+Settings → Keyboard-shortcuts screen: capture-to-rebind, reset-one, reset-all, conflict/invalid
+messages surfaced from the server. Nav entry navPharmacyShortcuts added (pharmacy.pos +
+pharmacy.sell). i18n: pharmacyShortcuts.* block (action labels nested pos/nav/ui so dot-path
+lookup resolves the dotted action keys) + navPharmacyShortcuts, EN + UR parity.
+
+**Decisions:** conflict handling = PREVENT (409) with a human message, per spec "prevents the
+clash"; explicit reassign left as a documented non-goal. Tenant-wide default map kept a future
+extension (spec §4). increment/decrement/applyDiscount defaults exist in the map + overlay +
+settings; POS wires the unambiguous subset (inc/dec act on the first cart line).
+
+**Gates:** `pnpm typecheck` — 29/29 pass. `pnpm lint` — 0 errors (1 pre-existing unrelated
+warning in doctor-portal). No schema change (KeyboardShortcut predates 111), so no migration /
+prisma generate. UI design self-check by inspection (no browser here): tokens only, @mp/ui
+components, light/dark + RTL via shared kit; screenshots are the controller's gate step.
