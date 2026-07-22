@@ -3501,3 +3501,88 @@ Decision: made NO changes. Did NOT roll PROGRESS.md back from step 95 to step 10
 **Files:** `packages/ui/src/lib/surface-routing.ts` (+ `.spec.ts`, package.json export), `apps/web/lib/surface-routing.ts` (re-export), `apps/web/middleware.ts`, `apps/web/app/not-available/page.tsx`, `apps/web/lib/api.ts`, discover/profile/demo clients, `apps/web/lib/tenant-branding.ts`, `AuthShell.tsx`, `login/page.tsx`, `login/reset/page.tsx` + `ResetForm.tsx`, `invite/page.tsx` + `BrandedInviteScreen.tsx`, `apps/api/src/vendor/vendor-invite-branding.service.ts` + `vendor-auth.controller.ts`, i18n en/ur, `.env.example`.
 
 **Not done / notes:** No-flash on the tenant-branded surfaces requires `API_INTERNAL_URL` set on the web server (SSR reach to the API); unset → platform default + client refine (functional, minor flash). Custom domains are off-base at the edge → classified `public`, but the API resolves them and branding still flows because the host is forwarded — routing never restricts a public host's tenant paths. Screenshots (light+dark) not captured here — no running app in this session; visual acceptance is by inspection + the controller.
+
+---
+
+## 97 — vendor-ui-fixes-round-3 (2026-07-20) — WORK TYPE: FIX (branch feature/97-vendor-ui-fixes-round-3)
+
+Owner's third test round: ten defects, several being incomplete earlier steps (90 single-role, 92 dark accent, 77 uploads). Spec /specs/97-vendor-ui-fixes-round-3.md; CODEREF 96-97 §C binding. Schema: none. This is the LAST authored step — build order is exhausted; next pointer set to [HUMAN_REQUIRED].
+
+### Items
+2.1 Tenant logo in Tenants list + card — VERIFIED ALREADY WIRED end-to-end (repo batches BrandingProfile.logoKey → console.service → ConsoleTenantRow.logoKey → NameTile list tile / DataCard card tile, logo on a white tile, initials fallback). No code change needed for the render path; confirmed by inspection.
+2.2 Branding upload box — the current logo/app-icon already renders in the box with Upload/Replace; ADDED a ConfirmDialog gate to Remove (was a bare click). Toast + fallback-to-platform copy in the confirm. New i18n key vendor.detail.brandAssetRemoveConfirm (en + ur mirror).
+2.3 One role field — removed the Base-role/Custom-role split from the tenant Team → Users form. New single SearchSelect lists every role in scope: system base roles (STAFF_ROLES) + the tenant's custom roles, each option carrying a System/Custom pill via a new additive SelectOption.tag on the shared SearchSelect (rendered in the option row AND the trigger; also matched by the filter). Value encodes sys:<enum> or cus:<id>; splitRoleValue maps a custom pick to {role: RECEPTION base + customRoleId}, a system pick to {role, customRoleId:null}. DECISION: a custom-role user stores the neutral RECEPTION base (effective perms come from the custom role, RBAC engine unchanged — "who can do what" preserved); display resolves to the custom role, else the system role, and logs a console.info for any legacy record still carrying both references. EDITING: added POST /vendor/tenants/:id/team/users/:userId/role (controller + parseSetTenantUserRole DTO + VendorTeamService.setUserRole with requireTenantRole check + audit vendor.tenant.user_role_changed + repo.setTenantUserRole + fake). ManageRolesDialog now carries the single role picker so editing a user changes that one role. Removed i18n keys baseRole/baseRoleHint/customRole/customRoleHint/noCustomRole (grep-clean of "Base role"/"Custom role"); added roleHint/roleSystem/roleCustom/primaryRole/roleChanged (en + ur).
+2.4 Palette blanks to black — the colour pickers read getPalettePreset(palette).tokens.brandTeal/.mint, a SPARSE patch that is {} for the default "Teal Trust" preset → undefined → input[type=color] coerces to #000000. Fixed to resolveBrand({palettePreset}).colors.brandTeal/.mint (real resolved hex). Pickers stay editable (a custom value wins). Dropped the now-unused getPalettePreset import.
+2.5 Dark-accent breadcrumbs + sweep — the crumb labels hardcoded text-brand-teal-deep (NOT redefined in dark → old #045e62), overriding the link accent. Removed that override on both tenant breadcrumb labels; breadcrumb link now uses text-[color:var(--mp-accent)] (=#a5e8e0 in dark). Tenants-list initials tile switched text-brand-teal-deep → text-heading (matches the card's tile, dark → #a5e8e0). Tabs/links/focus-rings already route through --mp-accent; the scoped brand-preview card keeps its intentional tenant-brand colours.
+2.6 Rows-per-page too narrow — shared SearchSelect TRIGGER_SM min-w-[4.25rem] → min-w-[5.25rem] (trigger + sm popover content) so "100" reads in full, both themes. Stays the compact searchable select from 94.
+2.7 + 2.8 Vendor PWA icon — vendor manifest pointed at /icon-patient.svg. Created apps/web/public/icon-vendor.svg (the platform Marham-Patti mark; the vendor surface carries the platform identity) and pointed manifest-vendor.webmanifest at it. THE SINGLE DOCUMENTED PLACE to change the installed "Marham Patti Console" icon is apps/web/public/icon-vendor.svg — COMMIT any replacement to git; a server-only asset is wiped by the next deploy's hard reset. (Manifests are SVG-only across every surface here, so no PNG sizes were added, consistent with the repo convention.)
+2.9 Managed AI rate — the per-1k-token field is still present and already conditional on entitlement MANAGED (hidden for NONE), persists, and feeds AI billing. Reworded label → "Managed AI rate (per 1,000 tokens)" and the helper to state a single blended rate covering all providers AND models, that per-provider/per-model pricing is a later capability, and that the rate drives AI usage billing (en + ur).
+2.10 AI task purposes — rewrote all 16 vendor.ai.taskPurpose EN strings into one plain sentence each (what it does + where it appears), dropping the "Term —" jargon prefixes; the fuller input/output/where/human-confirm detail stays in vendor.ai.taskDetail behind the info affordance. Vendor group is EN-only.
+
+### Tests
+- apps/api vendor-team.service.spec.ts: added single-role edit test (system→custom→system, audit assertion) and an unknown-custom-role rejection test; extended FakeVendorRepository with setTenantUserRole.
+- 2.1 (logo render), 2.4 (palette), 2.6 (width) are web/brand UI with no test runner in those packages (apps/web + packages/brand have no jest) — verified by inspection per CLAUDE.md.
+
+### Gates
+- pnpm prisma generate: not needed (no schema.prisma change).
+- pnpm typecheck: 29/29 tasks green.
+- pnpm lint: 0 errors (design-drift check clean). Did NOT run test:unit/e2e/build (controller runs them).
+
+### Notes / decisions
+- Shared-kit change is additive (SelectOption.tag, wider sm trigger, breadcrumb accent token) — dist is a gitignored build artifact regenerated by turbo (typecheck dependsOn ^build), so src is the source of truth.
+- Custom-role base = RECEPTION is a deliberate neutral default; if per-custom-role routing bases are wanted later, store a base on AppRole.
+- END OF SPECCED BUILD ORDER: no specs/98-*.md exists. Next build-step request → [HUMAN_REQUIRED].
+
+### 97 scope note — role split elsewhere
+The tenant's OWN in-app admin Users screen (apps/web/app/(app)/admin/users/UserManager.tsx, i18n keys usersBaseRole/usersCustomRole) still shows a base/custom split. That is the tenant operations surface (73/74), NOT the vendor console the owner tested this round; the operations platform is the next block (authored after owner approval). Left unchanged deliberately to honour Do-NOT-break RBAC (73/74) and step scope. The vendor console's tenant Team → Users form — the subject of spec 97 §2.3 — is single-role.
+
+## 98 — pharmacy-data-models-and-migrations — DONE (2026-07-21)
+
+**Type:** FOUNDATION (additive schema). PHASE 12 / item 1 — first pharmacy step. Branch: feature/98-pharmacy-data-models-and-migrations.
+
+**What:** Landed the still-missing pharmacy retail data layer as ONE additive migration (`20260721000000_pharmacy_data_models`), reusing the existing Medicine/Batch/Sale/SaleItem/Supplier/PurchaseOrder/SupplierPayment/StockAdjustment models + SaleStatus/POStatus/PayMethod enums (CODEREF §B) — never recreated.
+
+**Added enums (4):** ReturnReason {EXPIRED,DAMAGED,WRONG_ITEM,CUSTOMER_CHANGED_MIND,OTHER}, ReturnStatus {PENDING,CREDITED,CANCELLED}, DayCloseStatus {OPEN,CLOSED,REOPENED}, RxHandling {OFF,WARN,WARN_ATTACH}.
+
+**Added models (11), all tenantId-scoped:** Customer (name/phone/address?/creditLimit/openingBalance/notes/active; idx name+phone) · CustomerPayment (amount/method/reference?/receivedBy/receivedAt/journalRef?) · PurchaseItem (PO receipt batch lines → Batch in 105) · SaleReturn (originalSaleId/customerId?/reason/refundMethod/refundTotal/restockingFee; clientActionId @unique) · PurchaseReturn (supplierId/reason/creditTotal/status; clientActionId @unique) · ReturnItem (shared; exactly one of saleReturnId/purchaseReturnId) · Counter (till per branch) · DayClose (per-counter reconcile; unique tenant+counter+businessDate; aggregates default 0) · CashCount (denomination rows) · KeyboardShortcut (per-user override; unique tenant+user+actionKey) · PharmacySettings (per tenant/branch; unique tenant+branch; defaults tax 0/credit off/rx WARN/single counter).
+
+**Medicine extension (additive, all nullable/defaulted):** tax_rate Decimal(5,2)?, min_stock Int?, shelf_location Text?, active Boolean default true.
+
+**Decisions recorded:** (1) DayClose money aggregates (opening_float, cash/card/credit sales, cash_refunds, expected_cash) given DEFAULT 0 so an OPEN row is insertable before any sale — spec left defaults unspecified; this is the practical open-then-accumulate design. (2) Customer.phone made required (spec listed it without `?`); address/notes optional. (3) PharmacySettings unique(tenantId, branchId) — Postgres treats NULL branchId as distinct, so the tenant-default single-row invariant is enforced at the service layer (spec 99), not the DB — matches spec wording. (4) Followed existing pharmacy convention: no FK constraints between these models (schema uses plain tenant_id/id columns, not @relation), snake_case @map, cuid ids, Decimal(12,2) money.
+
+**RLS:** every new table applies canonical apply_tenant_rls() (ENABLE + FORCE ROW LEVEL SECURITY + fail-closed tenant_isolation policy). Migration is DDL-only — no DML touches an RLS table, so the specs 61/90 RLS-bypass rule does not apply here.
+
+**Test:** packages/db/src/pharmacy-models-isolation.spec.ts — runs the real 01→98 migrations in pglite as non-superuser app_user; proves tenant-scoping, WITH CHECK cross-tenant block, fail-closed (no context → zero rows) on customers/sale_returns/day_closes, and the client_action_id unique-replay guard (Acceptance §4).
+
+**Gates:** `pnpm prisma generate` ✔ · `pnpm lint` ✔ (16/16) · `pnpm typecheck` ✔ (29/29). Did not run test:unit/e2e/build per CLAUDE.md (controller runs full gates).
+
+WORK TYPE: FEATURE (branch feature/98-pharmacy-data-models-and-migrations)
+
+## 99 — pharmacy-settings-and-configuration — DONE (2026-07-21) — WORK TYPE: FEATURE (branch feature/99-pharmacy-settings-and-configuration)
+
+**Base branch note:** step 99 depends on the `PharmacySettings`/`Counter` models from step 98, which are on `feature/98` and not yet on `staging`. Branched `feature/99` off `feature/98` so the models + migration are present; recorded and proceeded per the fully-autonomous mandate. The pre-existing staging working-tree WIP (step-98 vendor duplicates) was stashed before switching (`git stash` entry "staging-wip-before-step99"); that work is already committed on feature/98, so nothing is lost.
+
+**Spec/CODEREF:** built to spec 99 + CODEREF §C.1 (nothing hardcoded — a settings surface drives tax/credit/rx/counters) and §C.4/§C.5/§C.6/§C.7.
+
+**Shared (@mp/shared, pure, browser-safe) — `pharmacy-settings.ts`:**
+- `EffectivePharmacySettings` shape + `PHARMACY_SETTINGS_DEFAULTS` (tax 0, credit off, rx WARN, single counter, restocking 0) — mirrors the DB column defaults so a zero-config tenant works.
+- `resolveEffectiveSettings(tenantRow, branchRow)` — field-level precedence **branch → tenant → defaults**; clamps rates to [0,100] and coerces a bad rxHandling back to WARN.
+- Read helpers for the enforcement contract: `allowedSaleMethods` (CREDIT only when enabled), `effectiveLineTaxRate` (per-medicine override else default), `restockingFeeAmount`. `RX_HANDLING_MODES` + `isRxHandling` guard.
+- Enforcement contract documented in the module header: tax→101/102/104, credit→101/102/106/110, rxHandling→102, multiCounter+counters→100/110, restockingFee→108.
+
+**@mp/db:** re-exported `RxHandling, ReturnReason, ReturnStatus, DayCloseStatus` from the single entrypoint (step 98 added the enums to schema but never re-exported them).
+
+**Permissions (@mp/shared/permissions.ts):** added TENANT key `pharmacy.settings.manage` (flag-gated by `pharmacy.pos`); granted to ADMIN + PHARMACIST defaults (TENANT_OWNER gets it via the all-TENANT set). Reads need only the flag; writes need the key.
+
+**API — new sibling module `apps/api/src/pharmacy-settings/`:** constants, dto (full-replacement settings PUT + counter create/update, class-validator-free), repository seam + Prisma impl (tenant-scoped via runWithTenant; manual find-then-update/create for the NULLABLE `(tenant_id, branch_id)` unique so the tenant-level upsert is reliable; Decimal→number at the boundary), service (the `resolve()` seam later steps inject + call; `getSettingsView`, `updateSettings`, counter CRUD scoped to the primary branch, `requireBranch` guard), controller (`GET/PUT /pharmacy/settings`, `GET/POST /pharmacy/settings/counters`, `PUT /pharmacy/settings/counters/:id` — flag-gated class, `pharmacy.settings.manage` on every write, `@Audited` mutations). Registered `PharmacySettingsModule` in app.module (exports the service).
+
+**Web — `apps/web/app/(app)/pharmacy/settings/`:** server `page.tsx` (locale-aware heading, tenant-branded shell) + `PharmacySettingsClient.tsx` — reads the resolved settings, edits tax %, credit toggle, rx-handling select (with per-mode helper text), multi-counter toggle revealing counter management (add/rename/activate-deactivate), restocking fee %; every setting has plain-English helper text. Non-admins get a read-only view (fields disabled + note) via `usePermission`; shared kit + tokens give light/dark + responsive; no hex outside globals.css.
+
+**i18n:** full `pharmacySettings.*` namespace added to en.json + ur.json (parity), plain-English owner-friendly copy.
+
+**Tests:** `pharmacy-settings.service.spec.ts` (fake tenant-partitioned repo) proves defaults, tenant/branch precedence, read model, write round-trip, cross-tenant isolation (§6), counter lifecycle + no-branch guard, and the pure read helpers + clamp behaviour. Extended `packages/db/pharmacy-models-isolation.spec.ts` with a migration-level RLS proof for `pharmacy_settings` (tenant sees only its row; WITH CHECK blocks a cross-tenant write).
+
+**Gates:** `pnpm prisma generate` (branch switch) OK; `pnpm lint` clean (one pre-existing unrelated warning in doctor-portal); `pnpm typecheck` green. Did not run test:unit/e2e/build per CLAUDE.md (controller runs full gates). UI design self-check by inspection: tenant-branded, EN+UR, light+dark, responsive, tokens-only.
+
+## 10 — offline-core — RE-ISSUED, VERIFIED ALREADY COMPLETE (2026-07-21) — NO-OP
+Controller re-issued foundation step 10 (offline-core) while the project is at step 100 (phases 1–97 + pharmacy 98–99 done). Verified the module is fully present and satisfies every spec acceptance criterion: `SyncIdempotency` model (clientActionId @unique) in packages/db/prisma/schema.prisma; NestJS sync module apps/api/src/sync/ (controller with GET /sync/changes?since, GET /sync/conflicts, POST /sync/demo/upsert w/ Idempotency-Key, POST /sync/demo/stock compensating-write); client offline core packages/offline/src (enqueue, requiresNetwork) + apps/web/lib/offline.tsx / offline-db.ts (IndexedDB, useSyncStatus) + offline-indicator.tsx; admin demo apps/web/app/(app)/admin/sync/. Tests exist: sync.e2e.spec.ts, offline.spec.ts. Per CLAUDE.md "a completed step is NEVER rebuilt" — no code changed, no branch created, no gates run. Skipped as a no-op.
