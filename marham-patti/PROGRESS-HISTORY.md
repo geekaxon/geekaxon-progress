@@ -3733,3 +3733,60 @@ never-negative concurrent-consumption fail, credit gate end-to-end, rx block→c
 **Tests.** New `stock-alerts.spec.ts` (service-level over the repo fake + a recording emitter): low-stock membership/sort/shortfall/reorder-qty incl. exactly-at-line; near-expiry horizon filter/order/value-at-risk incl. expired; adjustment records+moves+logs, never-negative reject, wrong-batch/unknown-medicine errors, low-stock event on crossing, scanAlerts raises both kinds.
 
 **Gates.** `pnpm prisma generate` ✓ · `pnpm typecheck` ✓ (29/29) · `pnpm lint` ✓ (0 errors; 1 pre-existing unrelated warning in doctor-portal). test:unit/e2e/build left to the controller per AGENT rules. UI design self-check by inspection against specs/mockups/pharmacy/inventory-purchase-suppliers.* (tokens-only, light+dark, EN+UR, responsive table→cards).
+
+## 105 — purchase-entry-and-stock-in — DONE (2026-07-22)
+
+**Branch:** feature/104-inventory-stock-alerts-and-adjustments (continued; WORK TYPE: FEATURE).
+**Spec:** /specs/105-purchase-entry-and-stock-in.md. CODEREF 98-112.
+
+### What was built
+The pharmacy stock-in desk: a purchase list (supplier/date/items/total/payment-status + four
+headline stats, search + supplier/status filters), the new-purchase entry (supplier → line items
+→ batches → payables), a purchase detail drawer, and a print-ready **A4 purchase invoice**.
+
+### Decisions
+- **No schema (spec: none).** Reuses the existing `PurchaseOrder` + `Batch` and 98's
+  `PurchaseItem`. A pharmacy purchase IS a `PurchaseOrder` (status RECEIVED) that carries
+  `PurchaseItem` lines — distinct from the vendor-console 29 flow (POItem/GRN), so
+  `listPurchases` filters to POs that have PurchaseItems.
+- **Purchase-level financials on the order `note`.** Trade discount, tax, payment split
+  (payStatus/paid/method), the supplier invoice no, a memo, and the offline idempotency key are
+  JSON-encoded onto `PurchaseOrder.note` via `encodePurchaseMeta`/`decodePurchaseMeta` (new pure
+  helpers in `@mp/shared/pharmacy-purchase.ts`) — no new columns.
+- **Stock-in.** Each line RECEIVES into a Batch (created, or qty increased on the matching
+  branch+medicine+batchNo+expiry lot), bumps aggregate on-hand via the same compensating write +
+  a logged PURCHASE StockMovement (so FEFO sees the new expiry at once), and updates the
+  medicine's `costPrice` (latest cost → profit reporting, 108).
+- **Payables.** PAID settles the full grand total, PARTIAL clamps to the entered amount, CREDIT
+  pays nothing; a `SupplierPayment` (reference `po:<id>`) records the paid portion so 106's
+  ledger reads it. `derivePayStatus` recomputes the stored status from grand-total vs paid.
+- **Owed / due-this-week.** Stats fold owed = grandTotal − paid; "due this week" uses the
+  supplier's free-text terms (`creditDaysFromTerms`, "Net 30" → 30) → an implied due date within
+  a 7-day horizon.
+- **Offline-safe.** `POST /pharmacy/purchase` accepts an `Idempotency-Key`; a replayed save
+  resolves to the same purchase (`findPurchaseByClientActionId`, `note contains "cid":…`) — never
+  a second stock-in. Key not required (no `clientActionId` column on PurchaseOrder).
+- **Whitelabel.** The A4 invoice resolves the tenant brand letterhead (BrandService) — no
+  hardcoded identity; asserted in tests.
+- **Permissions.** Read surface + supplier picker → `pharmacy.sell`; the stock-moving writes
+  (create purchase, add supplier) → `pharmacy.stock.adjust` (method override), matching the
+  104 adjust guard. Whole controller behind `pharmacy.pos`.
+- **Suppliers.** 106 owns the full supplier desk; 105 reads the 29 `Supplier` table for the
+  dropdown and can add one inline so the flow is self-contained before 106.
+
+### Files
+- API: `apps/api/src/pharmacy/{pharmacy.repositories.ts, __fakes__.ts, pharmacy.dto.ts,
+  pharmacy.service.ts, pharmacy.controller.ts, pharmacy.module.ts}` (added supplier/purchase/
+  batch-receive/supplier-payment repo methods + service methods + `PharmacyPurchaseController`);
+  new test `apps/api/src/pharmacy/purchase-entry.spec.ts`.
+- Shared: new `packages/shared/src/pharmacy-purchase.ts` (+ index export) — totals, pay-status,
+  stats, terms→due-date, note meta codec.
+- Web: new `apps/web/app/(app)/pharmacy/purchase/{page.tsx,PharmacyPurchaseClient.tsx}`;
+  `apps/web/lib/nav.ts` (+ /pharmacy/purchase); `apps/web/app/globals.css` (mp-ppur-* + A4 print
+  + mobile total-one-line / payment-visible fix, spec §2.4).
+- i18n: `packages/i18n/src/messages/{en,ur}.json` (ppur* + navPharmacyPurchase, EN+UR parity).
+
+### Gates
+`pnpm typecheck` — green (29/29). `pnpm lint` — green (fixed 3 hardcoded-string + 1 design-drift
+`mp-card` findings; remaining warning is pre-existing in doctor-portal, unrelated). test:unit /
+e2e / build left for the controller per AGENT rules.
