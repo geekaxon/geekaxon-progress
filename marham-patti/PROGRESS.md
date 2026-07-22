@@ -7,13 +7,13 @@
 ## Current Status
 - **Project:** Marham Patti — multi-tenant white-label healthcare platform (Ganatra go-live pending).
 - **Phase:** 1–97 ✅ (vendor console). Now **PHASE 12 (98–112)** — the Pharmacy module (standalone retail POS + inventory + purchase + customers + returns + day-close). CODEREF 98-112.
-- **Last completed:** **103 — inventory-list-and-medicine-detail**.
-- **Next:** **104 — inventory-stock-alerts-and-adjustments** — /specs/104-inventory-stock-alerts-and-adjustments.md.
+- **Last completed:** **104 — inventory-stock-alerts-and-adjustments**.
+- **Next:** **105 — purchase-entry-and-stock-in** — /specs/105-purchase-entry-and-stock-in.md.
 - **Branches:** through feature/97 on staging. Pharmacy on feature/98…112.
 
 ### Recent steps
+- **104 — inventory-stock-alerts-and-adjustments** — DONE (2026-07-22) — low-stock + near-expiry working views, audited stock adjustments (never negative), alert events raised for 112.
 - **103 — inventory-list-and-medicine-detail** — DONE (2026-07-22) — stat strip, low-stock + near-expiry signals, medicine detail + add/edit.
 - **102 — pos-payment-receipt-and-stock-decrement** — DONE (2026-07-22) — cash/card/credit/split payment, idempotent FEFO stock decrement, rx confirm+log, tenant-branded 58/80mm receipt.
-- **101 — pos-cart-and-checkout** — DONE (2026-07-22) — POS cart: scan/search, FEFO pick, per-line + cart discount, per-medicine tax, optional customer, hold/resume.
 
 > Older steps: PROGRESS-HISTORY.md.

@@ -3708,3 +3708,28 @@ never-negative concurrent-consumption fail, credit gate end-to-end, rx block→c
 **Not touched:** POS medicine search still returns all (active filter for POS is a 98/101 concern, left as-is to avoid breaking 101). Existing `/inventory` (spec 28 batch/recon/valuation ops) is a separate screen, untouched.
 
 **Gates:** `pnpm typecheck` green; `pnpm lint` green (only a pre-existing unrelated unused-eslint-disable warning in doctor-portal). Did not run test:unit/e2e/build (controller runs full gates). i18n parity gate green.
+
+## 104 — inventory-stock-alerts-and-adjustments — DONE (2026-07-22)
+
+**Branch:** feature/104-inventory-stock-alerts-and-adjustments — WORK TYPE: FEATURE.
+
+**What was built (spec 104 §2).** Extended the `pharmacy` module (98–112 lives under apps/api/src/pharmacy + apps/web/.../pharmacy/inventory — NOT the older spec-28 `pharmacy-inventory` module) with the two working views + the audited adjustment flow, all additive on the existing catalog/stock/movement seam:
+
+- **Low-stock view** — `GET /pharmacy/inventory/low-stock`. Lists every medicine at/below its OWN `minStock`, urgency-sorted (biggest shortfall first, so out-of-stock floats up), each with shortfall + `suggestedOrderQty` (shortfall, or a full min when exactly at the line). Web renders a "Create purchase" affordance linking to `/pharmacy/purchase/new?medicineId=..&qty=..` (the 105 entry — forward seam).
+- **Near-expiry view** — `GET /pharmacy/inventory/near-expiry?within=30|60|90` (default 90). Every in-stock batch within the horizon (already-expired included as most urgent), soonest-first, with qty + value-at-risk (qty×cost) + a per-batch bucket/band. Figures use the same pure `@mp/shared` helpers 108's expiry report will, so they reconcile.
+- **Stock adjustments** — `POST /pharmacy/inventory/adjustments`, role-locked to `pharmacy.stock.adjust` (method override; class needs `pharmacy.sell`), `@Audited`. Reasons DAMAGE / EXPIRE / CORRECTION / OTHER; signed non-zero `qtyDelta`; required note. Writes a `StockAdjustment` (who/when), moves the aggregate on-hand + the target batch by the SAME compensating write + a logged `StockMovement` (so it shows in the medicine's movement history, 103), and a never-negative guard rejects (400) before any write. Reconciles with sales/purchases/returns.
+- **Alert events for 112** — new `InventoryAlertEmitter` DI port (`INVENTORY_ALERT_EMITTER`), bound to a `LoggingInventoryAlertEmitter` default (112 rebinds to the realtime engine). `adjustStock` raises a LOW_STOCK event when the result lands at/below the reorder level; `POST /pharmacy/inventory/alerts/scan` raises the full current low-stock + near-expiry set (the seam a 112 worker/schedule calls). Every event carries tenantId+branchId (no cross-tenant leakage).
+
+**Schema.** Added `OTHER` to the `AdjustType` enum (schema.prisma + migration `20260722000000_stock_adjust_other` — a single `ALTER TYPE ADD VALUE IF NOT EXISTS`; additive, no data touched, so no RLS-bypass concern per CODEREF §D). WRITE_OFF stays a valid stored value (recon/expiry loss) but is not offered on the manual adjust form — "expiry write-off" is EXPIRE, off-book is OTHER.
+
+**Shared (`@mp/shared/pharmacy-inventory.ts`).** `AdjustTypeLit`/`ADJUST_TYPES` extended with OTHER; new `ADJUST_REASONS` (the four offered); pure `lowStockShortfall`, `EXPIRY_BUCKETS`, `expiryBucket`, `isWithinExpiryHorizon`, `valueAtRisk`.
+
+**Web.** `PharmacyInventoryClient` gained a working-view tab bar (Catalog · Low stock · Near expiry, low/expiry lazy-loaded, count badges), the two panels (desktop table + mobile cards, light+dark via tokens only, EN+UR), the horizon 30/60/90 chips, and an Adjust-stock drawer opened from the medicine detail (reason select, optional batch, signed delta, required note). New tokens: `.mp-pinv-tabs/-tab/-tab-count/-link-btn/-card-btn` in globals.css (no hex). i18n: 34 EN+UR keys added, parity verified (1715/1715).
+
+**Files.** API: pharmacy.{alerts.ts(new),constants,controller,dto,module,repositories,service}.ts, __fakes__.ts, stock-alerts.spec.ts (new), pos-checkout.spec.ts (ctor arg). DB: schema.prisma + new migration. Shared: pharmacy-inventory.ts. Web: PharmacyInventoryClient.tsx, globals.css, i18n en/ur.
+
+**Decisions.** (1) Built into the `pharmacy` module (where 103 put inventory), reusing the existing `StockAdjustment` table — did NOT fork the older spec-28 `pharmacy-inventory` module. (2) GETs are side-effect-free; events are raised from the adjust write (threshold crossed) and the explicit scan endpoint, not on every list read. (3) No accounting-loss posting here (out of scope for 104; the loss→23 path stays in the spec-28 module). (4) "Create purchase" is a forward link to 105's not-yet-built route.
+
+**Tests.** New `stock-alerts.spec.ts` (service-level over the repo fake + a recording emitter): low-stock membership/sort/shortfall/reorder-qty incl. exactly-at-line; near-expiry horizon filter/order/value-at-risk incl. expired; adjustment records+moves+logs, never-negative reject, wrong-batch/unknown-medicine errors, low-stock event on crossing, scanAlerts raises both kinds.
+
+**Gates.** `pnpm prisma generate` ✓ · `pnpm typecheck` ✓ (29/29) · `pnpm lint` ✓ (0 errors; 1 pre-existing unrelated warning in doctor-portal). test:unit/e2e/build left to the controller per AGENT rules. UI design self-check by inspection against specs/mockups/pharmacy/inventory-purchase-suppliers.* (tokens-only, light+dark, EN+UR, responsive table→cards).
