@@ -4105,3 +4105,29 @@ Gates: `pnpm lint` ✓, `pnpm typecheck` ✓ (no schema change → no prisma gen
 **Gates:** `pnpm typecheck` green; `pnpm lint` green (web design-drift check passes; the one @mp/api unused-eslint-disable warning is pre-existing, unrelated). Did not run test:unit/e2e/build per AGENT §6 (controller runs full gates).
 
 **Files:** apps/web/app/(app)/pharmacy/pos/{PosClient,PaymentPanel,ThermalReceipt}.tsx; packages/ui/src/components/keypad.tsx (+ .spec.tsx) + index.ts; apps/web/components/shell/AppShell.tsx; apps/web/app/globals.css; packages/i18n/src/messages/{en,ur}.json.
+
+## 117 — inventory-purchase-suppliers-to-mockup — DONE (2026-07-23) — feature/117-inventory-purchase-suppliers-to-mockup
+
+**Type:** FIX (design implementation, Phase 13 item 5). Presentation only — no business-logic change. Spec 117, CODEREF 113-121. Mockup: specs/mockups/pharmacy/inventory-purchase-suppliers.html.
+
+**What:** Brought the three pharmacy console screens (inventory, purchase, suppliers) from a narrow card stack to the approved dense desktop console on the room AppShell (113) now gives them. All data wiring, API calls, handlers, idempotency, FEFO/ledger/totals logic untouched — only JSX structure + CSS changed.
+
+**CSS (apps/web/app/globals.css):**
+- Added amber warning token pair `--mp-amber-bg/--mp-amber-fg` (light + dark) so the console can separate an amber signal (low stock / near-expiry) from red danger (out / expired) per acceptance §4. Tokens only.
+- New "pharmacy console" layer (~230 lines) keyed off existing `--mp-*` tokens: `.mp-kpis`/`.mp-kpi` (4-across → 2 → 1 KPI row with coloured icon + value tones), `.mp-cbar`/`.mp-cchip` filter strip with counts, dense-table skin over `.mp-pinv-table` (sunken sticky header, sticky first column on tablet), health-signal cells `.mp-medcell`/`.mp-stock`+`.mp-stockbar`/`.mp-expcell`/`.mp-rxtag`, `.mp-cpill` four-tone status pill, `.mp-supav`/`.mp-termbadge`/`.mp-owed`, drawer internals `.mp-kv`/`.mp-fefo`/`.mp-hist`/`.mp-dsec`/`.mp-cbanner`, purchase entry `.mp-prow`/`.mp-psum`/`.mp-payseg`, supplier ledger `.mp-ledsum`/`.mp-ledtype`/`.mp-amt-*`, and an A4 invoice skin (branded teal letterhead + mark + sign line) layered onto `.mp-ppur-print`. Responsive tiers at 1279/720; RTL via logical properties; light+dark via token flip.
+
+**JSX:**
+- Inventory: replaced StatGrid KPIs with `.mp-kpis`; merged search+category+chips(+counts)+sort+add into `.mp-cbar`; rewrote catalog table to dense health-signal rows (stock bar, expiry cell with relative sub-line, Rx tag, four-tone pill, chevron action) + richer mobile cards; detail drawer now banner + `.mp-kv` details + `.mp-fefo` FEFO batches (expiry-coloured) + `.mp-hist` movement timeline. Local `Pill`, `expiryParts`, `stockBar`, `KV` helpers. Dropped StatCard/StatGrid/StatusPill imports.
+- Purchase: 4-across KPIs; chip filters (Paid/Credit); table with supplier avatar, mono bill no., payment pill + owed sub-line, print/detail actions; new-purchase totals → `.mp-psum`, payment status → `.mp-payseg` segmented control; A4 invoice restyled to branded letterhead (tenant identity via existing letterhead resolve) with received/verified sign line.
+- Suppliers: 4-across KPIs (added supplier count); Owed/Settled chips; table with avatar, mono phone, lifetime, highlighted outstanding (`.mp-owed`, zero=green), terms badge, pay/ledger actions; ledger drawer rebuilt: hero + `.mp-ledsum` balance card (settled variant) + `.mp-kv` details + ledger table with `.mp-ledtype` icons and credit/debit amount colours + record-payment grid; Edit moved to footer.
+
+**i18n:** added EN+UR keys pinvDetails, psupStatSuppliers/psupSettled/psupDetails/psupColAmount, ppurInvSign.
+
+**Notes / decisions:**
+- Detail already opens as a right-hand `@mp/ui` Drawer (side="end") → sheet on mobile; kept. Deep-linking to a detail is not URL-synced in the existing code (never was); left unchanged since adding router state is behaviour, not presentation — out of scope for a tokens-only step.
+- New-purchase line-item entry keeps its existing 5-column grid (medicine/qty/cost/batch/expiry) — already captures batch+expiry per line per acceptance §5; receipt still creates batches via the unchanged 105 path.
+- No schema, no RLS, no permission change. Phase-12 pharmacy tests untouched.
+
+**Gates:** `pnpm typecheck` green (29/29). `pnpm lint` green incl. design-drift check ("no retired .mp-* control atoms"). Did not run test/build/e2e per AGENT §6 (controller runs full gates).
+
+WORK TYPE: FIX (branch feature/117-inventory-purchase-suppliers-to-mockup)
