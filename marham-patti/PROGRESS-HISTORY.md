@@ -4083,3 +4083,25 @@ Gates: `pnpm lint` ✓, `pnpm typecheck` ✓ (no schema change → no prisma gen
 **Acceptance:** 1 apex root now renders the public page, chooser unreachable there ✔ · 2 no auth control of any kind ✔ · 3 no hardcoded host, contact from config ✔ · 4 tenant + vendor surfaces untouched (routing logic unchanged) ✔ · 5 responsive/light+dark/EN+UR by construction (tokens + clamp + dir + dark overrides).
 
 **Gates:** `pnpm typecheck` green (29 tasks); `pnpm lint` green (16 tasks, incl. design-drift check + i18n parity). Did not run test:unit/e2e/build per CLAUDE.md; controller runs full gates.
+
+## 116 — pos-to-mockup — DONE (2026-07-23)
+
+**Branch:** feature/116-pos-to-mockup. **WORK-TYPE: FIX (design implementation).** Presentation only — no business-logic, totals, FEFO, stock-decrement, credit-limit, offline-queue or idempotency change (spec §5 / CODEREF §C.1). Phase-12 tests untouched.
+
+**Spec/refs:** /specs/116-pos-to-mockup.md; mockup specs/mockups/pharmacy/clinic-staff-components.html (authoritative for look); CODEREF 113-121.
+
+**Delivered:**
+- Counter layout to mockup: `.mp-pos-grid` — search+results as the primary region, cart as a persistent right-hand panel with its own scroll (`.mp-pos-aside` sticky ≥1280), a persistent total/action bar (`.mp-pos-totalbar`), stacks below 1280. Exactly one cart summary mounted (Acceptance §6).
+- Product search/results: xl scan field + `.mp-psearch-results` rows (name, generic, stock-on-hand with green/amber/red status colour, price); out-of-stock rows disabled; `/` focus, Enter adds highlighted, ArrowUp/Down move + scroll highlight into view.
+- Cart line anatomy (`.mp-pos-row`): name + batch/expiry (near-expiry amber flag) + unit price metadata, 44px `.mp-qstep` stepper, per-line discount, dominant line total, destructive remove.
+- Totals block (`.mp-cartsum`): subtotal/discount/tax/grand-total, tabular, grand total visually dominant.
+- **Shared numeric keypad** — new kit component `packages/ui/src/components/keypad.tsx` (`Keypad` + pure `applyKeypadKey` reducer, exported from index; spec keypad.spec.tsx). Consumed by BOTH cart quantity entry (integer mode, appears when a line qty is tapped) and payment cash-tendered entry (decimal + Enter settles).
+- Payment panel to mockup: big `.mp-paymethod` targets, split legs, live change-due in success green (`.mp-paychange`); credit gated on tenant setting + customer, over-limit warn preserved; rx soft-confirm preserved.
+- Thermal receipt to mockup (`.mp-rcpt-*`): resolved-tenant logo tile (uploaded logo `<img>` else tenant initial — whitelabel, §C.2), name/address letterhead, item lines, dominant total, payment+change, footer + barcode block. 58/80mm toggle + print stylesheet kept.
+- Sidebar scroll stability (§2.9): AppShell nav keeps its scroll across client nav (element stays mounted) and a `useLayoutEffect` on pathname nudges the active item into view only when off-screen (no window jump); `.mp-shell-nav` scrollbar styled thin/low-contrast, reveal on hover/scroll.
+- Semantic status tokens added to globals.css (`--mp-ok-*`, `--mp-danger-*`, light+dark); all new colour via tokens, no hex outside globals.css.
+- i18n EN+UR parity: added pharmacyPos cart.count/each/qtyFor/increase/decrease, keypad.enter/delete, payment.changeDue/tenderPrompt.
+
+**Gates:** `pnpm typecheck` green; `pnpm lint` green (web design-drift check passes; the one @mp/api unused-eslint-disable warning is pre-existing, unrelated). Did not run test:unit/e2e/build per AGENT §6 (controller runs full gates).
+
+**Files:** apps/web/app/(app)/pharmacy/pos/{PosClient,PaymentPanel,ThermalReceipt}.tsx; packages/ui/src/components/keypad.tsx (+ .spec.tsx) + index.ts; apps/web/components/shell/AppShell.tsx; apps/web/app/globals.css; packages/i18n/src/messages/{en,ur}.json.
