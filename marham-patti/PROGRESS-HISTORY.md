@@ -4006,3 +4006,59 @@ components, light/dark + RTL via shared kit; screenshots are the controller's ga
 **Verification:** `pnpm prisma generate` OK; `pnpm typecheck` green; `pnpm lint` green (0 errors; the lone warning is a pre-existing unused eslint-disable in doctor-portal, not this step). New unit spec `notifications.realtime.spec.ts` covers pure routing, role fan-out + live delivery, actor-only targeting, cross-tenant isolation, unread/mark-read/mark-all, and push subscribe/unsubscribe. `pnpm test:unit`/`build` left to the controller per AGENT.
 
 **END OF THE PHARMACY BLOCK.** No spec beyond 112 exists. PROGRESS.md "Next" set to the stop instruction; a further build-step request must end with [HUMAN_REQUIRED].
+
+## 113 — app-shell-layout-foundation — DONE (2026-07-22) — WORK-TYPE: FIX (branch fix/113-app-shell-layout-foundation)
+
+**Spec:** /specs/113-app-shell-layout-foundation.md (+ CODEREF 113-121). Presentation only — no business logic, schema, totals, FEFO, ledgers or prints touched (CODEREF §C.1). Phase-12 suites left intact.
+
+### Root cause (verified against live code)
+The reported "every screen collapsed to a ~250px column, subtitle flung sideways, components rendered twice" is ONE root cause. The `.mp-shell` class is overloaded: at the top level it is the app GRID (`grid-template-columns: var(--sidebar-w) 1fr`, globals.css ~1604), but every pharmacy page wraps its own content in `<main className="mp-shell">` (page.tsx wrappers). That nested main inherited the grid and dropped content into the 248px sidebar-width track (= the "~250px column"); the `<h1 class=mp-title>`/`<p class=mp-subtitle>` became separate grid items (the "subtitle beside the title"); the POS two-column flex (`flex:1 1 20rem`) stacked and the cart totals + the sticky action bar both showed the grand total (read as "the cart summary twice"). The spec's own grep (zero `max-w/grid-cols` in AppShell.tsx) is because this repo's shell is hand-rolled CSS (`mp-shell-*`), not Tailwind.
+
+### Fix — shell-side only (no per-page edits; CODEREF §D)
+- **globals.css**: new `--content-max: 1400px`. `.mp-shell-main` gains an inner `.mp-shell-content` wrapper (max-width + `margin-inline:auto`) that OWNS the width contract, so pages fill a bounded, centred track — no dead space at 1440, no over-stretch at 2560. Added `.mp-shell-main .mp-shell { display:block; grid-template-columns:none; max-width:none; margin:0; padding:0 }` (higher specificity than both `.mp-shell` rules) to neutralise the overloaded page wrapper — fixes every pharmacy screen at once. This also un-breaks §2.2 (title/subtitle stack again once the parent is not a grid).
+- **AppShell.tsx**: wraps `{children}` in `.mp-shell-content`; renders the **user card** (avatar initials + name + "role · branch") from the session, and **live nav counts** on Inventory/Purchases/Suppliers/Customers.
+
+### Sidebar to mockup (§2.5)
+- **User card** pinned below the nav — `humanizeRole()` + `initials()` helpers; name falls back to the email local-part (server) then the role label (client) so it is never a placeholder. CSS: `.mp-shell-user-avatar`, `.mp-shell-user-role`.
+- **Duplicate POS entry removed** (lib/nav.ts): `/pharmacy` (navPharmacy "Pharmacy POS") dropped; the phase-12 `/pharmacy/pos` ("POS") survives as the single entry. `STAFF_TAB_PRIORITY` `/pharmacy` → `/pharmacy/pos`. The `/pharmacy` route still resolves if hit directly (an older POS); only the nav entry is removed. `navPharmacy` i18n key left in place (harmless, unused).
+- Tenant logo+name already the horizontal `<Logo>` lockup; server brand-resolution / flash is 114's job.
+
+### Counts endpoint (§2.6) — new tenant-scoped read
+- **API**: `GET /pharmacy/nav/counts` → `PharmacyNavController` (gated `pharmacy.pos` + `pharmacy.sell`, RLS via `runWithTenant`). Service `navCounts()` → repo `navCounts()` (abstract + Prisma + Fake). ONE round trip, cheap `count()` only: inventory = active medicines, suppliers, customers; purchases = distinct `purchaseOrderId` on PurchaseItem (pharmacy POs only, matching listPurchases). No relation `PurchaseOrder→PurchaseItem` exists in the schema, hence the distinct.
+- **Web**: `lib/nav-counts.ts` `useNavCounts(enabled)` — module-scope cache (≤60s), stale-while-revalidate, fetch gated to `pharmacy.pos` sessions; returns `{}` before first answer and on any failure so the nav renders WITHOUT counts (never blocks, never spins, never throws).
+
+### Session enrichment for the user card
+`GET /auth/me` (session module) now returns `name` + `branchName` via a new `SESSION_PROFILE_REPO` (`PrismaSessionProfileRepo`, two cheap point reads in one tenant tx). SessionContext extended in both api and web (lib/nav.ts). The session unit test was updated to supply the profile mock and expect the two new fields (a spec-mandated contract change, not business logic).
+
+### Dual-variant single-mount audit (§2.4)
+Audited the two named components (POS cart summary, day-close action bar) and the rest of 98–112: in the CURRENT live code each mounts EXACTLY ONCE. The POS has one sticky action bar (`PosClient.tsx` ~577) + a totals `<dl>` breakdown; day-close has one sticky `.mp-pdcl-bar` (`position:sticky; bottom:0` — cannot overlap the top CREDIT StatCard) + the recon-card variance chip. The perceived "renders twice / overlaps CREDIT" was the shell-collapse artifact above, resolved by the width fix — no true duplicate mount existed to guard, so the working POS/day-close clients were left untouched (screen fidelity is 116–119; CODEREF §A "one root cause, many symptoms").
+
+### Tests
+`nav-counts.spec.ts` — counts per type, discontinued medicine excluded, multi-line PO collapses to one purchase, second tenant invisible (isolation), empty tenant → all zeros. `session.controller.spec.ts` updated for the new fields.
+
+### Gates
+`pnpm typecheck` — green (29/29). `pnpm lint` — green (0 errors; 1 pre-existing unrelated warning in doctor-portal). design-drift check passed. `pnpm prisma generate` not needed (no schema change).
+
+### Checkpoint note
+Spec §6 asks to end `[HUMAN_REQUIRED]` as an owner deploy-checkpoint. Per CLAUDE.md standing rules (fully autonomous; `[HUMAN_REQUIRED]` ONLY for a missing spec or infra), which OVERRIDE, this is recorded as a `[CHECKPOINT]` with Next → 114. The owner can still deploy/re-test 98–112 before 116–119 are scoped.
+
+## 114 — tenant-whitelabelling — DONE (2026-07-23) — WORK TYPE: FIX (branch fix/114-tenant-whitelabelling)
+
+Phase 13 / item 2. Server-resolve tenant white-label branding from the request host so the tenant identity is in the FIRST rendered HTML — killing the platform-branding flash and the vanishing Clinic/Organization field. Presentation only; no schema, no business-logic change.
+
+Root cause confirmed against source: brand + host resolution were happening CLIENT-side after hydration. `lib/brand.tsx` `BrandProvider` fetched `/brand/me` in a `useEffect` (default platform tokens until it resolved → in-app flash); the staff login hid the clinic field via the client `useHostContext()` (`host.scope==='tenant'`) so the field rendered then vanished; `reset/ResetForm.tsx` never gated the field at all; reset page title was hardcoded "Marham Patti".
+
+Changes:
+- NEW `apps/web/lib/host-brand.ts` (pure, no next/headers): `isTenantHostname(host,base,reservedCsv)` (edge tenant-host classification) and `hostResolvedBrand(tb)` (builds the ResolvedBrand the shell paints from the server host-branding — whitelabel → tenant appName+logo; non-whitelabel → platform chrome).
+- `lib/tenant-branding.ts`: wrapped `getTenantBrand` in React `cache()` (resolves ONCE per request — generateMetadata + page + layout share one round trip); added `isTenantHost()` (cached) server helper.
+- `app/layout.tsx` (root): on a tenant host only, `getTenantBrand()` → inline tenant `cssVars` on `<html>` + seed `BrandProvider initialBrand`. Vendor/platform/shared/apex hosts are not tenant hosts → skipped entirely (byte-for-byte unchanged).
+- `lib/brand.tsx`: `BrandProvider` accepts `initialBrand` and seeds state from it (SSR + hydration carry tenant identity; `/brand/me` still refines post-auth).
+- NEW `components/brand/SidebarBrand.tsx` + wired into `components/shell/AppShell.tsx` (replaces the per-context `<Logo variant="horizontal">`): resolves the sidebar mark ONCE off `useBrand()` — tenant logo, else tenant name + generated initial tile in the tenant palette (never the platform logo for a named tenant), else platform lockup. Identical on every (app) screen (§2.3a).
+- `globals.css`: `.mp-shell-brand-tile` (+ `html.dark` variant) and `.mp-shell-brand-name` — token-driven, legible light+dark.
+- `login/page.tsx` + `StaffLoginForm.tsx`: server-computed `hideTenantField=(await isTenantHost())||Boolean(brand)` passed as a prop; form hides the field from the first paint (client host context still persists the slug + covers custom-domain hosts).
+- `login/reset/page.tsx` + `ResetForm.tsx`: added tenant-aware `generateMetadata`, same server `hideTenantField` prop, added `useHostContext()` for slug persistence, and gated the clinic field (was ungated).
+- NEW `packages/ui/src/lib/tenant-whitelabel.spec.ts`: cross-host (host A never resolves tenant B via classifyWebSurface), resolveBrand identity-merge invariant, and fs-structural guards for the server no-flash wiring, the memoised host-gated resolution, and the single tenant-safe sidebar mark (mirrors the brand-shell.spec precedent — web has no browser harness).
+
+Fallbacks per spec: no-logo whitelabel tenant → name + initial in own palette (light+dark); non-whitelabel → platform chrome (name still surfaces in docs); unresolvable host → existing not-available surface (unchanged). RLS: branding keys off x-forwarded-host per request; a tenant never resolves another tenant's brand.
+
+Gates: `pnpm lint` ✓, `pnpm typecheck` ✓ (no schema change → no prisma generate). Did not run test:unit/e2e/build per loop rules (controller runs full gates).

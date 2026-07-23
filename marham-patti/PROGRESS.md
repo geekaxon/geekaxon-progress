@@ -6,14 +6,14 @@
 
 ## Current Status
 - **Project:** Marham Patti — multi-tenant white-label healthcare platform (Ganatra go-live pending owner approval).
-- **Phase:** 1–112 ✅ (vendor console + pharmacy module built and deployed to staging). Now **PHASE 13 (113–121)** — design implementation & fixes: shell layout foundation, tenant white-labelling, apex public page, the four pharmacy screen groups to mockup, vendor fixes round 4, cross-cutting polish. **No business-logic change in this phase.** Companion: CODEREF 113-121.
-- **Last completed:** **112 — realtime-notifications**.
-- **Next:** **113 — app-shell-layout-foundation** — /specs/113-app-shell-layout-foundation.md.
+- **Phase:** 1–112 ✅ (vendor console + pharmacy on staging). Now **PHASE 13 (113–121)** — design implementation & fixes, **no business-logic change**. Companion: CODEREF 113-121.
+- **Last completed:** **114 — tenant-whitelabelling**.
+- **Next:** **115 — apex-public-page** — /specs/115-apex-public-page.md
 - **Branches:** through feature/112 on staging. Phase 13 builds on feature/113…121.
 
 ### Recent steps
+- **114 — tenant-whitelabelling** — DONE (2026-07-23) — server-resolved brand per host; no login flash, no clinic field, one sidebar mark.
+- **113 — app-shell-layout-foundation** — DONE (2026-07-22) — shell owns the content width, sidebar user card + live counts, one POS entry.
 - **112 — realtime-notifications** — DONE (2026-07-22) — per-tenant Redis pub/sub, PWA push, notification centre in the shell.
-- **111 — keyboard-shortcuts** — DONE (2026-07-22) — system defaults with per-user overrides, help overlay.
-- **110 — day-close-and-cashier-reconciliation** — DONE (2026-07-22) — per-counter reconciliation, denomination counter, Z-report.
 
 > Older steps in PROGRESS-HISTORY.md.
