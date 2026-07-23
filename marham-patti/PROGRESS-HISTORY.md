@@ -4131,3 +4131,27 @@ Gates: `pnpm lint` ✓, `pnpm typecheck` ✓ (no schema change → no prisma gen
 **Gates:** `pnpm typecheck` green (29/29). `pnpm lint` green incl. design-drift check ("no retired .mp-* control atoms"). Did not run test/build/e2e per AGENT §6 (controller runs full gates).
 
 WORK TYPE: FIX (branch feature/117-inventory-purchase-suppliers-to-mockup)
+
+## 118 — customers-returns-to-mockup — DONE (2026-07-23)
+WORK TYPE: FIX (design implementation, branch feature/118-customers-returns-to-mockup). No business-logic change; tokens + presentation only. Mockup `specs/mockups/pharmacy/customers-returns.html/.png` authoritative; CODEREF 113-121.
+
+Scope: brought Customers (107) and Returns (108) to mockup fidelity on the shell 113 fixed. No schema, no API, no shared-logic changes — all `apiFetch` calls, totals, FEFO/originating-batch restock, restocking-fee and ledger arithmetic left byte-for-byte.
+
+Customers (`CustomersClient.tsx`):
+- KPI tiles now carry sub-captions (Regulars & credit accounts / Owed by N customers / Block further credit / Added this month). Outstanding + over-limit tiles stay credit-gated (99).
+- List table: avatar-initials + name + account subtitle (Credit customer / Regular); Lifetime column; new `OweCell` shows emphasised red outstanding with limit-context subline ("of Rs X limit" / "over Rs X limit") or green "Settled"; row-end icon buttons (record payment · open). Over-limit is red amount + explicit red label (acceptance #2).
+- Filter chips replace the dropdown (all / has-credit N / over-limit N) + an "Owing first" sort chip; all credit-gated.
+- Ledger drawer: big outstanding card (red when over) + gauge, facts grid (phone / lifetime spend / address), and the ledger rendered as a chronological icon list with signed amounts (+charge / −payment green) and running "bal" — replacing the debit/credit table. Record-payment form retained; footer Edit + Record payment.
+- Add/Edit form: Full name, 2-col Phone · Credit limit, Address/Notes as @mp/ui Textarea, Allow-credit switch-row with hint. Credit-off hides every credit affordance (acceptance #4).
+
+Returns (`ReturnsClient.tsx`):
+- KPI row now 4-across (Returns count derived from rows + Refunded / Supplier credit / Pending) with captions.
+- Segmented tabs (All / Sale / Purchase) via `mp-pinv-tabs`; type rendered as directional coloured `TypeSignal` (sale ↙ / purchase ↗); status pill + row-end print/open icons.
+- New return is now a full-page two-column work surface (mockup: Returns › New) instead of a side sheet: mode segmented control, reason chips (single reason — matches the single-reason API), @mp/ui Checkbox line-select, − n + `QtyStep` steppers, live refund/credit summary in a sticky aside, and the stock-impact advisory banners (teal "Stock returns to shelf" / amber "Stock decreases").
+- Prints to fidelity: A4 debit note gains RETURN title, Debit-note ref, Raised-by, line numbers, Unit-cost column, Items·lines·units + GST-adjustment rows, and an Authorised signature line; thermal refund adds an authorised-by line and a decorative barcode. Both keep resolved tenant identity from the server payload (CODEREF §C.2).
+
+CSS: added `mp-pcus-*` / `mp-pret-*` mockup-fidelity classes (avatar, owe cell, owe card, ledger list, 2-col form, textarea, switch-row, type signal, seg control, two-column grid, reason chips, line rows, qty stepper, stock banners, sticky summary, debit-note number) after the gauge block in `apps/web/app/globals.css` — tokens only, light+dark via existing vars, RTL-safe (logical props).
+
+i18n: +52 keys each to en.json/ur.json (pcus* captions/labels + pret* captions, banners, new-return labels, print labels), full EN+UR parity, `{n}`/`{limit}`/`{qty}`/`{price}`/`{ref}`/`{lines}`/`{units}`/`{by}`/`{summary}` interpolation.
+
+Gates: `pnpm typecheck` green (29/29); `pnpm lint` green incl. design-drift (no retired control atoms — textareas → @mp/ui Textarea, checkbox → @mp/ui Checkbox). No prisma change. test:unit/e2e/build left to controller.
