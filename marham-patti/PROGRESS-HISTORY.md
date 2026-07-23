@@ -4062,3 +4062,24 @@ Changes:
 Fallbacks per spec: no-logo whitelabel tenant → name + initial in own palette (light+dark); non-whitelabel → platform chrome (name still surfaces in docs); unresolvable host → existing not-available surface (unchanged). RLS: branding keys off x-forwarded-host per request; a tenant never resolves another tenant's brand.
 
 Gates: `pnpm lint` ✓, `pnpm typecheck` ✓ (no schema change → no prisma generate). Did not run test:unit/e2e/build per loop rules (controller runs full gates).
+
+## 115 — apex-public-page — DONE (2026-07-23)
+
+**Work type:** FEATURE (branch `fix/114-tenant-whitelabelling` — continued on the active phase-13 branch per controller merge model). Spec `/specs/115-apex-public-page.md`; CODEREF 113-121.
+
+**Goal:** the apex host (no subdomain) must serve a PUBLIC marketing / coming-soon page instead of the internal entrance chooser (Staff/Patient/Rider/Phlebotomist doors), which exposed the platform's routing to anyone typing the domain. No auth surface, no tenant-enumerating links, platform branding, EN+UR, light+dark, responsive, domain-agnostic contact CTA.
+
+**What changed:**
+- `apps/web/app/page.tsx` — rewrote the apex root from `EntranceChooser` to `ApexPublicPage`. Server component, near-zero JS (only the no-JS `?lang=` toggle). Renders: platform mark (`Logo insignia`), a "coming soon" eyebrow, product name (`DEFAULT_BRAND.identity.appName`), a positioning tagline, a short what-it's-for statement, and ONE contact/interest CTA. No sign-in form, no clinic field, no entrance grid, no audience/login links. Dropped the `EntranceInstall` island import (file left in place, now unused).
+- `packages/ui/src/lib/apex-contact.ts` (new, pure, edge-safe) — `resolveApexContact({contactEmail, baseDomain})`: explicit `PLATFORM_CONTACT_EMAIL` → else `hello@<PLATFORM_BASE_DOMAIN>` (normalised via `normalizeBaseDomain`) → else `null` (graceful: CTA renders as plain copy, no invented hostname). No hardcoded host — changing the product domain needs no code change (Acceptance §3/§2.4).
+- `packages/ui/package.json` — added `./apex-contact` subpath export (mirrors `./surface-routing`).
+- `packages/i18n/src/messages/{en,ur}.json` — new `apex.*` block (eyebrow, tagline, lead, cta, ctaHint, foot); EN+UR parity.
+- `apps/web/app/globals.css` — new `.mp-apex*` block (centred hero, brand tokens only, dark overrides for title/eyebrow, RTL-safe centred text, CTA button + static/disabled variant). No hex outside globals.
+- `.env.example` — documented optional `PLATFORM_CONTACT_EMAIL` (placeholder only, no secret).
+- `packages/ui/src/lib/apex-public-page.spec.ts` (new) — jest guard mirroring the whitelabel-spec precedent: pure `resolveApexContact` cases (explicit / derived / domain-follows / null degrade); source-level asserts that the apex page renders `apex.*` copy, no `EntranceChooser`/`EntranceInstall`/`mp-entry-grid`/`entrance.` refs, no `<form>`/`name="tenant"`/`type="password"`, no door/login/vendor hrefs, and that the only hrefs are the `?lang=` toggle and the resolver-provided `contact.href` (no literal `mailto:`).
+
+**Not touched (regression surface unchanged):** `surface-routing.ts` / middleware — apex still classifies as `public` and `/`→pass; tenant `/`→`/tenant-gate`; vendor `/`→`/vendor` all unchanged (§2.3). No schema, no business logic, no RLS (no tenant data on this surface).
+
+**Acceptance:** 1 apex root now renders the public page, chooser unreachable there ✔ · 2 no auth control of any kind ✔ · 3 no hardcoded host, contact from config ✔ · 4 tenant + vendor surfaces untouched (routing logic unchanged) ✔ · 5 responsive/light+dark/EN+UR by construction (tokens + clamp + dir + dark overrides).
+
+**Gates:** `pnpm typecheck` green (29 tasks); `pnpm lint` green (16 tasks, incl. design-drift check + i18n parity). Did not run test:unit/e2e/build per CLAUDE.md; controller runs full gates.
