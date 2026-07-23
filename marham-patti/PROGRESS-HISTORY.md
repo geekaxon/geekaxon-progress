@@ -4155,3 +4155,33 @@ CSS: added `mp-pcus-*` / `mp-pret-*` mockup-fidelity classes (avatar, owe cell, 
 i18n: +52 keys each to en.json/ur.json (pcus* captions/labels + pret* captions, banners, new-return labels, print labels), full EN+UR parity, `{n}`/`{limit}`/`{qty}`/`{price}`/`{ref}`/`{lines}`/`{units}`/`{by}`/`{summary}` interpolation.
 
 Gates: `pnpm typecheck` green (29/29); `pnpm lint` green incl. design-drift (no retired control atoms — textareas → @mp/ui Textarea, checkbox → @mp/ui Checkbox). No prisma change. test:unit/e2e/build left to controller.
+
+## 119 — reports-dayclose-to-mockup — DONE (2026-07-23)
+Branch: feature/119-reports-dayclose-to-mockup. WORK-TYPE: FIX (design implementation). Presentation only — no business-logic, schema, arithmetic, FEFO, variance or per-counter change (CODEREF §C.1). Gates: pnpm typecheck ✅, pnpm lint ✅ (design-drift check passes; one pre-existing unrelated warning in doctor-portal.repositories.ts). test:unit/e2e/build left to controller per AGENT §6.
+
+### Report hub (ReportsClient.tsx)
+- Added a top KPI row 4-across (§2.1): total sales, gross profit, stock value, value at risk — each StatCard with a context caption (invoices / margin% / retail value / batches at risk) built from the existing ReportsView (no API change; all figures already present).
+- Added an Export action beside Print: client-side CSV download (UTF-8 BOM) of the headline figures for the active date range; a right-aligning `.mp-prep-controls-spacer` pushes Export/Print to the end of the chip row.
+
+### Day-close (DayCloseClient.tsx)
+- The over/short block is now a vertical panel: the word+amount line, plus (when SHORT/OVER and unlocked) a "recount or record a reason" prompt (`pdclRecountPrompt`) and a reason textarea. Tones unchanged: BALANCED green, OVER amber (gold), SHORT red.
+- Close-with-variance is gated: clicking Close when variance≠0 reveals the amber supervisor-review note (`pdclSupervisorReview`) + Cancel / "Confirm & close"; a balanced drawer closes directly (§2.3).
+- The reason is sent in the close body; captured with the day-close via the @Audited close record (no schema field). In-page header now shows the business DATE + status pill only — the "Day close" title lives in the shell page header (removed the duplicate title text, §2.6).
+
+### Prints (ZReport.tsx)
+- A4 day-close summary now carries a cashier signature line (`pdclSignature` + cashier name), `.mp-pdcl-a4-sign*`. Thermal + A4 branding and figures unchanged (resolved tenant, §C.2).
+
+### API (presentation plumbing, no schema/arithmetic change)
+- pharmacy.dto.ts: `DayCloseReconcileInput.reason?` + `parseDayCloseReconcile` reads optional `reason` (trimmed, ≤500 chars). Additive/optional — count path ignores it.
+- pharmacy.service.ts `closeDay`: returns `varianceReason` (reason only when variance≠0) on the close result so the @Audited interceptor's `summary: result` keeps it with the day-close. DayClose row, expected-cash and variance arithmetic untouched.
+
+### Duplicate page headings (§2.6)
+- Audited every pharmacy screen. Two had an in-page heading repeating the page title: settings (PharmacySettingsClient) and shortcuts (KeyboardShortcutsClient). Removed both duplicate `<h2>` blocks (+ their now-unused Settings2 / Keyboard icon imports and the shortcuts' duplicate intro line); sections keep an `aria-label`. Other screens' h2s are section labels / print letterheads (not title dups) — left as-is.
+
+### i18n
+- EN+UR parity keys added: prepStockValue, prepExport, prepCtxInvoices, prepCtxMargin, prepCtxRetail, prepCtxBatches; pdclRecountPrompt, pdclReasonLabel, pdclReasonPlaceholder, pdclSupervisorReview, pdclConfirmClose, pdclCancel, pdclSignature. `pdclDayClose` key now orphaned (harmless; still present in both locales).
+
+### CSS (globals.css, tokens only)
+- New: `.mp-prep-controls-spacer`, `.mp-prep-kpis`; `.mp-pdcl-vs` → column layout with `.mp-pdcl-vs-line/-reason/-prompt`, `.mp-pdcl-reason-field/-input`; `.mp-pdcl-review` (amber); `.mp-pdcl-a4-sign*`; `.mp-pdcl-date` promoted to heading weight.
+
+Notes: DayClose has no reason column and closeDay had no reason param (110 did not persist a variance reason to a column). Per CODEREF §C.1/§G (no schema/logic change) the reason is kept via the day-close audit record (§5 references "the day-close audit record") rather than a new column — additive, optional, arithmetic-frozen.
