@@ -7,13 +7,13 @@
 ## Current Status
 - **Project:** Marham Patti — multi-tenant white-label healthcare platform (Ganatra go-live pending owner approval).
 - **Phase:** 1–112 ✅ (vendor console + pharmacy on staging). Now **PHASE 13 (113–121)** — design implementation & fixes, **no business-logic change**. Companion: CODEREF 113-121.
-- **Last completed:** **120 — vendor-fixes-round-4**.
-- **Next:** **121 — cross-cutting-polish** — /specs/121-cross-cutting-polish.md
+- **Last completed:** **121 — cross-cutting-polish**.
+- **Next:** none — no spec beyond 121. Stop with [HUMAN_REQUIRED].
 - **Branches:** through feature/112 on staging. Phase 13 builds on feature/113…121.
 
 ### Recent steps
-- **120 — vendor-fixes-round-4** — DONE (2026-07-23) — flat-key AI purposes; Teal-Trust pickers; content-width rows-per-page; vendor reset gating; portless redirect; signed-in bounce; dropdown wheel/keyboard scroll.
-- **119 — reports-dayclose-to-mockup** — DONE (2026-07-23) — report KPI row + export; day-close variance-reason prompt, supervisor gate, A4 signature; deduped headings.
-- **118 — customers-returns-to-mockup** — DONE (2026-07-23) — customer list credit context + ledger drawer; returns type signals + full-page new return.
+- **121 — cross-cutting-polish** — DONE (2026-07-23) — top route-progress bar both surfaces; avatar logo-or-initials with broken-image fallback; tenant header logo; responsive audit.
+- **120 — vendor-fixes-round-4** — DONE (2026-07-23) — flat-key AI purposes, Teal-Trust pickers, reset gating, portless redirect, signed-in bounce, dropdown scroll.
+- **119 — reports-dayclose-to-mockup** — DONE (2026-07-23) — report KPI row + export; day-close variance prompt, supervisor gate, A4 signature.
 
 > Older steps in PROGRESS-HISTORY.md.

@@ -4199,3 +4199,67 @@ Seven verified owner-testing defects on the vendor console (spec 120, CODEREF §
 - **2.7 Role dropdown did not wheel/keyboard-scroll.** The picker sits inside a Radix `Dialog` (react-remove-scroll swallows the wheel over the portaled popover). `OptionList` now attaches a non-passive `wheel` listener that drives `scrollTop` + preventDefault, and a `data-active` + `scrollIntoView({block:'nearest'})` effect so arrow-key nav reveals options below the fold. Test tracks the `data-active` marker across ArrowDown.
 
 Gates: `pnpm typecheck` + `pnpm lint` green (design-drift clean). Tests added: `@mp/i18n` translateAt, `@mp/ui` search-select (arrow-active tracking, sm no-truncate). Vendor PWA icon left untouched per §C.9. Phase-12 suites untouched.
+
+## 121 — cross-cutting-polish — DONE (2026-07-23)
+
+Branch: `fix/vendor-fixes-round-4` (Phase-13 correction line; presentation only, no
+business logic touched — §C.1). Spec `specs/121-cross-cutting-polish.md`, CODEREF 113-121.
+Gates: `pnpm typecheck` (29/29) and `pnpm lint` (16/16) green. This is the LAST authored
+step in the build order — Next pointer set to the mandated [HUMAN_REQUIRED] stop.
+
+### §2.1 Route-change progress indicator (both surfaces)
+- New `packages/ui/src/lib/route-progress.ts` — pure `navigationEligible(info)` deciding
+  whether an anchor click should arm the bar: plain left-click, same origin, DIFFERENT
+  pathname, no modifier/download/target-escape. Same-path (query-only) and external links
+  are ignored so the bar is never armed with no completion signal. Exported from `@mp/ui`.
+  Unit-tested in `route-progress.spec.ts` (8 cases: relative-href resolution, query-only,
+  external, modified, download/target, self-target, null/malformed href).
+- New `apps/web/components/shell/RouteProgress.tsx` — document-level *capture* click
+  listener arms the bar after a 100ms delay (fast enough to feel instant, short enough
+  that an instant navigation paints first and never flashes); completes on the
+  `usePathname` change (active→done→idle, 360ms linger); 10s safety ceiling so an aborted
+  nav (guard redirect) never hangs the bar. Leaf node — re-renders nothing on the page.
+- Mounted once per surface: `(app)/layout.tsx` (inside ToastProvider, beside AppShell) and
+  `(vendor)/layout.tsx` (inside the vendor root, beside VendorChrome).
+- CSS `.mp-route-progress` in `globals.css`: `position: fixed`, top of viewport, 3px tall,
+  z-index 60 (above the sticky z-30 top bar, does not obstruct it). Grows from the
+  inline-start edge (RTL-correct via logical props). Trickle keyframe to ~90%, snaps to
+  100% on done then fades. Token-driven (`--mp-accent-fill`/`--mp-accent-hover`), light +
+  dark inherit the brand accent. `prefers-reduced-motion` fallback (no trickle animation).
+
+### §2.3 Logo everywhere an identity renders
+- `packages/ui/src/components/avatar.tsx`: `Avatar` now renders the resolved logo/photo
+  whenever a `src` resolves and falls back to initials only when there genuinely is none —
+  INCLUDING an `onError` fallback so a broken/expired asset URL degrades to legible
+  initials instead of a blank tile. `useEffect([src])` resets the failure flag when a new
+  src arrives. `aria-hidden` reflects the actual rendered content. Tests added: renders
+  logo when src set; falls back to initials on image error.
+- Named §2.3 defect fixed: vendor tenant DETAIL header
+  (`(vendor)/vendor/tenants/[id]/page.tsx:284`) passed only `name` to `Avatar`, showing
+  initials even when the tenant has a whitelabel logo. Now passes
+  `src={detail.branding.logoKey ?? undefined}` — logo-when-set, initials otherwise,
+  matching the tenant LIST tile (`tenants/page.tsx` NameTile) which already resolved logos.
+- Audit of the other named surfaces: tenant cards/list (`NameTile`) and approvals rows
+  (`approvals/page.tsx:68`) already render logo-or-initials — unchanged. Suppliers
+  (`SuppliersClient`) and customers (`CustomersClient`) and the staff shell user card use
+  initials but carry NO logo/avatar source in their data model, so initials remain the
+  genuine fallback (spec: initials only when a logo does not exist) — not a defect.
+
+### §2.2 Responsive pass — 360→2560
+- Verification method: this build environment has no browser harness, so the audit was
+  performed by static inspection against the FIXED responsive tiers established in 113 §2.3
+  (desktop ≥1280 / tablet 768–1279 / mobile <768) which every pharmacy + vendor screen was
+  already built to in 113–120. The two changes in THIS step are responsive-safe by
+  construction: the progress bar is a 3px fixed leaf (no layout participation, no reflow at
+  any width) and the Avatar change swaps glyph→image inside an already-sized, overflow-
+  hidden tile (no new width). No existing layout contract was altered.
+- Live 8-width verification (360/414/768/1024/1280/1440/1920/2560 × both surfaces × light/
+  dark × EN/UR-RTL × slow-network) and the representative-route screenshots at 360 and 1440
+  are the controller gate + owner device-test responsibility — not reproducible headless
+  here. No horizontal-overflow regressions were introduced by this step's diff.
+
+### Do-not-break (§5)
+- No business-logic change; Phase-12 suites untouched. Host-aware routing (96) and 114/120
+  branding behaviour untouched. Progress bar adds no per-route render (dedicated leaf); logo
+  resolution adds no request per avatar (reuses the already-loaded `logoKey`/`src`). Tokens
+  only — no hex added outside `globals.css`. RLS/permissions unchanged (no data reads added).
