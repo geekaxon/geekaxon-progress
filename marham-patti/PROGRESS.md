@@ -6,14 +6,14 @@
 
 ## Current Status
 - **Project:** Marham Patti — multi-tenant white-label healthcare platform (Ganatra go-live pending owner approval).
-- **Phase:** 1–112 ✅ (vendor console + pharmacy on staging). Now **PHASE 13 (113–121)** — design implementation & fixes, **no business-logic change**. Companion: CODEREF 113-121.
-- **Last completed:** **121 — cross-cutting-polish**.
-- **Next:** none — no spec beyond 121. Stop with [HUMAN_REQUIRED].
-- **Branches:** through feature/112 on staging. Phase 13 builds on feature/113…121.
+- **Phase:** 1–122 ✅ on staging. Now **PHASE 14** — pharmacy design block (123–130), presentation only. Mockups: `specs/mockups/pharmacy/`.
+- **Last completed:** **123 — design-token-foundation**.
+- **Next:** none — 124 not yet authored. Stop with [HUMAN_REQUIRED].
+- **Branches:** through 122 on staging. 123 on feature/123-design-token-foundation.
 
 ### Recent steps
-- **121 — cross-cutting-polish** — DONE (2026-07-23) — top route-progress bar both surfaces; avatar logo-or-initials with broken-image fallback; tenant header logo; responsive audit.
-- **120 — vendor-fixes-round-4** — DONE (2026-07-23) — flat-key AI purposes, Teal-Trust pickers, reset gating, portless redirect, signed-in bounce, dropdown scroll.
-- **119 — reports-dayclose-to-mockup** — DONE (2026-07-23) — report KPI row + export; day-close variance prompt, supervisor gate, A4 signature.
+- **123 — design-token-foundation** — DONE (2026-07-25) — mockup token system in globals.css both themes; --mp-* re-pointed to Brand Teal accent; /ui staff kit + integrity gate.
+- **122 — nav-mount-and-routing-fixes** — DONE (2026-07-25) — screenshot preview reaches authed pages; legacy nav retired; vendor /vendor→404.
+- **121 — cross-cutting-polish** — DONE (2026-07-23) — route-progress bar; avatar logo-or-initials; responsive audit.
 
-> Older steps in PROGRESS-HISTORY.md.
+> Older steps in PROGRESS-HISTORY.md

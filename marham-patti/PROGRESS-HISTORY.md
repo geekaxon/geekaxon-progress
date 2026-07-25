@@ -4263,3 +4263,76 @@ step in the build order — Next pointer set to the mandated [HUMAN_REQUIRED] st
   branding behaviour untouched. Progress bar adds no per-route render (dedicated leaf); logo
   resolution adds no request per avatar (reuses the already-loaded `logoKey`/`src`). Tokens
   only — no hex added outside `globals.css`. RLS/permissions unchanged (no data reads added).
+
+---
+
+## 122 — nav-mount-and-routing-fixes — DONE (2026-07-25)
+
+WORK TYPE: FIX (branch fix/122-nav-mount-and-routing-fixes). Phase 14 item 1. Mechanical owner-test fixes, no business-logic change. Gates: `pnpm typecheck` PASS (29/29), `pnpm lint` PASS (16/16, design-drift clean). Not run per CLAUDE.md: test:unit/e2e/build (controller runs them).
+
+### §2.1 Screenshot-token preview reaches authed pages (highest-leverage fix)
+- `apps/web/middleware.ts`: in the ALREADY-validated branch (token present + `screenshotBypassEnabled` (staging) + `screenshotTokenValid`), after stamping `x-mp-screenshot: read-only`, also set a client-readable cookie `mp_screenshot=1` (`httpOnly:false, sameSite:lax, secure:true, path:/, maxAge:120`). Set on NO other branch — non-staging/production never reach it (fail-closed).
+- `apps/web/lib/session.ts`: new `screenshotPreviewActive()` — true IFF `NEXT_PUBLIC_APP_ENV === 'staging'` AND the `mp_screenshot=1` cookie is present. Never trusts the cookie alone (env gate mirrors the server's fail-closed guarantee).
+- `apps/web/components/shell/AppShell.tsx`: route guard now `if (mounted && !hasSession() && !screenshotPreviewActive())` → skips the login redirect for a valid staging preview only. Read-only: suppresses the client redirect only; no session/bundle created, no server authority granted — RLS + server guard stack unchanged.
+- `.env.example`: documented `NEXT_PUBLIC_APP_ENV` (client-readable build env; must equal `staging` on staging for the bypass; unset/other → guard never skips).
+- Fail-closed proof: (a) APP_ENV unset/production → `screenshotBypassEnabled` false in middleware so the cookie is never set AND `NEXT_PUBLIC_APP_ENV !== 'staging'` so the guard never skips; (b) no cookie → identical to before; (c) stale/invalid token → middleware 403s before any cookie is set.
+
+### §2.2 Legacy nav retired — REFERENCE CHECK RESULT
+- Repo-wide search for route-path refs to `/inventory`, `/purchase`, `/transfer` (href/push/redirect/Link/tabs), excluding `.next` and API sub-paths (`/inventory/stock` etc. are API endpoints, not the web route):
+  - `/inventory` → referenced by `apps/api/src/notifications/notifications.realtime.service.ts` (LOW_STOCK, EXPIRY_NEARING `href: '/inventory'`). EXTERNAL REF → page KEPT.
+  - `/purchase` → referenced by same file (SUPPLIER_PAYMENT_DUE `href: '/purchase'`). EXTERNAL REF → page KEPT.
+  - `/transfer` → ONLY the nav registry + its own page dir; no tests, no other refs. → page deleted (`apps/web/app/(app)/transfer/` removed). (The `apps/api/.../transfer/*` backend module is unrelated and untouched.)
+- Removed all three entries from `NAV` in `apps/web/lib/nav.ts`. Kept `/inventory` and `/purchase` PAGES (notifications deep-link to them) — a broken route is worse than a stale file.
+- i18n keys `navInventory`, `navPurchase`, `navTransfer` were consumed ONLY by the nav registry (verified) → removed from both `packages/i18n/src/messages/en.json` and `ur.json` (parity preserved). dist is gitignored (rebuilt from src).
+
+### §2.3 Rx Desk re-grouped
+- `/rx-desk` moved from the `pharmacy` group to `clinic` (prescription review), gate `requiredFlag: 'pharmacy.pos'` UNCHANGED. Nav grouping only.
+
+### §2.4 Sidebar fit
+- After pruning three pharmacy entries the list is shorter; existing `.mp-shell-nav` scroll + scroll-into-view (113/116) already pin the user card. No CSS change needed.
+
+### §2.5 Exactly one POS grand total per breakpoint
+- `apps/web/app/(app)/pharmacy/pos/PosClient.tsx`: added `usePosWideLayout()` (matchMedia `(min-width:1280px)`, SSR-safe, starts narrow). Grand total is now MUTUALLY EXCLUSIVE and GUARDED IN JSX (not CSS): wide (≥1280) → in-panel `.mp-cartsum` renders (owns the breakdown + grand total), the pinned `.mp-pos-totalbar` renders WITHOUT its `.amt`; narrow (<1280, covers 390/768/1024) → `.mp-cartsum` does not mount, `.mp-pos-totalbar` shows the single grand total. Exactly one node carries the grand total at 390/768/1024/1440.
+- NOTE: `apps/web` has NO unit-test runner (no jest config; `turbo run test` skips it). The node-count guarantee is therefore enforced STRUCTURALLY — the two grand-total nodes render on complementary branches of the same `posWide` boolean, so exactly one can ever mount — and is visually confirmable via the now-restored screenshot pipeline (§2.1).
+
+### §2.6 Dark-mode card legibility
+- Source audit of every supplier-card selector in `apps/web/app/globals.css`: `.mp-pinv-card` (l.3550, `background: var(--mp-card)`), `.mp-card` (l.1515), `.mp-medcell b/small` (l.3814/15, `--mp-fg`/`--mp-muted-fg`), the table (`.mp-pinv-table*`) — ALL already resolve surface from `--mp-card` and text from `--mp-fg`/`--mp-muted-fg` (design system made dark-aware in 43/45; see the `.mp-card` comment). Every hardcoded `#fff` background in the file is a print/paper surface (`.mp-ppur-print`, `.mp-rcpt-paper`) paired with hardcoded dark text — intentional, not a dark-mode bug. No UNPAIRED light surface exists in the pharmacy CSS.
+- Genuine latent gap fixed at the token layer: `.mp-pinv-card` is a `<button>`, which does not reliably inherit `color`; it set its surface token but NOT its own text colour. Pinned `color: var(--mp-fg)` on it so the shared supplier/purchase card cluster resolves BOTH surface and text from the palette (light mode unchanged — `--mp-fg` light = the same dark ink). Any card using the class is fixed with it.
+- The reported white-on-white could not be reproduced from source (all selectors token-correct); the restored §2.1 screenshots let the owner confirm on the real deploy and, if it persists, pin the exact selector from a rendered capture.
+
+### §2.7 Vendor paths 404 on both hosts
+- `packages/ui/src/lib/surface-routing.ts`: added `isVendorChildPath()` (`/vendor/<x>` only; bare `/vendor` excluded). Vendor-surface allowlist now `'/' || isVendorChildPath || isVendorAllowedAuthPath` (was `isVendorPath`, which included the bare `/vendor`). Removed the `redirect-vendor` action from `SurfaceRoute` and `resolveSurfaceRoute` (now returns `not-found` for every disallowed path). `<apex>/vendor*` → 404 (was redirect); `vendor.<base>/vendor` exactly → 404; `vendor.<base>/` → still rewrites to `/vendor` console home; `vendor.<base>/vendor/*` children → still served.
+- `apps/web/middleware.ts`: removed the `redirect-vendor` case and the now-unused `normalizeBaseDomain`/`VENDOR_SUBDOMAIN` imports; updated the surface doc comment.
+- `packages/ui/src/lib/surface-routing.spec.ts`: updated the allowlist + full-matrix cases; the four §2.7 host×path outcomes are asserted (apex `/vendor`→not-found, vendor `/vendor`→not-found, vendor `/`→rewrite, vendor `/vendor/tenants`→pass).
+
+## 123 — design-token-foundation — DONE (2026-07-25) — WORK TYPE: FEATURE (branch feature/123-design-token-foundation)
+
+Presentation foundation for the PHASE-14 pharmacy redesign (123–130). No schema/RLS/endpoint/permission change. Spec: /specs/123-design-token-foundation.md. Mockup authority: specs/mockups/pharmacy/clinic-staff-components.html (unescaped its bundler-JSON string; read :root + [data-theme=dark] + component CSS verbatim).
+
+### §2.1 Token system → apps/web/app/globals.css (the only home of raw values)
+Replaced the old `@layer base` :root/html.dark blocks with the mockup's FULL token system at EXACT HTML values, keyed to the app's dark mechanism (html.dark class from @mp/ui ThemeProvider — the app does NOT use [data-theme]; only globals.css is imported by apps/web, styles.css is untouched/not loaded here):
+- Fonts: --font-sans (Inter stack), --font-mono.
+- Brand scale: --brand-teal #138c80, --brand-teal-hover #0f7268, --brand-teal-press #0b5c54, --teal #1ea7a2, --teal-deep #066e70, --mint #6ec8b8, --mint-bright #a6dacd, --ice #f7fcfa, --brand-gradient.
+- Grey ramp --grey-0…--grey-950; status --success/-soft --warning/-soft --danger/-soft --info/-soft.
+- Semantic light aliases: --page-bg/--surface-card/-raised/-sunken/-hover/-inset, --border-hairline/-strong/-focus, --text-primary/-secondary/-tertiary/-inverse/-link/-link-hover/-on-brand, --accent/-hover/-press/-soft, --focus-ring.
+- Type: --text-display..--text-2xs, --fw-*, --lh-*, --ls-* (incl --ls-caps .06em); spacing --space-0..16; radius --radius-xs..pill; --control-sm/md/lg (44px touch); shadows --shadow-xs..xl; motion --ease-standard/-out, --dur-fast/base/slow.
+- Kept shell geometry: --topbar-h 60px, --sidebar-w 248px, --sidebar-w-collapsed 68px, --content-max 1400px.
+- Dark (html.dark): full semantic overrides — near-black neutral (surface-card #171f21, raised #1c2528, sunken #0b1113, hover #232d30, inset #12292a; borders #26312f/#35423f; text #f2f5f6/#9aa8a6/#6c7b79; accent=--teal, hover=--mint, press #46b6b0, soft #12292a; status-soft dark-tuned; dark shadow set).
+
+### §2.1 --mp-* compatibility mapping (all resolve via var(); flip in dark automatically — no dark re-declaration)
+bg→page-bg; card→surface-card; surface-raised/sunken→same; muted→surface-hover (CORRECTED from spec's literal `--mp-muted: text-tertiary`: verified --mp-muted is used ONLY as a background fill, 31 uses, so it maps to a SURFACE, not a text colour); input-bg→surface-sunken; fg→text-primary; muted-fg→text-secondary; heading→text-primary; border→border-hairline; border-strong→border-strong; accent/-fill→accent, accent-hover→accent-hover, accent-on-fill→text-on-brand, accent-soft→accent-soft; radius→radius-lg; shadow-1/2/3→shadow-sm/md/lg; ok→success(-soft); warn→warning(-soft); danger→danger(-soft); amber→warning(-soft) (mockup does not distinguish amber); font-ui→font-sans; mono→font-mono; brand-font-display/body→font-sans. Auth tokens (--mp-auth-*), glass tint, logo-h left AS-IS (light-locked, AA-guarded, outside @layer base) per spec "keep definition".
+
+### Vendor/tenant dark-accent split (spec 92 preserved)
+Tenant accent is now Brand Teal (light) / --teal (dark). Vendor console is wrapped in `.mp-vendor-root`; added UNLAYERED overrides (win over @layer base regardless of specificity): `html.dark .mp-vendor-root` restores spec-92 Mint-Bright (--accent #a5e8e0, hover #8fded4, press #7bd0c6, soft mix 18%, --text-on-brand #0e1416 near-black on mint fill, links mint, --mp-heading #a5e8e0); `.mp-vendor-root` keeps a teal heading in light (--mp-heading: var(--teal-deep)). --mp-* read the overridden --accent family, so no --mp-* needs re-declaring. Purple drift: @mp/brand ships an indigo preset (#4F46E5) — that is white-label override territory (out of scope, still wins); the platform default is now deterministically Brand Teal at the token layer with zero per-screen edits.
+
+### §2.2 Inter / type — Inter @font-face already self-hosted (subset, swap); wired --font-sans→Inter and --mp-font-ui→--font-sans so all chrome uses it; Urdu Nastaliq strategy untouched. Base type scale applied to kit elements at exact mockup sizes (scoped to .mp-kit to avoid a platform-wide reflow in a token-only step; 124–130 apply to screens).
+
+### §2.3 Component kit — appended `.mp-kit`-scoped CSS to globals.css, EXACT mockup anatomy: Card/card--raised, StatCard+StatGrid (incl is-empty "—", tabular value, up/down/flat trend, tinted icon squares), table.tbl (uppercase header, num tabular right-align, hover, is-selected accent-soft, sortable), emptystate, status pills (active/pending/suspended/trial/archived), chip/badge--soft, buttons (primary/secondary/ghost/destructive, sm/lg 44px, disabled), input/selectbox/field (focus-ring, is-error, disabled), avatar + logotile(--fallback), drawer(420)/modal(460)/cl-scrim(rgba(14,20,22,.5)+blur), pgheader/crumb, sbdemo/tbdemo/cmdk/kbd. Scoped under .mp-kit so the mockup's generic names (.btn/.card/.input/.field/.pill) cannot collide with app `.mp-*` (verified: no bare generic classNames in the app).
+
+### §2.4 Gallery — apps/web/app/ui/StaffKit.tsx (server component) rendered after UiShowcase on /ui; every §2.3 atom at rest/disabled/empty/"—". Copy is illustrative design-reference fixture data in a local `s` map rendered via expressions (not product UI → not in @mp/i18n catalog; the i18n guard covers real surfaces). Direction follows document dir.
+
+### §2.5 Integrity gate — extended apps/web/scripts/design-drift-check.mjs (runs in `pnpm lint`): asserts globals.css @layer base declares the mockup semantic tokens in BOTH themes, and every --mp-* in the base layer resolves to a var(...) (no off-ramp literal). Vendor/auth literal overrides live outside @layer base and are intentionally exempt.
+
+### Gates — `pnpm lint` PASS (eslint + design-drift + token-integrity), `pnpm typecheck` PASS. Did not run test:unit/e2e/build (controller). Phase-12 logic untouched (presentation only).
+
+### Files: apps/web/app/globals.css (tokens + mp mapping + vendor split + .mp-kit kit), apps/web/app/ui/StaffKit.tsx (new), apps/web/app/ui/page.tsx (mount StaffKit), apps/web/scripts/design-drift-check.mjs (token-integrity check), PROGRESS.md.
