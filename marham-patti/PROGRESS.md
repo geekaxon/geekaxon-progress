@@ -2,18 +2,18 @@
 
 # PROGRESS.md — Marham Patti Build Tracker (SHORT)
 
-> SHORT tracker; full detail in PROGRESS-HISTORY.md (append-only). Keep under 1.5 KB. Each step ends `[CHECKPOINT]`; only stop is `[HUMAN_REQUIRED]`. A completed step is NEVER rebuilt — an empty or dangling "Next" means [HUMAN_REQUIRED], not an earlier step.
+> SHORT tracker; full detail in PROGRESS-HISTORY.md. Keep under 1.5 KB. A completed step is NEVER rebuilt — a dangling "Next" means [HUMAN_REQUIRED], not an earlier step.
 
 ## Current Status
-- **Project:** Marham Patti — multi-tenant white-label healthcare platform (Ganatra go-live pending owner approval).
-- **Phase:** 1–122 ✅ on staging. Now **PHASE 14** — pharmacy design block (123–130), presentation only. Mockups: `specs/mockups/pharmacy/`.
-- **Last completed:** **123 — design-token-foundation**.
-- **Next:** none — 124 not yet authored. Stop with [HUMAN_REQUIRED].
-- **Branches:** through 122 on staging. 123 on feature/123-design-token-foundation.
+- **Project:** Marham Patti — multi-tenant white-label healthcare platform.
+- **Phase:** **PHASE 14** — pharmacy design block (123–130), presentation only. Standing rule: mockup governs structure; colour/logo/name resolve from the tenant theme via @mp/brand (mockup teal is sample only). Mockups in `specs/mockups/pharmacy/`.
+- **Last completed:** **124 — mobile-shell-to-mockup**.
+- **Next:** none — 125 not yet authored. Stop with [HUMAN_REQUIRED].
+- **Branches:** through 123 on staging; 124 on feature/124-mobile-shell-to-mockup.
 
 ### Recent steps
-- **123 — design-token-foundation** — DONE (2026-07-25) — mockup token system in globals.css both themes; --mp-* re-pointed to Brand Teal accent; /ui staff kit + integrity gate.
-- **122 — nav-mount-and-routing-fixes** — DONE (2026-07-25) — screenshot preview reaches authed pages; legacy nav retired; vendor /vendor→404.
-- **121 — cross-cutting-polish** — DONE (2026-07-23) — route-progress bar; avatar logo-or-initials; responsive audit.
+- **124 — mobile-shell-to-mockup** — DONE (2026-07-25) — glass chrome vs desktop bar (one mounts); floating dock with count badges; mobile pattern library + gallery.
+- **123 — design-token-foundation** — DONE (2026-07-25) — mockup token system into both themes; legacy aliases re-pointed; Inter; core kit components + staff gallery; tenant palette verified.
+- **122 — nav-mount-and-routing-fixes** — DONE (2026-07-25) — screenshot preview reaches authed pages; legacy nav retired; one POS grand total per width; vendor stray route → 404.
 
 > Older steps in PROGRESS-HISTORY.md
