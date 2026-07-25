@@ -4357,3 +4357,20 @@ Branch feature/124-mobile-shell-to-mockup. WORK TYPE: FEATURE (presentation only
 **Gates.** `pnpm lint` (incl. design-drift + token-integrity checks) and `pnpm typecheck` both green. Did not run test:unit/e2e/build per AGENT.md (controller runs full gates).
 
 **Decisions/notes.** CounterControl + InstallApp are not shown in the mobile glass chrome (mockup header has no counter selector; they remain reachable on their own screens / the drawer). The dual-variant mount is JS-media-query driven (not CSS display:none) to satisfy the node-count contract. Breakpoint moved to 768 for the mobile tier (was 860 for the old tabnav) per spec §2.2/§2.3.
+
+---
+## 125 — pos-to-mockup — DONE (2026-07-25)
+**Branch:** feature/125-pos-to-mockup. **Type:** FEATURE (presentation; no business-logic change). Phase 14 / item 4. Spec: /specs/125-pos-to-mockup.md.
+
+**Scope done.** The desktop two-zone POS (search + `.psearch` results w/ stock signals, `.poscart`/`.pos-row` cart anatomy, `.cartsum`, shared kit `Keypad` matching `.keypad`, `PaymentPanel` w/ `.paymethods`/`.paysplit`/`.paychange`, `.heldstrip`/`.heldchip`) was already brought to the mockup in 116/122 — verified by inspection, left intact. The real gap was the **mobile POS**: PosClient rendered the desktop grid at every width. Built the mockup's one-thumb checkout on the 124 atoms.
+
+**Changes.**
+- `apps/web/app/(app)/pharmacy/pos/PosClient.tsx`: added `usePosMobileLayout()` (<768, matchMedia, SSR-safe). New JSX branch guarded by `posMobile`: `.mscan` scan-first bar (reuses search `/`-focus + Enter-adds; barcode wedge unchanged), reused `.mp-psearch-results` dropdown, `.mheld` resume chips, a `.mcart` of `.mline` rows (name + "Qty·price·batch" sub + line total + remove; tapping `.mline__id` opens the shared `Keypad` for qty via existing `activeQtyLine`), a `.mslider` quick-discount (native range over the painted track), and a FIXED `.mact.mact--above-dock` (wrapped in `.mp-mobile--live`) carrying the SINGLE grand total (`.mact__v`) + full-width Charge → `openPay`. Desktop grid + `.mp-pos-totalbar` now mount only when `!posMobile`; held drawer gated `!posMobile`. Node-count contract (122 §2.5) preserved: grand total lives in exactly one node per tier — mobile `.mact__v` / tablet `.mp-pos-totalbar .amt` / wide `.mp-cartsum .is-total`, each JSX-guarded.
+- `apps/web/app/globals.css`: ported the POS-only atoms the 124 shell skipped — `.mp-mobile .mcart`, `.mline__id` button reset (+focus ring), the full `.mslider*` set with a transparent `.mslider__input` range overlay (fill/thumb use logical `inset-inline-start` for RTL), `.mp-pos-mobile` flow column, `.mact .mp-btn{width:100%}`. All token-driven (`--accent`/`--teal`/`--m-card-brd`/`--surface-*`) — no sample teal; verbatim `#fff` thumb + neutral shadow match 124 precedent.
+- `packages/i18n/src/messages/{en,ur}.json`: added `pharmacyPos.discount.appliedToSubtotal` (EN+UR).
+
+**Untouched (Do-NOT-break):** sale commit/idempotency, FEFO, stock decrement, tax/discount arithmetic (`computePosCartTotals`), credit limits, prescription handling (102), PaymentPanel logic, 122 single-mount, 124 chrome/dock, 113 contract, `@mp/brand` resolution, 111 shortcuts. No schema, no RLS, no flag change.
+
+**Gates:** `pnpm lint` ✓ (incl. design-drift + token-integrity), `pnpm typecheck` ✓. Did not run test:unit/e2e/build per CLAUDE.md — controller runs full gates.
+
+**NEXT:** owner review gate. Owner deploys, compares POS to the mockup at desktop + mobile, releases 126 by updating the pointer. No released pointer → stop [HUMAN_REQUIRED].

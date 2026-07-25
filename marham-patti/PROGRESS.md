@@ -7,13 +7,13 @@
 ## Current Status
 - **Project:** Marham Patti — multi-tenant white-label healthcare platform.
 - **Phase:** **PHASE 14** — pharmacy design block (123–130), presentation only. Standing rule: mockup governs structure; colour/logo/name resolve from the tenant theme via @mp/brand (mockup teal is sample only). Mockups in `specs/mockups/pharmacy/`.
-- **Last completed:** **124 — mobile-shell-to-mockup**.
-- **Next:** none — 125 not yet authored. Stop with [HUMAN_REQUIRED].
-- **Branches:** through 123 on staging; 124 on feature/124-mobile-shell-to-mockup.
+- **Last completed:** **125 — pos-to-mockup**.
+- **Next:** none — owner review gate. Stop with [HUMAN_REQUIRED].
+- **Branches:** through 123 on staging; 124–125 on feature branches.
 
 ### Recent steps
+- **125 — pos-to-mockup** — DONE (2026-07-25) — mobile POS on 124 atoms: scan bar, cart lines, discount slider, fixed charge bar; one grand total per width.
 - **124 — mobile-shell-to-mockup** — DONE (2026-07-25) — glass chrome vs desktop bar (one mounts); floating dock with count badges; mobile pattern library + gallery.
 - **123 — design-token-foundation** — DONE (2026-07-25) — mockup token system into both themes; legacy aliases re-pointed; Inter; core kit components + staff gallery; tenant palette verified.
-- **122 — nav-mount-and-routing-fixes** — DONE (2026-07-25) — screenshot preview reaches authed pages; legacy nav retired; one POS grand total per width; vendor stray route → 404.
 
 > Older steps in PROGRESS-HISTORY.md
