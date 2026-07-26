@@ -2,18 +2,18 @@
 
 # PROGRESS.md — Marham Patti Build Tracker (SHORT)
 
-> SHORT tracker; full detail in PROGRESS-HISTORY.md. Keep under 1.5 KB. A completed step is NEVER rebuilt — a dangling "Next" means [HUMAN_REQUIRED], not an earlier step.
+> SHORT tracker; full detail in PROGRESS-HISTORY.md (append-only). Keep under 1.5 KB. Each step ends `[CHECKPOINT]`; only stop is `[HUMAN_REQUIRED]`. A completed step is NEVER rebuilt — a dangling "Next" means [HUMAN_REQUIRED].
 
 ## Current Status
 - **Project:** Marham Patti — multi-tenant white-label healthcare platform.
-- **Phase:** **PHASE 14** — pharmacy design block (123–130), presentation only. Standing rule: mockup governs structure; colour/logo/name resolve from the tenant theme via @mp/brand (mockup teal is sample only). Mockups in `specs/mockups/pharmacy/`.
-- **Last completed:** **125 — pos-to-mockup**.
-- **Next:** none — owner review gate. Stop with [HUMAN_REQUIRED].
-- **Branches:** through 123 on staging; 124–125 on feature branches.
+- **Phase:** 1–126 ✅. **PHASE 14** — pharmacy design block (126–131), presentation only. Chained: 126 shell/auth → 127 inventory → 128 purchase → 129 customers/returns → 130 reports → 131 prints. Standing rule: mockup governs anatomy; colour/logo/name resolve from the tenant theme via @mp/brand (default Teal Trust). Mockups in `specs/mockups/pharmacy/`.
+- **Last completed:** **126 — shell-global-and-auth**.
+- **Next:** **127 — inventory-to-mockup** — /specs/127-inventory-to-mockup.md
+- **Branches:** 126 on feature/126-shell-global-and-auth.
 
 ### Recent steps
-- **125 — pos-to-mockup** — DONE (2026-07-25) — mobile POS on 124 atoms: scan bar, cart lines, discount slider, fixed charge bar; one grand total per width.
-- **124 — mobile-shell-to-mockup** — DONE (2026-07-25) — glass chrome vs desktop bar (one mounts); floating dock with count badges; mobile pattern library + gallery.
-- **123 — design-token-foundation** — DONE (2026-07-25) — mockup token system into both themes; legacy aliases re-pointed; Inter; core kit components + staff gallery; tenant palette verified.
+- **126 — shell-global-and-auth** — DONE (2026-07-26) — no-flash auth gate, auth screens to mockup, debounced search, logo-surface + contextual-dock resolvers.
+- **125 — pos-to-mockup** — DONE (2026-07-26) — two-zone counter, keypad, payment panel, held carts, mobile POS.
+- **124 — mobile-shell-to-mockup** — DONE (2026-07-25) — glass chrome, floating dock + badges, mobile patterns.
 
 > Older steps in PROGRESS-HISTORY.md
