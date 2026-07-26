@@ -4462,3 +4462,44 @@ CSS: appended a spec-130 block to `apps/web/app/globals.css` — shared atoms (b
 Files: `apps/web/app/(app)/pharmacy/reports/ReportsClient.tsx`, `.../reports/ReportsCharts.tsx`, `.../day-close/DayCloseClient.tsx`, `apps/web/app/globals.css`, PROGRESS.md, PROGRESS-HISTORY.md.
 
 Gates: `pnpm lint` PASS (design-drift + token-integrity clean), `pnpm typecheck` PASS. Did not run test:unit/e2e/build per AGENT gate rules (controller runs full gates).
+
+## 131 — prints-to-mockup — DONE (2026-07-26) — feature/131-prints-to-mockup
+
+WORK TYPE: FEATURE (presentation only; no schema, no RLS, no business-logic change). Final step of the PHASE 14 pharmacy design block.
+
+### Goal
+Unify the print layer to the mockups' shared anatomy: ONE thermal paper system (`.paper`/`.paper--58`/`.paper--80` + `.rcpt__*`) and ONE A4 document system (`.invoice`/`.invtable`/`.invtot`/`.invoice__*`), with every printed document composing from a shared kit instead of forking its own markup. Six covered documents: POS thermal receipt (58/80), thermal refund, thermal Z, A4 purchase invoice, A4 debit note, A4 day-close Z.
+
+### What existed before (three thermal + three A4 systems)
+- Thermal: POS `mp-rcpt-*`; refund fully inline-styled (`mp-thermal-print`); thermal-Z `mp-pdcl-thermal-*`.
+- A4: purchase invoice `.mp-inv .invoice__*` (already the mockup BEM, the reference); debit note `mp-ppur-*`; A4-Z `mp-pdcl-a4`/`mp-pdcl-table`.
+- Print isolation forked three ways (two inline visibility-hacks + one global `.invoice-overlay` rule).
+- BUG surfaced: `mp-pdcl-doc`/`mp-pdcl-thermal`/`mp-pdcl-a4` and the refund slip used THEME vars (`--mp-card`/`--mp-surface`) → printed DARK in dark mode, violating the spec's light-only rule.
+
+### Decisions
+- Shared print kit lives in `@mp/ui` (packages/ui/src/components/print-kit.tsx) — that IS "the kit" and already has jest+jsdom+RTL test infra. Components are PURE / prop-driven (no i18n, no theme, no hooks): callers pass localised strings + resolved branding, so identity can only be the tenant's — nowhere to hardcode a platform name. Exported from packages/ui/src/index.ts.
+  - Thermal: PrintStyle, PaperDesk, PaperWrap, Paper, RcptLogo, RcptHead, RcptHr, RcptRow, RcptItem, RcptFoot, RcptBarcode.
+  - A4: InvoiceDoc, InvoiceHead, InvoiceMeta, InvTable, InvTot, InvTotRow, InvoiceFoot, InvoiceSign.
+  - Helpers: isRenderableLogo, type PrintBranding.
+- CSS: added the mockup-exact `.paperdesk`/`.paperwrap`/`.paperwrap__cap`/`.paper`(+`--58`/`--80`, serrated ::before/::after)/`.rcpt__*` block to apps/web/app/globals.css (pharmacy print CSS lives there, matching the existing `.mp-inv .invoice__*` block which the A4 kit reuses unchanged). Slip inks FIXED (#fff/#141a1f) → light-only print; a print @media hides the serrations + shadow. The `.paperdesk`/`.paperwrap` preview framing stays theme-aware (on-screen only).
+- Single print isolation: `<PrintStyle/>` emits `@media print` hiding all but the active `.mp-print-surface` (carried by Paper and InvoiceDoc) and any `.mp-no-print` chrome. Replaced all three forked isolators.
+- InvoiceDoc renders an OUTER `.mp-inv .mp-print-surface` wrapper with an INNER `.invoice`, so the descendant selector `.mp-inv .invoice` (the base white-sheet rule) matches on its own — needed for the A4-Z which has no `.mp-inv` host overlay. (Purchase/debit overlays keep their own `.mp-inv`; the extra wrapper is harmless.)
+
+### Files changed
+- packages/ui/src/components/print-kit.tsx (NEW) — the kit.
+- packages/ui/src/components/print-kit.spec.tsx (NEW) — two-tenant identity proof (jest+RTL, renderToString-free): both document families render tenant name/address/logo, differ across two tenants, and never leak the mockups' sample "Marham Patti"; logo→<img> when renderable else initial / neutral A4 mark; isRenderableLogo cases.
+- packages/ui/src/index.ts — export the kit.
+- apps/web/app/globals.css — shared thermal system + print rule.
+- apps/web/app/(app)/pharmacy/pos/ThermalReceipt.tsx — POS receipt → PaperDesk/PaperWrap/Paper + Rcpt*; PrintStyle; dropped local isRenderableLogo.
+- apps/web/app/(app)/pharmacy/returns/ReturnsClient.tsx — refund → Paper+Rcpt*; debit note → InvoiceDoc kit (overlay gains `mp-inv`); removed now-dead Barcode/ThRow/Rule helpers.
+- apps/web/app/(app)/pharmacy/purchase/PharmacyPurchaseClient.tsx — purchase invoice → InvoiceDoc kit; PrintStyle; actions `mp-no-print`.
+- apps/web/app/(app)/pharmacy/day-close/ZReport.tsx — thermal-Z → Paper+Rcpt*; A4-Z → InvoiceDoc/InvoiceHead/InvTable/InvoiceSign/InvoiceFoot (now light-only), keeping the Z-specific `mp-pdcl-a4-vs` variance banner + `mp-pdcl-a4-grid` reconciliation grid + `mp-pdcl-thermal-vs` tone (no shared-anatomy equivalent); shared PrintStyle; brandOf() flattens branding to PrintBranding.
+
+### Content parity / do-not-break
+Every printed figure, line, tax, refund, variance and signature field maps 1:1 to the prior markup (presentation only). Data builders (buildThermalReceipt/buildZReport/purchaseInvoice/refund/debit views) untouched — the existing api specs asserting "no hardcoded Marham Patti" still hold. resolveBrand + whitelabel fallback semantics unchanged. Legacy `mp-rcpt-*`/`mp-pdcl-thermal-*`/`mp-ppur-*-print` CSS is now unreferenced (left in place; harmless) — the design-drift + token-integrity checks pass.
+
+### Gates
+`pnpm typecheck` — green (29/29). `pnpm lint` — green (design-drift: no retired atoms; token-integrity ok). No schema change → no prisma. Did not run test:unit/e2e/build per standing rules (controller runs full gates).
+
+### Phase 14 end
+This is the last authored step. PROGRESS.md Next set to the mandated stop line. No spec 132+ exists; if handed another step, respond `[HUMAN_REQUIRED]`.
