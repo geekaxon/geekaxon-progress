@@ -4393,3 +4393,23 @@ i18n: added `shellLoading`, `pwReqLength`, `pwReqMix`, `staffAuthFoot` to en.jso
 Deferred (spec breadth > one session, recorded honestly): §2.2 full `.sbdemo/.tbdemo/.pgheader` re-class of the live shell; §2.4 mobile cart `.mcart/.cartsum/.mact--float` rebuild (POS already consumes `.mcart` from 125); §2.3 wiring the new skeleton classes into every real list/drawer. All are presentation-only follow-ups on top of what shipped here.
 
 Files: apps/web/components/shell/AppShell.tsx; apps/web/app/(auth)/login/{AuthShell,StaffLoginForm,PasswordField,page}.tsx; apps/web/app/(auth)/login/reset/ResetForm.tsx; apps/web/components/brand/SidebarBrand.tsx; apps/web/lib/nav.ts; apps/web/app/ui/StaffKit.tsx; apps/web/app/globals.css; packages/ui/src/components/search-field.tsx; packages/brand/src/index.ts; packages/i18n/src/messages/{en,ur}.json.
+
+## 127 — inventory-to-mockup — DONE (2026-07-26)
+Branch: feature/127-inventory-to-mockup. WORK-TYPE: FEATURE (presentation only; no business-logic change). Spec /specs/127-inventory-to-mockup.md; mockup specs/mockups/pharmacy/inventory-purchase-suppliers.html (Screen 1).
+
+Scope: brought Pharmacy → Inventory to the approved mockup. Rewrote apps/web/app/(app)/pharmacy/inventory/PharmacyInventoryClient.tsx to the mockup's exact classes and ported their CSS into apps/web/app/globals.css under a new `.mp-inv` scope (desktop) + `.mp-mobile` (mobile cards).
+
+Decisions:
+- Class strategy: live screens use global mp-* classes and the detail/edit UI renders through the @mp/ui Radix Drawer PORTAL (outside any page root). So all mockup classes were scoped under `.mp-inv` and that scope is carried both on the page root AND on every DrawerContent (className="mp-inv") so styles reach the portal. Mobile atoms (minv/msig) added under `.mp-mobile` beside the 124 kit; mkpis/mfab/mlabel/mscan reused as-is.
+- Kept @mp/ui primitives (Button/Input/NativeSelect/Switch/Drawer) for behaviour + a11y (focus trap, Esc, DrawerTitle/Description via asChild); mockup's .btn/.input/.selectbox/.switch NOT globalised (avoids app-wide blast radius).
+- Collapsed the spec-104 working-view TABS (catalog/low/expiry, backed by /low-stock + /near-expiry endpoints) into the mockup's single chip-filtered list (Low/Expiring/Out are client-side filters over the loaded catalog — same predicates as before: lowStock, expiryBand!=='OK', outOfStock). Those API endpoints + 104 alert events are untouched server-side; only this screen no longer calls the two extra reads. No web unit tests pinned the tabs (none exist).
+- Added client-side pagination (PAGE_SIZE=25) rendered as the mockup `.pagination`/`.pgbtn` with ellipsis; queries/sorting/filtering unchanged (server behaviour untouched).
+- Sortable headers (name/stock/expiry) replace the sort <select>; category stays a NativeSelect.
+- Dual-variant single-mount via useIsMobile() matchMedia(max-width:767.98px) (CODEREF 113-121 §C.5): desktop table vs mobile .minv cards, never both. Tablet (768–1279) renders the desktop table with horizontal scroll + sticky first column (media query).
+- Detail drawer: pdrawer__hd/body/foot, alert--warning/error banner, kv details incl. computed Margin, FEFO block (.fefo__row is-soon/is-crit, soonest first — ordering from API unchanged), movement history (.hist). Add/edit: .field/.formgrid/.col-2/.switchrow with .req. Mobile FAB (.mfab) for add.
+
+i18n: added pinvFilterAll, pinvMargin, pinvPageInfo, pinvPrevPage, pinvNextPage to en.json + ur.json (EN/UR parity).
+
+Notes: the old spec-103/117 `mp-pinv*`/`mp-medcell`/`mp-fefo`/`mp-cpill` etc CSS in globals.css is now unused by this screen but left in place (harmless; removal deferred to avoid churn). Tokens only — no hex outside globals.css; palette resolves from tenant theme via @mp/brand.
+
+Gates: `pnpm typecheck` PASS (29/29). `pnpm lint` PASS incl. design-drift (no retired .mp-* control atoms) + token-integrity + EN/UR parity. Did not run test:unit/e2e/build (controller runs full gates).
