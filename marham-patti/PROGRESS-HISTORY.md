@@ -4503,3 +4503,26 @@ Every printed figure, line, tax, refund, variance and signature field maps 1:1 t
 
 ### Phase 14 end
 This is the last authored step. PROGRESS.md Next set to the mandated stop line. No spec 132+ exists; if handed another step, respond `[HUMAN_REQUIRED]`.
+
+## 132 — component-reference-and-shell — DONE (2026-07-27) — feature/132-component-reference-and-shell
+WORK TYPE: FEATURE. Phase 15 item 1: the shared kit + tenant shell to the new `component-reference.html`, built first so 133/134 inherit it.
+
+Scope assessment: the token foundation from 123–131 already matches the new reference almost 1:1 (brand-teal ramp, cool-grey neutrals, semantic aliases, spacing/radii/shadows, `--sidebar-w` 248 / `--sidebar-w-collapsed` 68 / `--topbar-h` 60, control heights) and the kit components already exist in `packages/ui` (no forks). So 2.1 was largely a no-op restyle; the real delta was the shell (2.2), whitelabel (2.3), language (2.4), gallery (2.5), and the two explicitly-named component behaviours.
+
+Delivered:
+- Sidebar collapse/pin (2.2, Acceptance 5): new `apps/web/lib/sidebar-pref.ts` — per-user (`me.userId`) localStorage persistence, read in a `useLayoutEffect` before first paint (no flash), deterministic `false` on SSR/first render. `data-collapsed` on `.mp-shell`; a PanelLeft toggle in the sidebar brand row; a `@media (min-width:1024px)` collapsed rail (icons only — labels/group headings/wordmark/counts/user-meta hide) using `--sidebar-w-collapsed`. Below 1024 the sidebar is the existing off-canvas drawer, so the rail never applies.
+- Top-bar title (2.2, Acceptance 6): the active screen's title (from the nav registry) + tenant-name eyebrow now render in the desktop top bar (`.mp-shell-topbar-title`), replacing the spacer. Pages keep their own bodies; ripping the large in-body title block out of every screen is left to 133/134 as each screen is redone.
+- Keyboard-shortcuts modal (2.2, Acceptance 6): new `components/shell/ShortcutsModal.tsx` — a top-bar Keyboard button opening the shared centred `Dialog` (already `left-1/2 top-1/2 -translate`, satisfying the centred requirement of Acceptance 4) with a token-styled `.mp-kbd` reference.
+- Language (2.4, Acceptance 8): removed `<LanguageSwitcher/>` from the staff shell top bar (desktop + mobile) and from the `/ui` gallery shell; dropped the gallery RTL note. i18n framework fully intact (catalogs, provider, parity gate) — English values only on the shell. Did NOT touch vendor/platform chrome (Do-NOT-break), the Settings i18n demo page, EntranceChrome, invite, or auth (auth is 133).
+- Whitelabel (2.3, Acceptance 7): `(app)/layout.tsx` now `generateMetadata()` resolving the tenant via `getTenantBrand()` — `<title>` = tenant appName, favicon = tenant mark when uploaded else `/icon.svg` (which derives from the platform Insignia via `@mp/brand`). Scoped to the `(app)` group so vendor/platform/patient are untouched. NOTE: a favicon derived from the *tenant's* Insignia specifically would need a new field on `/vendor/host-branding` (endpoint change forbidden this step), so it uses the tenant logo → platform-insignia fallback available today.
+- Searchable-select "+ add new" (2.1, Acceptance 2): added optional `onAddNew`/`addNewLabel` to `SearchSelect` — a create row pinned under the list, shown even when the filter empties (doubles as the empty-state recovery action); fires + closes. "Name (subtitle)" rows already exist via `SelectOption.hint`; clearable + caller-defined empty (`emptyText`) already present. New jest test in `search-select.spec.tsx`.
+- Gallery (2.5): `/ui` shell demo updated (no switcher, English-only).
+
+New i18n keys (en+ur, parity kept): shellCollapseSidebar, shellExpandSidebar, shellShortcuts(+Title/+Hint), shellShortcutSearch/Nav/Theme/Sidebar/Close.
+
+Deferred / not this step (recorded, not blocking):
+- Acceptance 3 (calculator quantity control: keypad-on-click + clear-to-zero-doesn't-remove-until-blur) is a POS cart part; the shared `keypad` primitive exists but the cart-line zero-blur behaviour belongs to the POS redo (134). Not implemented here.
+- Full per-screen migration of the in-body title block → top bar happens as each screen is rebuilt (133/134+).
+
+Gates: `pnpm lint` (incl. design-drift + token-integrity checks) and `pnpm typecheck` both green. No schema/prisma change; no endpoint/RLS/permission change; the 113 layout contract, 122 screenshot preview and AppShell guards untouched. Did not run test:unit/e2e/build (controller runs full gates).
+Files: apps/web/lib/sidebar-pref.ts (new), components/shell/ShortcutsModal.tsx (new), components/shell/AppShell.tsx, app/(app)/layout.tsx, app/ui/UiShowcase.tsx, app/globals.css, packages/ui/src/components/search-select.tsx (+spec), packages/i18n/src/messages/en.json + ur.json.

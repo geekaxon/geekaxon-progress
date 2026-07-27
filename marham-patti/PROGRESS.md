@@ -5,15 +5,13 @@
 > SHORT tracker; full detail in PROGRESS-HISTORY.md. Keep under 1.5 KB. A completed step is NEVER rebuilt — a dangling "Next" means [HUMAN_REQUIRED], not an earlier step.
 
 ## Current Status
-- **Project:** Marham Patti — multi-tenant white-label healthcare platform.
-- **Phase:** **PHASE 14** — pharmacy design block (122–131), presentation only. Standing rule: mockup governs structure; colour/logo/name resolve from the tenant theme via @mp/brand (default Teal Trust). Mockups in `specs/mockups/pharmacy/`.
-- **Last completed:** **131 — prints-to-mockup**.
-- **Next:** none — no spec beyond 131. Stop with [HUMAN_REQUIRED].
-- **Branches:** through 126 on staging; 131 on feature/131-prints-to-mockup.
+- **Project:** Marham Patti — multi-tenant white-label health platform.
+- **Phase:** 1–132 ✅. **PHASE 15** — tenant redesign v2 to new mockups (`specs/mockups/pharmacy/`), chained 132 shell → 133 auth → 134 POS. Rules: English only (no switcher/RTL, i18n framework kept); mockup governs structure, tenant settings govern colour/logo/name via @mp/brand (default Teal Trust); logic frozen bar 134's additions.
+- **Last completed:** **132 — component-reference-and-shell**.
+- **Next:** **133 — auth-screens-to-mockup** — /specs/133-auth-screens-to-mockup.md
+- **Branches:** through 132 on staging; 133 → feature/133-auth-screens-to-mockup.
 
 ### Recent steps
-- **131 — prints-to-mockup** — DONE (2026-07-26) — shared @mp/ui print kit (one thermal + one A4 system); all six documents composed from it, light-only print, two-tenant identity test.
-- **130 — reports-dayclose-to-mockup** — DONE (2026-07-26) — KPI strip + gradient sales chart + split bars + panel grid; day-close totals, denom counter, three variance states.
-- **129 — customers-returns-to-mockup** — DONE (2026-07-26) — credit bar + over-limit ledger drawer, add-customer credit switch, sale/purchase return flows, thermal refund + A4 debit note.
-
-> Older steps in PROGRESS-HISTORY.md
+- **132 — component-reference-and-shell** — DONE (2026-07-27) — per-user collapse/pin rail, top-bar title, shortcuts modal; English-only shell; tenant title+favicon.
+- **131 — prints-to-mockup** — DONE (2026-07-26) — shared thermal 58/80 + A4 document kit; six documents; two-tenant whitelabel proof.
+- **130 — reports-dayclose-to-mockup** — DONE (2026-07-26) — report hub composition; day-close anatomy with the three variance states; Z-reports.
