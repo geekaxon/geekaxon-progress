@@ -4542,3 +4542,65 @@ Decisions & changes:
 Gates: `pnpm typecheck` and `pnpm lint` both pass (29/29 typecheck; web lint incl. design-drift + token-integrity clean; the single pre-existing @mp/api no-explicit-any warning is unrelated). Did not run test:unit/e2e/build per standing rules — controller runs full gates.
 
 Files: apps/web/app/(auth)/login/{AuthShell.tsx (TenantLock export, no toggle), StaffLoginForm.tsx, PasswordField.tsx (leadingIcon), page.tsx (fixed subtitle), reset/ResetForm.tsx (full family), reset/page.tsx unchanged}; apps/web/app/tenant-gate/page.tsx (notFound for dead host); apps/web/app/ui/StaffKit.tsx (gallery lockup); apps/web/app/globals.css (tenant-lock/slot-tag/spinner); apps/web/lib/surface-routing.ts (re-export); packages/ui/src/lib/surface-routing.ts + .spec.ts (tenantGateOutcome); packages/i18n/src/messages/{en,ur}.json.
+
+## 134 — pos-to-mockup-v2 — DONE (2026-07-27) — branch feature/134-pos-to-mockup-v2 (FEATURE)
+
+Phase 15 item 3, the LAST authored build step. Re-skin of the pharmacy POS to the v2 mockups
+(specs/mockups/pharmacy/pos-desktop.html + pos-mobile.html; component-reference.html for anatomy)
+plus the named behaviour additions §2.2–2.6. English only; tenant accent + light/dark from tokens;
+frozen 101/102 logic (FEFO, stock decrement, totals, credit, rx, idempotency) untouched.
+
+Named behaviours delivered:
+- §2.2 Search: debounced auto-search ~1s after typing stops (SEARCH_DEBOUNCE_MS) AND the existing
+  button/Enter trigger; a Spinner shows while in flight; a sequence-number + in-flight-query guard
+  keeps only the latest response and blocks duplicate concurrent requests. Results reserve
+  scroll-padding at both ends (.mp-psearch-results) so keyboard selection is never obscured; the
+  "Expires soon" signal + a keyboard-hint footer (↑↓ / ↵ / esc / N matches) render per the mockup.
+- §2.3 Calculator quantity: +/- buttons clamp at 1; direct entry / keypad may clear to zero and the
+  line is KEPT until blur (blurQty removes a still-empty line on blur). Discount control shows the
+  "Apply discount" + "Applied to Rs …" + "− Rs …" context; discount arithmetic unchanged.
+- §2.4 Customer: a bespoke controlled searchable select (CustomerPicker) — options Name (Phone),
+  empty = walk-in, clearable. "+ Add customer" opens a Dialog quick form PRE-FILLED from the typed
+  text (built custom because @mp/ui SearchSelect does not surface its query); saves via the EXISTING
+  107 POST /pharmacy/customers + validation and auto-selects. Credit limit + over-limit gauge
+  (.mp-pos-creditbar) render from existing data; credit rules/gating unchanged. The selected
+  customer id now links a credit sale to its 107 ledger (the seam 102 deferred).
+- §2.5 Back-dated sale — permission-gated, server-enforced, audited:
+  * new permission pharmacy.backdateSale in the shared catalog (permissions.ts), flag-gated on
+    pharmacy.pos, default-granted to TENANT_OWNER (auto, TENANT scope) + ADMIN + MANAGER only;
+    reconciled additively on boot.
+  * DTO CommitPosSaleInput gains optional saleDate (YYYY-MM-DD, validated by optionalSaleDate);
+    optional so frozen pos-checkout/dayclose specs compile untouched.
+  * controller PharmacyPosController now injects PermissionService + AuditService (added AuditModule
+    to PharmacyModule imports): a non-today saleDate is rejected with 403 unless the actor holds the
+    permission (can()); every genuine, non-replayed back-dated commit writes an AuditLog
+    (pharmacy.pos.sale.backdated: actorId, chosen saleDate, today).
+  * service threads the date via backdatedSaleAt(): a non-today date becomes the sale's `now` so
+    createdAt (repo createSale now stamps createdAt too), business date and day-close accrual all
+    land on the chosen day — day-close/reporting/FEFO arithmetic unchanged. UI: a manager-only
+    "Sale date" control renders ONLY when usePermission('pharmacy.backdateSale') is true.
+- §2.6 Payment: PaymentPanel rewritten as centred Dialog body (Amount due hero, Method targets,
+  Exact chip, Amount tendered + shared Keypad, Change due, Confirm/Cancel). Payment/credit/rx/FEFO/
+  idempotency behaviour byte-identical to 102 — same @mp/shared settlement math drives Confirm.
+- §2.7 Mobile: scan bar + sale-context (customer + sale date) + cart feed + fixed charge bar that
+  OWNS the single grand total at <768 (.mact__v); breakpoint-guarded so exactly ONE grand-total
+  node exists at every width (122 invariant preserved: wide → .mp-cartsum, tablet → .mp-pos-totalbar,
+  mobile → .mact__v).
+- §2.8 Title/hint moved to the 132 shell top bar; page.tsx no longer renders the large body title
+  block. Shortcuts: added pos.focusQtyLast (Alt+Q, "Focus quantity of last line") to the shared 111
+  map + i18n; the POS ShortcutsHelp lists the real effective map.
+
+i18n: added pharmacyPos.v2.* (61 keys) to en.json AND ur.json (English values; English-only app,
+parity preserved — verified 3777 == 3777 keys) + pharmacyShortcuts.action.pos.focusQtyLast.
+CSS: ~112 lines appended to globals.css for the new POS v2 classes, tokens only (design-drift +
+token-integrity checks pass).
+
+Scoping decisions (recorded, owner reviews the 132→134 block later per §6):
+- The shell account-menu dropdown (My profile / My sales today / Log out) was NOT rebuilt: it is
+  shared top-bar chrome (a 126/132 concern touching every page), and the appearance toggle +
+  shortcuts modal already live in the 132 top bar. Deferred to the shell block, not forked here.
+- Mobile customer chooser + payment use the shared popover/centred Dialog rather than bespoke
+  full-screen sheets; functional and themed, visual polish deferred to the consolidated pass.
+
+Gates: pnpm typecheck PASS (29/29); pnpm lint PASS (0 errors; 1 pre-existing unrelated warning in
+doctor-portal). No schema change (no prisma generate). test:unit/e2e/build left to the controller.
