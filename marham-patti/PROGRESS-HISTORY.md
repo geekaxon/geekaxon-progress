@@ -4604,3 +4604,36 @@ Scoping decisions (recorded, owner reviews the 132→134 block later per §6):
 
 Gates: pnpm typecheck PASS (29/29); pnpm lint PASS (0 errors; 1 pre-existing unrelated warning in
 doctor-portal). No schema change (no prisma generate). test:unit/e2e/build left to the controller.
+
+## 135 — kit-shell-visual-match — DONE (2026-07-28) — branch feature/135-kit-shell-visual-match — WORK-TYPE: FIX (presentation only)
+
+Spec: /specs/135-kit-shell-visual-match.md. Phase 16 item 1 — the visual-fidelity pass over the kit + shell that 136/137 inherit. Presentation only; no behaviour, data, endpoint, RLS or permission change.
+
+### Tooling note (comparison surface)
+The authoritative reference `specs/mockups/pharmacy/component-reference.png` is 1600x17711 — ImageMagick refused it (height policy 16KP and, even raised, a libpng decode failure), and Pillow/pip are unavailable. Wrote a pure-Python zlib PNG decoder (`/tmp/pngcrop.py`) to crop regions at native resolution and inspect them via the Read tool. That is how the shell/nav comparison in this step was done (no live browser in this environment; the 122 screenshot preview needs a running staging server). Deeper per-component screenshot diffing of the full kit is best done against a deployed build.
+
+### §2.3 — Duplicate logo mount FIXED (the one concrete bug; asserted structurally by node count)
+`apps/web/components/brand/Logo.tsx` used to ship BOTH the light-ink and dark-ink platform marks and hide one with `.mp-logo-{light,dark}` display:none — two `<img>` nodes in the DOM per slot, and on the light-locked auth card both could paint. Reworked to mount EXACTLY ONE `<img>`:
+- src = `platformLogo(variant, mode)` where `mode` = the resolved theme (`useTheme().resolved` from @mp/ui), or a forced `surface` prop for fixed-surface contexts.
+- New `surface?: LogoMode` prop. The auth card is light-locked in both themes, so `AuthShell.tsx` now passes `surface="light"` → always the dark-ink lockup that reads on a light card.
+- Tenant-override branch was already a single `<img>` — unchanged.
+Removed the now-dead `.mp-logo-light` / `.mp-logo-dark` / `html.dark ...` / prefers-color-scheme swap rules from globals.css; left a single `.mp-logo { display:inline-block }`. Every logo slot (auth, sidebar, prints, vendor, invite, entrance) now renders one node via the shared component. Node count is guaranteed structurally: the component has one return `<img>` per branch. NOTE: apps/web has no jest/vitest harness (packages/ui uses jest; apps/web defines no `test` script, so `turbo run test` skips it), so a runtime node-count assertion could not be added without standing up a test runner — out of scope for a presentation fix; the guarantee is by construction and code review.
+Minor tradeoff: a single JS-selected `<img>` can show a one-frame light logo for a stored-dark shell before the ThemeProvider effect runs (client component, no hydration mismatch since SSR + first client render both compute 'light'). Accepted per the spec's explicit "assert by node count, not by eye" priority.
+
+### §2.2 — Sidebar nav matched to the reference crop
+Compared the native-res crop of the expanded sidebar against `.mp-shell-nav*` in globals.css. The shell was already close (design-v2: white sidebar lifted off grey, subtle active wash). Corrections to match the PNG:
+- Active navlink: removed the `inset 0.15rem 0 0` left accent bar → a clean uniform filled teal-wash pill (light + dark), matching the reference. Radius 0.5rem→0.625rem, padding nudged. Active icon now inherits the accent (`currentColor`); inactive icons are muted (`--mp-muted-fg`) as in the mockup.
+- Count badge `.mp-shell-navcount`: neutral grey → amber (`--mp-amber-bg`/`--mp-amber-fg`), matching the amber "12" on Inventory in the reference. Active-row override unchanged.
+
+### §2.1 / §2.4 — Kit + gallery
+The component kit (`packages/ui/src/components/*`) and `/ui` gallery already carry the design-v2 token styling from 132 and read close to the reference on inspection; no forks. No blind restyles were made to components I could not visually diff in a browser, to avoid unverifiable regressions on a presentation-only step — the highest-confidence, reference-driven corrections (logo, sidebar nav) were applied and the rest left on its existing token styling. Deferred deeper per-component pixel diffing to a deployed-build screenshot pass.
+
+### Deliberate deviations recorded (acceptance §1)
+- No automated node-count test (harness absent, see above) — guarantee is structural.
+- Full per-component screenshot-diff not performed in-session (no browser/decoder for the reference at native res beyond the custom cropper) — shell + logo done to the reference; kit left on its 132 token styling.
+
+### Gates
+`pnpm lint` PASS (incl. web design-drift: no retired .mp-* atoms; token-integrity: every --mp-* resolves in both themes — so no raw hex leaked outside globals.css). `pnpm typecheck` PASS (@mp/web cache miss, clean). Did not run test:unit/e2e/build per CLAUDE.md — controller runs full gates.
+
+### Do-not-break honoured
+Behaviour frozen: searchable select, calculator qty, collapse/pin persistence, shortcuts modal untouched. 113 layout contract, 122 preview, @mp/brand resolution, single nav registry all intact. No schema/RLS/permission/endpoint change.
