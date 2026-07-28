@@ -4821,3 +4821,40 @@ Diagnosed per §1.1: the JSON body-size limit, NOT the app's 512 KB rule. Fix is
 
 ### Gates
 - `pnpm typecheck`: pass (29/29). `pnpm lint`: pass (web incl. design-drift + token-integrity; the one API warning is a pre-existing unused eslint-disable in doctor-portal.repositories.ts, unrelated). Did not run test:unit/e2e/build per standing rules (controller runs full gates). Existing branding specs unchanged and green in prior runs.
+
+## 140 — identity-rendering-everywhere — DONE (2026-07-28) — feature/138-error-system-states
+
+WORK TYPE: FEATURE. Rendering side of branding (139 = configuration side). Owner review gate at the end.
+
+### What / why
+Owner reported initials appearing even when a tenant uploaded a logo. Root cause: after 139, `logoKey` = the HORIZONTAL lockup, so a tenant who uploads only an Insignia leaves `logoKey` null → list/avatars fall back to initials. 140 renders the INSIGNIA (139's compact square variant) in every identity slot, with a single shared component and the 75% inset rule.
+
+### One shared component (Acceptance §5)
+- NEW `packages/ui/src/components/identity-mark.tsx` — `<IdentityMark>`. Resolution order: pre-resolved `src` → insignia from `assets` via `resolveTenantAsset` (139 cross-theme fallback) → initials. §2.2 75% inset: img at `size-[75%] object-contain`, centred, container size unchanged (never cropped/stretched, aspect preserved). §2.4 AA initials: `legibleInk(bg)` picks dark ink or white, whichever clears AA — never white-on-white; default neutral `bg-muted/text-heading` (auth-contrast-guarded) when no entity palette. shape circle|square; sizes xs/sm/md/lg (lg=48px ≥44px target). onError → initials so a dead link never blanks a tile.
+- `Avatar` re-implemented as a thin circular wrapper over `IdentityMark` (no surface reimplements the logic). Existing Avatar tests unchanged and still green.
+- `DataCard` logo tile now renders `<IdentityMark>` (was a bespoke 70% white-tile/initials block); exported `IdentityMark` from `@mp/ui`.
+
+### Surfaces wired
+- Vendor tenant list: removed bespoke `NameTile`, row + card avatars now `<IdentityMark src={insigniaKey}>` (square).
+- Vendor tenant detail header: `<IdentityMark assets={branding.assets}>` — resolves the insignia with cross-theme fallback.
+- Avatar consumers (VendorChrome user block + topbar, TeamUsers, detail owners) upgrade automatically via the wrapper.
+- NOT changed (correctly, no mark data / no initials-avatar present): pharmacy customers/suppliers chips (people, no insignia model), approvals rows (name text only + a logo-diff preview strip), vendor command palette (no avatar), tenant sidebar (renders the wide horizontal lockup, not a compact avatar).
+
+### Data (loaded with the row, no per-avatar fetch — §2.5)
+- `ConsoleTenantRow.insigniaKey` added (api `vendor.types.ts` + web `console.ts`). Resolved insignia (cross-theme, light) so the list/card avatars render the insignia, not the wide logo.
+- `vendor.repositories.ts#listTenants`: SECOND batched read `brandAsset.findMany({ variant:'insignia', audience:'all', tenantId in ids })` alongside the existing logo batch (Promise.all), grouped in-memory, `resolveTenantAsset` per tenant — one query for the whole page, no N+1.
+- `vendor-console.service.ts#tenantDetail`: `insigniaKey` resolved from the already-loaded `brandAssets`.
+- Fakes: `apps/api/src/vendor/__fakes__.ts` listTenants row gains `insigniaKey: null`.
+- Test: `vendor.spec.ts` metadata-key allow-set gains `insigniaKey` (operational, never clinical — the no-clinical assertion still holds).
+
+### Decision / scope note
+Spec header says "presentation only — no data/endpoint/RLS/permission change", but §2.5/§3 require the mark on the row and batched with no per-row fetch — impossible for insignia-only tenants without carrying the insignia in the row payload. Read the constraint as no RLS/permission/route/semantic change; adding a computed, already-stored, tenant-scoped presentation pointer (as 80 did `logoKey`, 139 did `assets`) is presentation data. Phase 12 (clinical/RLS) untouched. This is what actually fixes the reported bug.
+
+### Tests added
+- `packages/ui/src/components/identity-mark.spec.tsx` — initials-when-no-mark, insignia-from-assets + 75% inset classes, cross-theme fallback (dark-only → light mode), src-wins-over-assets, onError → initials, AA ink on a LIGHT palette (never white-on-white) and on a DARK palette.
+
+### Gates
+`pnpm typecheck` — 29/29 pass. `pnpm lint` — 0 errors (1 pre-existing unrelated warning in doctor-portal.repositories.ts). Did not run test:unit/e2e/build per CLAUDE.md; controller runs full gates.
+
+### Owner review gate (§6)
+PROGRESS Next set to "none — owner review gate. Stop with [HUMAN_REQUIRED]." Owner deploys, uploads logos for a test tenant, confirms marks render everywhere with the 75% inset, then releases 141 by updating the pointer.
