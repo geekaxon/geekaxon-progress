@@ -6,14 +6,14 @@
 
 ## Current Status
 - **Project:** Marham Patti — multi-tenant white-label healthcare platform.
-- **Phase:** 1–137 ✅. Now **PHASE 17** — vendor platform finalisation (138–147), in owner-gated groups: 138 · 139→140 · 141→142 · 143→144 · 145→146 · 147. Standing rules: English only; branding resolves via @mp/brand; vendor sees operational/commercial data only, **never clinical**; Phase 12 suites pass unchanged.
-- **Last completed:** **139 — branding-configuration**.
-- **Next:** **140 — identity-rendering-everywhere** — /specs/140-identity-rendering-everywhere.md
-- **Branches:** through 137 on staging. 139 on feature/138-error-system-states.
+- **Phase:** 1–137 ✅. Now **PHASE 17** — vendor platform finalisation (138–147), built in **owner-gated groups**: 138 · 139→140 · 141→142 · 143→144 · 145→146 · 147. Each group ends with a review gate; the owner releases the next group by updating this pointer. Standing rules: English only; branding resolves via @mp/brand; vendor sees operational/commercial data only, **never clinical**; Phase 12 suites pass unchanged. Mockup: `specs/mockups/error-states.html` + `.png`.
+- **Last completed:** **138 — error-system-states**.
+- **Next:** **139 — branding-configuration** — /specs/139-branding-configuration.md
+- **Branches:** through 137 on staging. 138 builds on feature/138-error-system-states.
 
 ### Recent steps
-- **139 — branding-configuration** — DONE (2026-07-28) — per-type/per-theme asset slots, preset-or-custom palette with hard AA block, upload spinners, body-limit 413 fix.
 - **138 — error-system-states** — DONE (2026-07-28) — one calm error surface, eight states, wired to not-found/error/global-error, host gate and PWA offline.
 - **137 — pos-visual-match** — DONE (2026-07-28) — POS desktop and mobile visual pass against the mockup PNGs.
+- **136 — auth-visual-match** — DONE (2026-07-28) — auth family visual pass plus four owner corrections.
 
 > Older steps in PROGRESS-HISTORY.md
