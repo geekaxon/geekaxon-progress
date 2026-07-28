@@ -4637,3 +4637,17 @@ The component kit (`packages/ui/src/components/*`) and `/ui` gallery already car
 
 ### Do-not-break honoured
 Behaviour frozen: searchable select, calculator qty, collapse/pin persistence, shortcuts modal untouched. 113 layout contract, 122 preview, @mp/brand resolution, single nav registry all intact. No schema/RLS/permission/endpoint change.
+
+## 136 — auth-visual-match — DONE (2026-07-28) — branch feature/136-auth-visual-match
+
+WORK-TYPE: FIX (presentation + four named corrections). PHASE 16 / item 2. Composes from the 135 kit and the 133 auth structure; auth behaviour (credentials, sessions, lockout, OTP, 2FA, staging MFA relaxation), the 133 no-flash server-resolved branding and the 404-vs-suspended host routing are untouched. English only; tokens/tenant palette only; 122 preview unchanged.
+
+The four corrections:
+1. Tab title — login `generateMetadata` and reset `generateMetadata` now resolve the tab title per tenant: `brand ? (whitelabel ? appName : tenantName) : 'Marham Patti'`, so a non-whitelabel tenant host shows "Sign in — <clinic>" / "Reset password — <clinic>" instead of the platform name (favicon already tenant-resolved from 132).
+2. One logo, the tenant's — the auth-card mark composes the 135 single-node `Logo` (one `<img>` per theme; `surface="light"` on the light-locked card) or the tenant's uploaded mark directly; exactly one image node renders per theme (structural — apps/web has no unit runner, so asserted by inspection of the two render branches). Tenant Vertical logo when present, Marham Patti fallback (tagged "Fallback", "No tenant logo uploaded") when absent.
+3. Subtitle — `staffSubtitle` changed EN "Staff access for the counter, inventory and day close." → "Sign in to your workspace." (package-agnostic); UR value updated to match; keys unchanged so i18n parity holds.
+4. "Powered by Marham Patti" — removed from the in-card lockup meta and rendered once at the bottom of the page, centre-aligned, below the card: new `AuthPoweredBy({lang})` export in AuthShell (hookless presentational fn) rendered inside `.authcol` after `.authcard` in both AuthShell (login/patient/platform/phlebotomist/rider) and ResetForm (reset request, link sent, link expired, set new password, password updated). The in-card "Trouble signing in? Ask your pharmacy admin." (`staffAuthFoot`) stays. New `.mp-kit .auth-powered` CSS (centred, `--text-xs`, `--text-tertiary`). The lockup meta now shows only the fallback note when the tenant has no logo.
+
+Files: apps/web/app/(auth)/login/AuthShell.tsx (lockup meta, AuthPoweredBy, page-bottom footer), apps/web/app/(auth)/login/page.tsx (title), apps/web/app/(auth)/login/reset/page.tsx (title), apps/web/app/(auth)/login/reset/ResetForm.tsx (import + footer), apps/web/app/globals.css (.auth-powered), packages/i18n/src/messages/{en,ur}.json (staffSubtitle).
+
+Gates: pnpm lint PASS (design-drift + token-integrity clean); pnpm typecheck PASS. No schema, no RLS change, no feature flags. Visual match is a render-and-compare self-check against specs/mockups/pharmacy/auth-screens.png; the deterministic corrections above are the concrete deltas from 133.
