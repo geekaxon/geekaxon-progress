@@ -4780,3 +4780,44 @@ path unchanged). Rebuilt @mp/brand, @mp/ui, @mp/i18n dist so downstream resolves
 
 Gates: pnpm typecheck PASS (29/29); pnpm lint PASS (0 errors; 1 pre-existing unrelated warning in
 doctor-portal.repositories.ts). Did not run test:unit/e2e/build per standing rules (controller runs them).
+
+## 139 — branding-configuration — MARKER RESTORE (2026-07-28)
+The full 139 build landed in commit 15eb311 (brand pkg resolveTenantAsset + per-theme
+palette + contrast repair; apps/api main.ts 2mb body-limit 413 fix; vendor
+controller/service/dto/repos/types; web vendor tenant-detail Branding tab with 5
+per-theme slots, preset/custom palette, hard AA block, spinners, dual-theme live
+preview; en/ur i18n; @mp/ui re-exports). Commit f2342a7 then reverted ONLY PROGRESS.md
+back to "138 done / Next 139", leaving all code intact — so 139 read as un-recorded.
+This session verified the committed tree against the spec's 10 acceptance items (all
+met; schema reuses the existing RLS-forced brand_assets table, so no new migration),
+ran `pnpm prisma generate` + `pnpm typecheck` + `pnpm lint` — all pass — and restored
+the DONE marker + Next=140. No code rebuilt (avoids regressing a passing, committed
+build). Judgement call: the create-tenant wizard keeps its simpler palette+logo+icon
+picker (assets need a provisioned tenant row before per-theme upload); the authoritative
+per-theme configuration surface is the tenant-detail Branding tab, which satisfies
+Acceptance §1–§10.
+
+## 139 — branding-configuration — DONE (2026-07-28)
+
+WORK-TYPE: FEATURE + FIX. Branch: feature/138-error-system-states (controller-managed; 139 committed here alongside 138).
+
+State on entry: the pure `@mp/brand` layer, the API upload/contrast surface, and the vendor tenant-detail Branding tab were already built and tested by a prior session (this step's helpers are labelled 139 in `packages/brand/src/index.ts`). This session finished the remaining acceptance gaps and recorded the 413 diagnosis.
+
+### What was verified already-present (reused, not rebuilt)
+- `@mp/brand`: `resolveTenantAsset` (cross-theme fallback + favicon-from-insignia), `ASSET_SLOTS`, `ThemedPaletteOverrides`/`paletteForMode`/`isThemedPalette`, `checkBrandContrast`/`describeContrastFailures`/`suggestPassingColor`/`adviseContrast`. Covered by `apps/api/src/brand/brand-config-helpers.spec.ts`.
+- Schema (additive, already in place): `BrandAsset` stores per (tenant × variant × mode × audience) with `@@unique([tenantId, variant, mode, audience])`, forced RLS mirroring the existing branding tables; `BrandingProfile.paletteOverrides Json` holds the per-theme custom palette. No new migration required — §2.6 satisfied by existing columns.
+- API upload: `POST /tenants/:id/branding/asset` (base64 JSON), whitelabel-gated, `validateAssetUpload` (512 KB cap), `sanitizeSvg` (strips script/foreignObject/on*=/javascript:/external href), stores per variant+mode, recomputes live logoKey/iconKey/faviconKey. Legacy `{kind:'logo'|'icon'}` still accepted (→ horizontal/appIcon, light) so the create-tenant page's uploads keep working. Covered by `apps/api/src/vendor/vendor-branding-asset.spec.ts`.
+- Contrast BLOCK (not warn) on a custom palette: `VendorConsoleService.setBranding` → `assertPaletteContrastSafe` runs `checkBrandContrast(resolveBrand(...))` for BOTH light and dark and throws `BadRequestException` naming the failing pair + a passing value. Tested (light-fail, dark-only-fail, passing, preset-reselect clears overrides).
+- Vendor tenant-detail Branding tab: per-theme uploads for the 3 logo lockups, palette presets (read-only controls) + Custom mode (per-theme Primary/Accent/surface-tint), AA block disabling Save, upload spinners, and dual-theme live preview (sidebar horizontal, auth vertical, avatar insignia, tab favicon).
+
+### 413 root cause (Acceptance §7)
+Diagnosed per §1.1: the JSON body-size limit, NOT the app's 512 KB rule. Fix is in `apps/api/src/main.ts`: line 9 `const BODY_LIMIT = '2mb'`; lines 29–34 create the Nest app with `bodyParser: false` (disabling Express's ~100 KB JSON default that rejected a ~200 KB base64 payload before the 512 KB check) and re-register `app.useBodyParser('json', { limit: BODY_LIMIT })` and `useBodyParser('urlencoded', { extended: true, limit: BODY_LIMIT })`. 2 MB comfortably clears a 512 KB file after base64 (~700 KB); over-limit uploads now hit the app's own "exceeds the 512 KB limit" message (DTO `parseBrandingAsset` + `validateAssetUpload`), never a raw 413. The UI's stated 512 KB and the server cap agree.
+
+### Change made this session
+- `apps/web/app/(vendor)/vendor/tenants/[id]/page.tsx`: App Icon and Favicon were hardcoded `mode="light"` only; Acceptance §1 requires all five slots with light AND dark variants stored independently. Added `BRAND_ICON_SLOTS` and rendered each of appIcon/favicon as a bordered group with light+dark `BrandAssetUploader`s (mirroring `BRAND_LOGO_SLOTS`). Reuses existing i18n keys (brandModeLight/Dark, brandAppIcon(+Hint), brandSlotFavicon(+Hint)) — no new keys. Resolver/preview/API already handle every variant×mode, so no other change needed; the favicon still auto-derives from the insignia when unset.
+
+### Decision recorded
+- The create-tenant page (`vendor/tenants/new`) keeps its minimal branding capture (single logo+icon via the backward-compatible legacy `kind` upload shape, presets-only palette). Full parity with the detail editor there is not required by any acceptance criterion — configuration lives on the tenant-detail Branding tab, which is complete — and reworking the create form would be disproportionate risk for a step otherwise finished. Left as-is deliberately.
+
+### Gates
+- `pnpm typecheck`: pass (29/29). `pnpm lint`: pass (web incl. design-drift + token-integrity; the one API warning is a pre-existing unused eslint-disable in doctor-portal.repositories.ts, unrelated). Did not run test:unit/e2e/build per standing rules (controller runs full gates). Existing branding specs unchanged and green in prior runs.
