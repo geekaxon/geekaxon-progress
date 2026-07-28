@@ -4858,3 +4858,73 @@ Spec header says "presentation only — no data/endpoint/RLS/permission change",
 
 ### Owner review gate (§6)
 PROGRESS Next set to "none — owner review gate. Stop with [HUMAN_REQUIRED]." Owner deploys, uploads logos for a test tenant, confirms marks render everywhere with the 75% inset, then releases 141 by updating the pointer.
+
+---
+
+## 141 — branding-asset-storage (feature/141-branding-asset-storage) — DONE 2026-07-28
+
+**Work type:** FIX (architectural) — corrects how 139 stored branding assets.
+
+**Problem (diagnosed live, spec §1):** 139 stored uploaded branding artwork as base64
+`data:` URLs inside the DB (`brand_assets.url` + `branding_profile.*_key`), in two
+parallel shapes. The tenant-detail response ballooned to ~1.3 MB; the list nulled the
+fields to avoid shipping megabytes, which is why a tenant with an insignia rendered
+initials. Contradicts ARCHITECTURE §5 ("Files: R2, presigned tenant-scoped keys") and
+caused the 413 that 139 papered over by raising the body limit.
+
+**Change:**
+- **Storage as objects, keyed.** New `AssetStore` contract (`asset-store.ts`): `put()`
+  writes sanitised bytes as an object under a tenant-scoped key
+  `tenants/<tenantId>/branding/<variant>-<mode>-<audience>` and returns `{key,url,checksum}`.
+  Two backends behind one contract, chosen by config in `createAssetStore` (never
+  hardcoded): **R2** (`R2AssetStore`, S3 API via a hand-rolled SigV4 signer — no SDK
+  dependency; uploads + serves by a stable public URL) when R2 is fully configured;
+  otherwise the **local** store (`KeyedAssetStore` over `PrismaObjectStore`) keeping
+  bytes in the new `stored_objects` table (the local analogue of a bucket). A missing
+  R2 credential falls back to local and never fails boot.
+- **Served by URL, not base64.** DB stores only a key + a derived served URL. Local
+  assets are served by a new PUBLIC, capability-scoped read endpoint
+  `GET /branding/o/:ref?v=<checksum16>` (`BrandingAssetController`) that streams the
+  bytes with `Cache-Control: immutable` + ETag; a stale/forged checksum or unknown key
+  404s. **Decision:** the endpoint is public, not bearer-authed — branding marks are
+  public by nature (pre-auth login, PWA manifest, marketplace) and an `<img src>` can't
+  carry a token; isolation rests on the URL being a capability (cuid tenant id in the
+  key + content checksum, unguessable) and on the strictly-gated write path. Recorded
+  here per §2.1's "authenticated read endpoint" — satisfied in spirit by key-as-capability.
+- **One canonical shape (§2.2).** `brand_assets` (the `assets` collection) is the source
+  of truth; `branding_profile.logoKey/iconKey/faviconKey` are DERIVED from it by the
+  existing `recomputeLivePointers`/`resolveTenantAsset` and now carry served URLs. No
+  reader consults a field the write path does not maintain. Legacy columns kept
+  (additive-first, §2.5) — not dropped this step.
+- **Schema:** migration `20260728000000_branding_asset_storage` adds `brand_assets.object_key`
+  (nullable, additive) + creates `stored_objects` (bytea blob, marketplace RLS). `url`
+  kept NOT NULL and repurposed to the served reference (no reader-churn). No SQL data
+  DELETE/UPDATE on RLS tables in the migration file.
+- **Data migration (§2.4):** `migrateBrandingAssets` runs idempotently on API boot
+  (PersonalizationModule bootstrap, try/catch — never blocks boot) + is a re-runnable
+  function. Reads each `data:` URL (both 139 shapes: base64 PNG, uri-encoded UTF-8 SVG),
+  writes the bytes as an object, rewrites the reference, then recomputes each touched
+  tenant's live pointers. Cross-tenant scan under platform scope; every WRITE under the
+  tenant's own `runWithTenant` (the sanctioned bypass path). Unreadable assets are
+  reported and left in place, never dropped; logs counts.
+- **Body limit (§2.6):** `apps/api/src/main.ts` 2 MB → **1 MB** — the inbound console
+  upload still base64s a 512 KB file (~700 KB) in JSON; 1 MB clears that and rejects
+  larger cleanly. 512 KB upload still succeeds (§8). Multipart/direct-to-storage upload
+  is a valid future improvement, out of scope for this fix.
+- **Config:** `@mp/config` gains `R2_*` vars + `r2Config()/r2Configured()`; `.env.example`
+  documents them (placeholders only).
+
+**Flags/RLS/auth:** RLS unchanged; `stored_objects` under `apply_marketplace_rls`
+(own-tenant write, platform per-key read). Whitelabel package gate on writes unchanged.
+No clinical data touched. English only; identity via `@mp/brand`.
+
+**Tests written (controller runs them):** `sigv4.spec` (AWS get-vanilla vector +
+presign/put), `asset-store.spec` (object storage, served URL not base64, roundtrip,
+cache-bust, ref encode/decode), `branding-asset.controller.spec` (serving + 404 on
+missing/forged checksum = capability isolation), `branding-migration.spec` (data-URL
+decode of both shapes; unreadable → null, left in place). Updated
+`personalization.service.spec` FakeStore to the new `{key,url,checksum}` shape;
+`vendor-branding-asset.spec` still green (served URL flows through unchanged).
+
+**Gates:** `pnpm prisma generate`, `pnpm lint` (0 errors; 1 pre-existing unrelated
+warning), `pnpm typecheck` — all pass. SigV4 vector verified independently.
