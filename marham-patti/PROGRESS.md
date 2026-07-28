@@ -2,18 +2,18 @@
 
 # PROGRESS.md — Marham Patti Build Tracker (SHORT)
 
-> SHORT tracker; full detail in PROGRESS-HISTORY.md. Keep under 1.5 KB. A completed step is NEVER rebuilt — a dangling "Next" means [HUMAN_REQUIRED].
+> SHORT tracker; full detail in PROGRESS-HISTORY.md. Keep under 1.5 KB. A completed step is NEVER rebuilt — a dangling "Next" means [HUMAN_REQUIRED], not an earlier step.
 
 ## Current Status
 - **Project:** Marham Patti — multi-tenant white-label healthcare platform.
-- **Phase:** 1–135 ✅. Now **PHASE 16** — visual-fidelity pass (135–137), chained: kit+shell → auth → POS. Presentation only; behaviour from 132–134 frozen. Mockup authority: the PNG in `specs/mockups/pharmacy/` is the target (match the image; .html is compiled, for copy/states only). English only; brand via @mp/brand.
-- **Last completed:** **136 — auth-visual-match**.
-- **Next:** **137 — pos-visual-match** — /specs/137-pos-visual-match.md
-- **Branches:** through 134 on staging; 135–136 on feature branches.
+- **Phase:** 1–137 ✅. Now **PHASE 17** — vendor platform finalisation (138–147), built in **owner-gated groups**: 138 · 139→140 · 141→142 · 143→144 · 145→146 · 147. Each group ends with a review gate; the owner releases the next group by updating this pointer. Standing rules: English only; branding resolves via @mp/brand; vendor sees operational/commercial data only, **never clinical**; Phase 12 suites pass unchanged. Mockup: `specs/mockups/error-states.html` + `.png`.
+- **Last completed:** **138 — error-system-states**.
+- **Next:** none — owner review gate. Stop with [HUMAN_REQUIRED].
+- **Branches:** through 137 on staging. 138 builds on feature/138-error-system-states.
 
 ### Recent steps
-- **136 — auth-visual-match** — DONE (2026-07-28) — subtitle "Sign in to your workspace", one tenant logo, tenant-name tab title, page-bottom "Powered by".
-- **135 — kit-shell-visual-match** — DONE (2026-07-28) — single-node logo (kills the double mount); sidebar active pill and amber count badge matched to the reference.
-- **134 — pos-to-mockup-v2** — DONE (2026-07-28) — searchable customer select, back-dated sale, calculator qty, centred payment dialog, mobile PWA; visual fidelity deferred to 137.
+- **138 — error-system-states** — DONE (2026-07-28) — one calm error surface, eight states, wired to not-found/error/global-error, host gate and PWA offline.
+- **137 — pos-visual-match** — DONE (2026-07-28) — POS desktop and mobile visual pass against the mockup PNGs.
+- **136 — auth-visual-match** — DONE (2026-07-28) — auth family visual pass plus four owner corrections.
 
 > Older steps in PROGRESS-HISTORY.md

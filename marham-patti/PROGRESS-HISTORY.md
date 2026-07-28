@@ -4651,3 +4651,78 @@ The four corrections:
 Files: apps/web/app/(auth)/login/AuthShell.tsx (lockup meta, AuthPoweredBy, page-bottom footer), apps/web/app/(auth)/login/page.tsx (title), apps/web/app/(auth)/login/reset/page.tsx (title), apps/web/app/(auth)/login/reset/ResetForm.tsx (import + footer), apps/web/app/globals.css (.auth-powered), packages/i18n/src/messages/{en,ur}.json (staffSubtitle).
 
 Gates: pnpm lint PASS (design-drift + token-integrity clean); pnpm typecheck PASS. No schema, no RLS change, no feature flags. Visual match is a render-and-compare self-check against specs/mockups/pharmacy/auth-screens.png; the deterministic corrections above are the concrete deltas from 133.
+
+## 137 — pos-visual-match — DONE (2026-07-28) — branch feature/137-pos-visual-match — WORK TYPE: FIX
+
+Presentation-only visual pass over the POS counter built by 134 (spec 137 §; mockups
+specs/mockups/pharmacy/pos-desktop.png + pos-mobile.png authoritative). No schema, endpoint, RLS,
+permission, or business-logic change — totals, FEFO, stock decrement, credit, rx, back-dated-sale
+gate (pharmacy.backdateSale) and idempotency all byte-identical to 134. The single-grand-total
+JSX guard (spec 122) is untouched: exactly one of `.mp-cartsum .is-total` (wide) /
+`.mp-pos-totalbar .amt` (tablet) / `.mact__v` (mobile) ever mounts.
+
+DESKTOP RECOMPOSITION (PosClient.tsx, non-mobile branch):
+- Root problem per §1 was composition, not missing parts: the deployed counter was a stack of
+  generic `<Card>` boxes with the cart lines + totals crammed into the right aside. The mockup is a
+  two-zone workspace — the WORKING ZONE (left) holds search + sale-context + the current-sale lines;
+  the SALE PANEL (right, pinned) holds the summary breakdown + the discount control.
+- Swapped the columns: current-sale `.mp-poscart` moved into `.mp-pos-main`; `.mp-cartsum` (summary,
+  now with a "Cart"/summary header + emphasised payable) and `.mp-pos-disc` moved into the pinned
+  `.mp-pos-aside`. Discount gained quick-preset pills (None/5/10/15, `DISCOUNT_PRESETS`) beside the
+  free % field; summary discount row now reads "Discount (N%)".
+- Removed chrome the mockup does not show (§2.3): the in-workspace `.mp-pos-counter` title/hint strip
+  (title now lives in the shell top bar), the boxed `<Card>` + `<h2>` around the search zone, and the
+  `<Card>` around the customer/date row. Search is now a bare scan-first field whose results float in
+  a `.mp-psearch-pop` dropdown over the workspace instead of pushing the cart down.
+- Held sales now ride a compact pill strip (`.mp-heldbar`) at the top of the workspace — a chip
+  resumes, the ✕ discards. The existing toggled manage drawer + action-bar "Held (n)" button are kept
+  (behaviour preserved / reachable by shortcut); default view shows only the strip, matching the pic.
+- Line anatomy (`CartRow`): added a dedicated de-emphasised unit-price column
+  (`minmax(0,1fr) auto auto auto 2.75rem` = id · unit · qty-stepper · bold line-total · remove) and
+  dropped the redundant "Rs x each" from the meta line.
+- Payment dialog: reordered buttons to Cancel (ghost, left) → Confirm payment (primary, flex-grow,
+  right) per the mockup; logic untouched.
+
+CSS (apps/web/app/globals.css): appended a cohesive "spec 137" block that layers ON the 134 surfaces
+(compose, no fork) using semantic tokens only (`--surface-*`, `--border-*`, `--text-*`, `--accent*`,
+`--radius-*`, `--shadow-*`) so tenant accent + light/dark re-derive with no edits. Retuned
+.mp-pos-grid ratio (minmax(0,1fr) 20.5rem), .mp-poscart / .mp-pos-row / .mp-cartsum / .mp-pos-totalbar
+to the flatter mockup look, and added .mp-pos-searchzone/.mp-pos-hint/.mp-pos-help/.mp-pos-rxwarn/
+.mp-psearch-pop/.mp-heldbar*/.mp-pos-disc-preset*/.mp-paydialog-actions. Removed the now-unused
+`Badge` import from PosClient.
+
+MOBILE: the <768 branch (.mscan/.mcart/.mline/.mact/.mslider/.mheld atoms) was already built to the
+mobile mockup by 134/135 and left as-is; safe areas and the one-grand-total guard unchanged.
+
+DELIBERATE DEVIATIONS (data/behaviour-limited, named per §4.1):
+- Summary keeps a real Tax row (computed) rather than the mockup's "Rounding" placeholder; no rounding
+  figure is computed, so none is invented.
+- Per-line discount input is retained (subdued) though absent from the mockup line — removing it would
+  drop a frozen behaviour (§5); kept over pixel-exactness.
+- Held chips show count + total (real data); the mockup's customer-name/age-per-chip is not in the
+  held-cart model, so not fabricated.
+- Mobile customer chooser / payment remain the shared popover + centred Dialog rather than a
+  full-screen sheet / bottom sheet — a presentational nicety deferred to avoid touching frozen flows.
+
+GATES: `pnpm typecheck` — 29 tasks pass. `pnpm lint` — 16 tasks pass, incl. design-drift (no retired
+.mp-* control atoms) and token-integrity (every --mp-* resolves in both themes). Did not run
+test:unit/e2e/build per AGENT §6 (controller runs full gates). Visual self-check by inspection against
+the PNGs.
+
+## 138 — error-system-states — DONE (2026-07-28)
+
+**Branch:** feature/138-error-system-states · **Work type:** FEATURE · Gates: `pnpm lint` ✅, `pnpm typecheck` ✅ (run once). No schema/RLS/permission change.
+
+**What was built.** The approved mockup `error-states.html` element, one calm pattern (brand lockup · mark · headline · plain-English body · primary action · optional detail), across all eight states, both framings, light/dark, desktop/mobile, tenant/fallback/platform branding.
+
+**Shared kit (pure, jest-tested).** `packages/ui/src/lib/error-states.ts`: the framework-free catalog — `errorContent(id, audience)` for the 8 states with tenant/vendor copy splits; `errorReferenceCode(digest)` (opaque 6-char uppercase FNV token derived from Next's server-logged `digest`, one-way, carries no data — §2.5/§2.6); `errorReferenceLine`; `leaksInternals` anti-leak guard; `ERROR_STATE_IDS`. Exported from the @mp/ui index. `error-states.spec.ts` asserts: 8 states each with one primary action, vendor copy/overview-home split, 500-only reference + offline-only note, states 7/8 platform-branded, no-leakage over every catalogued string + a positive leak case, reference-code shape/opacity/determinism, and the host-routing→state mapping via `tenantGateOutcome` (no-tenant→state 7, suspended→state 8, active→app) — Acceptance §3/§5/§6.
+
+**CSS.** Appended the mockup's `.mps-*` content-region rules to `apps/web/app/globals.css` at exact token measurements (`max-width:400px`, 64px mark, `38ch` body, `264px` action column, `--space-*`, `--text-h1/h2`, `--accent`, `--control-lg` touch target, `--focus-ring`), plus `.mps-page--full` for standalone pages and the `@container (max-width:600px)` collapse to the 360 column. The in-shell framing is the real app shell, so the demo `.mps-shell*` classes were not needed.
+
+**Web presentation.** `apps/web/components/error/`: `marks.tsx` (the 8 lucide marks + offline check + inlined Marham Patti insignia, all presentational, server+client safe), `ErrorState.tsx` (client presentational renderer, `standalone`/`inline` framing, link/back/reset actions, brand lockup with tenant logo→initials fallback→platform mark, optional ref/note; brand name from `DEFAULT_BRAND.identity.appName`, ref text via `errorReferenceLine` so no hardcoded-UI-text lint hit), `AppErrorState.tsx` (client wrapper pairing a state with the live `useBrand` identity).
+
+**Wiring.** `app/not-found.tsx` — server 404, tenant brand resolved server-side (no flash), tenant palette scoped to the page so two tenants differ (§4). `app/error.tsx` — client 500 with opaque reference from `error.digest`, logged for correlation. `app/global-error.tsx` — self-contained last resort: own `<html>/<body>`, imports globals.css, plain anchors/buttons (no next/link/Router/providers), catalog-sourced copy, platform-branded. `(vendor)/not-found.tsx` + `(vendor)/error.tsx` — console 404/500 with vendor copy + overview home, platform-branded. `tenant-gate/page.tsx` — no-tenant→state 7, suspended→state 8, both platform-branded (replaces the old notFound()/GateShell); active tenant/vendor still redirect. New reachable routes `app/offline` (state 5), `app/session-expired` (state 6), `app/no-access` (state 3/403). `public/sw.js` bumped to `mp-shell-v3`, precaches `/offline`, serves it as the navigation offline fallback.
+
+**Decisions.** (1) Pure catalog lives in @mp/ui (shared, jest-tested) per §2.1 "shared kit"; the React layer lives in apps/web mirroring the AuthShell precedent (CSS in globals.css). (2) A tenant with no uploaded logo renders a palette-tinted initials badge (mockup shows "SF") rather than the platform mark, so unbranded tenants still read as themselves and differ visibly; the platform mark is the vendor/apex fallback. (3) 403/session-expired given dedicated canonical routes rather than rewiring the guard stack — do-not-break §5: this step RENDERS denials, it does not change who is denied. (4) global-error keeps inline-safe markup + globals.css import rather than the ErrorState client component, to honour "no shell, no client data" (§2.3). (5) Reference-code correlation rides Next's `digest` (already server-logged), with the client boundary also logging `reference=…digest=…` to tie them.
+
+**Owner review gate (§6):** stop here; owner deploys, reviews the eight states against the mockup, and releases 139 by moving the pointer.
