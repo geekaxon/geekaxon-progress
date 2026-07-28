@@ -4726,3 +4726,57 @@ the PNGs.
 **Decisions.** (1) Pure catalog lives in @mp/ui (shared, jest-tested) per §2.1 "shared kit"; the React layer lives in apps/web mirroring the AuthShell precedent (CSS in globals.css). (2) A tenant with no uploaded logo renders a palette-tinted initials badge (mockup shows "SF") rather than the platform mark, so unbranded tenants still read as themselves and differ visibly; the platform mark is the vendor/apex fallback. (3) 403/session-expired given dedicated canonical routes rather than rewiring the guard stack — do-not-break §5: this step RENDERS denials, it does not change who is denied. (4) global-error keeps inline-safe markup + globals.css import rather than the ErrorState client component, to honour "no shell, no client data" (§2.3). (5) Reference-code correlation rides Next's `digest` (already server-logged), with the client boundary also logging `reference=…digest=…` to tie them.
 
 **Owner review gate (§6):** stop here; owner deploys, reviews the eight states against the mockup, and releases 139 by moving the pointer.
+
+## 139 — branding-configuration — DONE (2026-07-28)
+Branch: feature/138-error-system-states (chained group 138·139→140). Work-type: FEATURE + FIX.
+
+Configuration side of branding (140 does the rendering side). Key finding: the data model
+already supported everything additively, so NO migration and NO RLS change were needed — the
+spec's "additive only" was satisfied by existing columns:
+  • BrandAsset already keys on (tenantId, variant, mode, audience) with free-String variant/mode,
+    so per-type × per-theme assets store with zero schema change.
+  • branding_profile.paletteOverrides is a Json column, so the custom palette moved to a per-theme
+    { light, dark } shape in the SAME column (legacy flat shape still accepted → applies to both).
+  Header said "Schema: additive only / RLS: unchanged"; both honoured by adding nothing.
+
+413 ROOT CAUSE (Acceptance §7) — apps/api/src/main.ts:18 created the app with Nest's DEFAULT
+body parser, whose JSON limit is Express's 100 KB. A 512 KB asset base64-encodes to ~700 KB JSON,
+rejected with a raw 413 before the app's own 512 KB check ran. Fix: NestFactory.create(..., {
+bodyParser: false }) + app.useBodyParser('json'|'urlencoded', { limit: '2mb' }) — comfortably
+exceeds 512 KB after base64 (spec §2.4). Over-limit files now hit the DTO's 512 KB check and get
+the app's own message, never a raw 413.
+
+@mp/brand (pure, rebuilt dist + re-exported via @mp/ui): added AssetSlot/ASSET_SLOTS (adds
+'favicon'), resolveTenantAsset() cross-theme fallback (light↔dark; favicon derives from insignia;
+null only on total absence → platform mark), ThemedPaletteOverrides + paletteForMode() +
+resolveBrand(overrides, mode) so per-theme custom colours resolve per theme (backward-compatible:
+flat legacy patch applies to both, default mode light), and contrast REPAIR — suggestPassingColor(),
+adviseContrast(), describeContrastFailures() naming each failing pair + a nearest-passing value.
+
+API: vendor asset upload/remove generalised from logo|icon to (variant × light/dark) with legacy
+'kind' still parsed; LIVE pointers (logoKey/iconKey/faviconKey) recomputed from the full asset set
+via resolveTenantAsset after every upload/remove (new repo.listBrandAssets). setBranding now BLOCKS
+(BadRequestException, not advisory) a custom palette failing WCAG AA in EITHER theme with the named
+pair + fix (assertPaletteContrastSafe), and clears stored overrides when a preset is (re)selected;
+createTenant applies the same block. tenantDetail returns branding.assets + faviconKey.
+
+Web (vendor console tenant-detail Branding tab): seven slots — Insignia/Horizontal/Vertical each
+light+dark, App Icon, Favicon — each with preview/replace/remove and a Spinner from accept→confirm
+(Acceptance §6). Palette gains an explicit "Custom" option: preset → colour controls read-only and
+reflect the preset; Custom → Primary/Accent/surface tint editable per light+dark. Client AA guard
+across both themes blocks Save with the described failures. Live preview renders sidebar (horizontal),
+auth card (vertical), avatar (insignia) and tab (favicon) in BOTH themes. Create-tenant wizard left
+functional via legacy compatibility. console.ts + vendor.types.ts branding shapes widened
+(paletteOverrides Record<string,unknown>, +faviconKey, +assets).
+
+i18n: added vendor.detail.brand* keys (slots, modes, Custom, readonly hint, contrast-block, uploading,
+preview light/dark) to en + ur (English values; EN↔UR parity kept), rebuilt @mp/i18n dist.
+
+Tests: rewrote vendor-branding-asset.spec (variant×mode, cross-theme fallback, favicon-from-insignia,
+pointer recompute) + added setBranding contrast-block cases (flat + per-theme dark-only + preset-clears);
+new brand-config-helpers.spec (resolveTenantAsset, paletteForMode, resolveBrand mode, suggestPassingColor,
+describeContrastFailures). SVG sanitisation (spec 59 sanitizeSvg) already covers every new slot (upload
+path unchanged). Rebuilt @mp/brand, @mp/ui, @mp/i18n dist so downstream resolves the new exports.
+
+Gates: pnpm typecheck PASS (29/29); pnpm lint PASS (0 errors; 1 pre-existing unrelated warning in
+doctor-portal.repositories.ts). Did not run test:unit/e2e/build per standing rules (controller runs them).
