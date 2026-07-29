@@ -5080,3 +5080,27 @@ WORK TYPE: FEATURE (branch feature/146-vendor-realtime-notifications). PHASE 17 
 **Decisions.** (1) Platform notifications live in their OWN platform-scope tables, not the tenant tables — RLS + tenant-required + role-vs-permission routing make sharing rows impossible; this is a scope partition on the same bus/semantics, not a second system. (2) Full typed-emitter API for all §2.2 events built + tested; concrete source wiring done for the Security (impersonation) events in-module; remaining source flows call the exported emitters. (3) "RLS unchanged" honoured — new tables use the established platform-scope policy; no existing policy touched.
 
 [CHECKPOINT]
+
+---
+
+## 147 — pwa-splash-and-manifest — DONE (2026-07-29) — branch feature/147-pwa-splash-and-manifest
+
+**Work type:** FEATURE. Phase 17 / item 10. Web-only; no schema, no API/endpoint, no RLS, no permission change (Acceptance §9 honoured).
+
+**Problem.** Installed app opened on a white screen with the platform icon: the manifest wasn't tenant-resolved and no splash was designed (Android splash defaulted to white `background_color`; iOS declared no `apple-touch-startup-image`).
+
+**Design.**
+- Pure, React-free module `packages/ui/src/lib/pwa.ts` (exported as `@mp/ui/pwa`, beside `surface-routing`): audience scope table `PWA_AUDIENCES` (default/patient/platform/staff/rider/phlebo/vendor — values mirror the retired static `manifest-*.webmanifest` exactly), `APPLE_SPLASH_DEVICES` (15 iPhone+iPad resolutions), `buildManifest`/`manifestIcons`/`appleSplashLinks`/`splashMedia`, `pwaNames` (tenant name + sub-app suffix, or platform identity; vendor is `platformOnly`), `pwaVersion` (FNV-1a hash of colours+mark+name → immutable `?v=` cache/regeneration token), `pwaAssetHref`/`pwaManifestHref`. Colour contract: `theme_color` = `--brand-teal` (primary), `background_color` = `--brand-teal-deep` (deep surface, never white) so Android's browser-generated splash is composed.
+- Server glue `apps/web/lib/pwa.ts`: `resolvePwaBrand(audience)` reads `getTenantBrand()` (host-branding) + `serverTheme()`; whitelabel tenant contributes name/colours/mark, non-whitelabel + platform + vendor keep platform values. `resolvePwaAssetSource(kind)` picks the mark (tenant logo, else `platformLogo('vertical','dark')` light-ink for splash / `/icon.svg` for icons). `pwaMetadata(audience)` → `{manifest, icons, appleWebApp.startupImage[]}`; `pwaViewport()` → host-resolved `themeColor`.
+- Route `app/pwa/manifest/route.ts` (`force-dynamic`, `no-store`) serves `application/manifest+json` host-resolved, `?scope=<audience>`.
+- Route `app/pwa/asset/route.tsx` — ONE generator via `next/og` `ImageResponse`: `kind=icon` (mark on transparent), `kind=maskable` (mark on deep surface, safe-zone), `kind=splash` (Vertical lockup on deep surface) at any pixel size; mark fetched + inlined as data URI; renders background-only if the mark can't be fetched (never a white 500). `Cache-Control: immutable, 1yr` keyed by `?v=`.
+- Wiring: root `layout.tsx` static metadata/viewport → `generateMetadata`/`generateViewport` (merges `pwaMetadata/pwaViewport('default')`, keeps platform `<title>`). `(patient)`/`(platform)`/`(vendor)` layouts + `(field)` rider/phlebo pages → `generateMetadata` from `pwaMetadata`. `(app)` staff layout merges `pwaMetadata('staff')` and keeps its tenant `<title>`/favicon (132). Vendor uses the `platformOnly` audience — icon reference `/icon-vendor.svg` unchanged (§2.4/§5), gains composed colours + iOS splash.
+- Docs (§2.5): i18n key `brandInstallCaveat` (EN+UR, parity-safe) rendered in `admin/brand/BrandManager.tsx` — an already-installed app keeps its old icon until reinstalled (browser behaviour, not a bug).
+- Static `manifest-*.webmanifest` files left in place (still precached by `public/sw.js`); the layouts now link the dynamic route.
+- Theme-awareness (§2.3/§5): platform mark honours light/dark ink via `platformLogo`; a tenant's single resolved mark is used as-is (no endpoint change to expose the full per-theme asset set, per §9). Splash surface is always the deep/dark surface → light-ink lockup.
+
+**Tests.** `packages/ui/src/lib/pwa.spec.ts` (jest, `@mp/ui`): audience normalisation, `pwaNames` tenant/platform/vendor + truncation, `buildManifest` host-resolution + colours + shortcuts + 512/maskable icons + vendor single-icon, deterministic asset/manifest hrefs, `pwaVersion` stability/change, splash link set (portrait+landscape, pixel resolution, mode), `splashMedia` string.
+
+**Gates.** `pnpm typecheck` → 29/29 pass (incl. @mp/web, @mp/ui). `pnpm lint` → 16/16 pass (removed a stray `@next/next/no-img-element` disable the web config doesn't register). Did NOT run test:unit/e2e/build per AGENT §6 — controller runs full gates.
+
+**Notes / decisions.** `ImageResponse` runtime rendering of the SVG marks is not exercisable under lint/typecheck; the OWNER REVIEW GATE (§6) validates the real icon+splash on-device. Kept everything web-side to respect Acceptance §9 (no endpoint change) — colours come from the existing host-branding `cssVars`, the mark from its `logo`.
