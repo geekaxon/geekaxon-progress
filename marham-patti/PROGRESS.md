@@ -6,14 +6,15 @@
 
 ## Current Status
 - **Project:** Marham Patti — multi-tenant white-label healthcare platform.
-- **Phase:** **PHASE 17** — vendor platform finalisation (138–148): 138→148 ✅. Standing rules: English only; branding via @mp/brand; vendor sees operational/commercial data only, **never clinical**; Phase 12 suites pass.
-- **Last completed:** **148 — vendor-responsive-pass**.
-- **Next:** none — no spec beyond 148. Stop with [HUMAN_REQUIRED].
-- **Branches:** through 140 on staging. 141–148 on feature branches.
+- **Phase:** 1–149 ✅ (Phase 18 consolidated vendor fixes complete). Standing rules: English only; identity via @mp/brand; vendor operational/commercial data only, never clinical; Phase 12 suites pass unchanged.
+- **Last completed:** **149 — vendor-console-fixes** (owner test-round consolidated fixes).
+- **Next:** none — no spec beyond 149. Stop with [HUMAN_REQUIRED].
+- **Branches:** through 148 on staging. 149 on feature/149-vendor-console-fixes.
+- **Known separate item:** spec 137 (tenant POS visual) authored but never built — tenant work, deferred until vendor is signed off.
 
 ### Recent steps
-- **148 — vendor-responsive-pass** — DONE (2026-07-29) — 360→2560 audit of the vendor console; scrollable dialogs, wrapping tab strips, 44px controls, break long values.
-- **147 — pwa-splash-and-manifest** — DONE (2026-07-29) — host-resolved manifest + generated iOS splash/icons on tenant colours; vendor keeps its platform icon.
-- **146 — vendor-realtime-notifications** — DONE (2026-07-29) — platform-scope notifications on the shared bus; console bell, per-category prefs (security locked on), permission-filtered, no clinical.
+- **149 — vendor-console-fixes** — DONE (2026-07-29) — insignia on list, module-aware overview, create-tenant branding, routed package edit, root login/reset.
+- **148 — vendor-responsive-pass** — DONE (2026-07-29) — 360→2560 audit; some routes still open, folded into 149.
+- **147 — pwa-splash-and-manifest** — DONE (2026-07-29) — per-tenant manifest; iOS splash generation.
 
 > Older steps in PROGRESS-HISTORY.md

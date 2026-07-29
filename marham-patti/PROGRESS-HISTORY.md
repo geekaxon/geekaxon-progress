@@ -5160,3 +5160,48 @@ No restyle — only width-layout fixes with the existing kit and tiers. Tenant s
 
 ### PHASE 17 BLOCK COMPLETE
 148 is the last authored step. No `specs/149-*.md` exists. PROGRESS.md Next set to the terminal stop instruction per spec §6.2. Any further "next build step" request → [HUMAN_REQUIRED].
+
+---
+
+## 149 — vendor-console-fixes — DONE (2026-07-29) — branch feature/149-vendor-console-fixes — WORK TYPE: FIX
+
+Consolidated owner test-round fixes for the vendor console (spec 149). Root causes were traced against source; fixed each named item. Gates: `pnpm typecheck` PASS, `pnpm lint` PASS (0 errors; only a pre-existing unrelated API warning in doctor-portal.repositories.ts). No schema change; RLS unchanged.
+
+### 1.1 / 1.2 Tenant list showed initials — REAL root cause found and fixed
+The narrow read was NOT the issue (resolveTenantAsset already does light↔dark fallback). The true cause: `listTenants()` in `apps/api/src/vendor/vendor.repositories.ts` read `brand_assets` (FORCE-RLS, marketplace_isolation policy) on the BARE `prisma` client with NO scope, so RLS returned ZERO rows → every insignia resolved null → the list fell back to initials while detail (which reads under runWithTenant) showed the logo. Fix: read the insignia assets under `runWithPlatformScope` (the policy honours platform scope), then resolve through the same shared `resolveTenantAsset`. Canonical asset shape: `{ variant, mode, url }` from `brand_assets` (audience 'all'), resolved via `@mp/brand.resolveTenantAsset` — the single source every reader uses (list, detail, live pointers). logoKey on the list is unused by the avatar and its branding_profile policy does not honour platform scope, so it was left as-is.
+
+### 1.3 Raw i18n keys on Overview — fixed at source
+`packages/i18n/src/messages/en.json` stored the pharmacy metric strings as FLAT dotted keys (`"pharmacy.title"`) inside `vendor.detail`, but the Overview looks them up with `t('vendor.detail.pharmacy.title')` which the nested `translate` walker splits on every dot. Nested the flat keys into a real `pharmacy: { ... }` object so all `t('vendor.detail.pharmacy.*')` calls resolve — no component change needed.
+
+### 1.4 Overview now module-aware
+`apps/web/app/(vendor)/vendor/tenants/[id]/page.tsx` OverviewTab: the appointments "Bookings" KPI card AND the bookings trend chart now render ONLY when `detail.flags['clinic.appointments']`; the pharmacy metrics section leads (rendered first) for a `pharmacy.pos` tenant. Revenue/balance/staff are commercial and stay. No clinical data.
+
+### 1.5 Create-tenant branding editor added
+`apps/web/app/(vendor)/vendor/tenants/new/page.tsx` now carries the full editor, composed from the SAME primitives as detail: custom palette (light+dark primary/accent/surface-tint) via `resolveBrand`, the hard AA guard via `checkBrandContrast`/`describeContrastFailures` (blocks Create), a live preview, and the full asset matrix (insignia/horizontal/vertical × light/dark, app icon, favicon × light/dark) captured via `BrandFilePicker`. On submit it provisions, then applies branding through detail's EXACT post-provision contracts: `POST /vendor/tenants/:id/branding` (custom `{light,dark}` overrides) and `POST /vendor/tenants/:id/branding/asset` with the `{variant, mode, mime, dataBase64}` shape (replacing the legacy `{kind}` upload). Assets persist through the new tenant's branding.
+
+### 1.6 Tenant role editor — DELIBERATE deviation (documented, no code change)
+Investigation proof: in this data model every tenant "system" role is a GLOBAL shared `AppRole` (tenantId=null); there are no per-tenant seeded system roles. `permission.service.ts setRoleKeys` rejects editing a shared role ("clone it"), and enum-role→keys resolution reads ONLY the global role (`findGlobalByName` hard-filters tenantId=null with a name-keyed cache) — so a per-tenant copy has NO effect until users are explicitly re-pointed by id. Enabling in-place edits of shared roles would therefore either 400 on save or, if the guard were removed, mutate the role for EVERY tenant — breaking tenant isolation (an explicit Do-NOT-break) and needing a schema/provisioning change the spec forbids ("Schema: none expected", "RLS unchanged"). The correct, safe mechanism (clone-then-edit) already exists in the shared RoleManager. Left the tenant-scope editable gate as-is; recorded here per CLAUDE.md autonomy rules.
+
+### 1.7 Package edit is a routed page
+Extracted the editor into `apps/web/app/(vendor)/vendor/packages/PackageEditor.tsx` (form + Draft/toBody/isStructuralEdit helpers + structural apply-or-preserve dialog), used by BOTH the inline New flow and the new routed page `apps/web/app/(vendor)/vendor/packages/[id]/edit/page.tsx`. Added `packageEditHref` to console.ts; the list row Edit action now navigates to `/packages/[id]/edit`. List stays at `/packages`.
+
+### 1.8 Avatar reflects in top bar + sidebar
+`apps/web/lib/vendor-me.tsx` context gained `setAvatarUrl`; `VendorChrome` sidebar Avatar + `VendorAccountMenu` now pass `src={me?.avatarUrl}`; the profile page calls `setAvatarUrl` on upload/remove so the chrome updates live (no manual refresh). Identity resolves avatar-when-present, initials otherwise, via the shared IdentityMark/Avatar.
+
+### 1.9 Upload indicator overflow
+Dropped the "Uploading" `label` on the two spinner call sites (branding `BrandAssetUploader`, profile avatar) so only a centred spinner shows within the preview slot bounds.
+
+### 1.10 / 1.11 Login + reset routing (prefix-free)
+`packages/ui/src/lib/surface-routing.ts`: on the vendor surface `/login` and `/login/vendor(/*)` now 404; `/reset` rewrites onto the internal `/login/reset` page and the legacy `/login/reset` 404s. Sign-in is reached at the host ROOT: `VendorRouteGuard` now renders `<VendorLoginForm/>` INLINE when there is no session (instead of redirecting), reacting to `VENDOR_SESSION_EVENT` (fired by store/clear of the bundle) so login/logout flip instantly. `VENDOR_LOGIN_PATH` repointed to `/`; `handleAuthFailure`/logout target the root; forgot link → `/reset`; ResetForm back-link is vendor-aware (root on vendor, `/login` elsewhere). Updated surface-routing.spec.ts matrix. Reset first-paint logo: already light-locked via the shared TenantLock `surface="light"` (same as the accepted login) → deterministic on first paint; route now served at `/reset`.
+
+### 1.12 Error page
+`.mps-brand__lockup` logo height 32px → 45px (width auto) in globals.css. "Go to dashboard": already resolves to `/` for the vendor audience via `error-states.ts homeHref` — verified, no change needed.
+
+### 1.13 Notification bell alignment
+The bell wrapper used class `.mp-notif`, which collided with the notifications-admin form's `.mp-notif` (grid + `margin-top:1.5rem`); the leaked margin knocked the bell off the top-bar centre. Renamed the bell wrapper to `.mp-topbar-notif` (component + CSS) and matched `.mp-notif-btn` sizing to `.mp-shell-iconbtn` (2.25rem, radius 0.55rem, no border) so bell/theme-toggle/avatar align.
+
+### 1.14 Responsive gaps
+`TeamUsers.tsx` (Tenant detail → Team/Users) had no `renderCard` → table-only, horizontal scroll under a 5-button action cluster. Added a `renderCard` card view (identity + role badges + status/TOTP + shared action buttons, extracted so table and card never drift). Re-audited honestly: Tenants list and Analytics already ship `renderCard` + responsive grids (fluid StatGrid, `lg:grid-cols-2` charts, `sm:` SourceCard) — they pass; TeamUsers was the real 148 gap.
+
+### Not done / follow-ups
+- 1.6 as literally specified (in-place editable shared system roles) is a data-model change conflicting with tenant isolation — see above.
