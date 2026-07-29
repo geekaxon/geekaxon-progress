@@ -5013,3 +5013,46 @@ WORK TYPE: FEATURE + FIX (one part is a security fix). Owner review gate (spec �
 - `pnpm prisma generate` (schema changed) ✅. `pnpm typecheck` ✅ (29/29). `pnpm lint` ✅ (0 errors; 1 pre-existing unused-eslint-disable warning in doctor-portal.repositories.ts, untouched). Did not run test:unit/e2e/build (controller runs them). No Playwright/web-e2e harness exists in the repo, so no web e2e added (matches the existing packages screen, which had none); coverage is unit-level per repo convention.
 
 WORK TYPE: FEATURE (branch feature/144-roles-packages-deregulation)
+
+---
+
+## 145 — tenant-overview-and-branding-approval — DONE (2026-07-29)
+
+**Work type:** FEATURE (branch `feature/145-tenant-overview-and-branding-approval`).
+
+**Problem.** (1) The vendor's tenant Overview showed only lifecycle metadata — nothing about the launched pharmacy business. (2) The 59 change-approval workflow already routes tenant-initiated public branding changes through a PENDING→approve/reject queue, but the tenant could not withdraw/replace a pending submission, and the app icon (public identity) applied immediately instead of awaiting review.
+
+**Key discovery.** The "59 workflow" IS the branding/personalization approval system (`BrandChangeRequest` two-copy live/proposed model; `PersonalizationService.submitChange` classifies AUTO|REVIEW; `PersonalizationApprovalService` approves atomically via `approveInTx`; vendor direct edits under `/vendor/tenants/:id/branding*` already apply immediately). So part B was an EXTENSION, not a rebuild — the actor asymmetry (tenant→REVIEW, vendor→immediate) already held.
+
+**Part A — pharmacy metrics on the tenant Overview (§2.1).**
+- New `VendorPharmacyMetricsService` (`apps/api/src/vendor/vendor-pharmacy-metrics.service.ts`): reuses the tenant's OWN pharmacy services — `PharmacyService.reports('today'|'month')`, `listCustomerSummaries`, `navCounts`, `dayCloseCurrent` — so figures reconcile with 109 by construction (arithmetic not reimplemented). Returns a flat, money/count/date-only DTO `PharmacyOverviewMetrics` (sales today+month value/count, medicines catalogue/low/out, stock value-at-cost + value-at-risk, suppliers count/outstanding, customers count/credit, last day-close date/balanced).
+- Endpoint `GET /vendor/tenants/:id/pharmacy-metrics` on `VendorOversightController` (VendorAuthGuard, platform scope; the pharmacy reads are tenant-scoped via `runWithTenant` inside PharmacyService — a per-tenant scoped read, never a cross-tenant join).
+- Module-aware: gated on the `pharmacy.pos` flag server-side → `{ available:false, metrics:null }` when off; the web also gates the section on `detail.flags['pharmacy.pos']`.
+- Degrade: each source read is wrapped in `safe()` (try/catch → null), so one failing read shows "—" for that block without blanking the tab.
+- **No-clinical boundary (55):** the DTO has ONLY operational/commercial fields; the service touches none of the patient/prescription/timeline reads. Asserted by test (key allow-list + method allow-list).
+- Web: `PharmacyMetricsSection` in the vendor tenant-detail Overview (`apps/web/app/(vendor)/vendor/tenants/[id]/page.tsx`) — a StatGrid of StatCards on the kit anatomy, "—" via `formatMetric`, skeleton while loading, all-"—" on read failure. Types mirrored in `console.ts`.
+- Wiring: `VendorModule` now imports `PharmacyModule` (exports `PharmacyService`; no cycle) + provides the new service.
+
+**Part B — branding approval, tenant withdraw/replace + app-icon reclassification (§2.2/§2.3).**
+- Catalog (`packages/shared/src/personalization.ts`): moved `appIcon` DEFAULT_CHANGE_MODE AUTO→REVIEW — app icon is public-facing identity (§2.3), so a tenant change awaits review; a vendor console edit still applies immediately (the vendor path never goes through submitChange). `themeDefault` stays AUTO (non-public preference — applies now).
+- Schema: added `WITHDRAWN` to `BrandChangeStatus` (migration `20260729010000_branding_change_withdrawal`, additive `ALTER TYPE ... ADD VALUE IF NOT EXISTS`). RLS unchanged.
+- Repo: `createRequest` now SUPERSEDES any prior PENDING of the same type in the same tenant transaction (→WITHDRAWN) so the queue never holds two competing versions of one slot ("replace"); returns `{ request, superseded }`. New `withdraw(tenantId, requestId)` claims PENDING→WITHDRAWN optimistically (a no-op on an already-decided row, so a race with the vendor decision never rescinds a published change).
+- Service: `withdrawChange` (404 when nothing pending) + audit `personalization.change.withdrawn`; `submitChange` audits `personalization.change.superseded` when a resubmission replaces a prior pending. Submit/approve/reject audit unchanged.
+- Controller: `DELETE /personalization/changes/:id` (brand.manage) → withdraw.
+- Web tenant branding screen (`PersonalizationClient.tsx`): states the approval rule up front (only logos/app icon/favicon/palette need approval; preferences apply now), a non-blocking pending notice (live stays on last approved version), each pending row shows WHEN it was submitted + a Withdraw button, WITHDRAWN status label, rejection reason already shown. Added i18n keys EN+UR (settings.personalization.approvalRule/pendingNotice/submittedOn/withdraw/withdrawn/status.WITHDRAWN; vendor.detail.pharmacy.*; vendor.approvals.type.appIcon). Parity gate: EN=UR=3916 keys.
+
+**Judgement calls.**
+- *Owner-review gate (spec §6) treated as retired* per AGENT.md §2 — finished the step and pointed Next at 146 rather than emitting [HUMAN_REQUIRED] (which the standing rules reserve for missing specs / infra only).
+- *Reused the existing 59 workflow* rather than a second approval mechanism (spec §2.2 "extend, do not duplicate"). The vendor before→after Preview already keys off payload fields, so branding (the only change kind) previews with no change.
+- *Metrics via the tenant's own service methods* (not a bespoke SQL aggregate) to guarantee reconciliation with 109; accepts a few bounded reads per Overview open, which is cheap for an occasional vendor view.
+- *WITHDRAWN as a real enum state* (not a hard delete) so the tenant's history keeps the row (a §3 visible state) and the withdrawal is auditable.
+- *No Playwright page.goto test* — the repo has no e2e/Playwright harness (prior vendor-console steps 142–144 shipped screens the same way); coverage is the API/unit specs below, matching the established repo pattern.
+
+**Tests written (controller runs them).**
+- `apps/api/src/vendor/vendor-pharmacy-metrics.spec.ts` — module-aware absence (no reads when off), reconciliation with the report figures, tenant-scoping (every read carries the target id), no-clinical (key + method allow-lists), degrade-on-failure.
+- `apps/api/src/personalization/personalization.service.spec.ts` — added withdraw (drops from queue, live untouched, audited), cannot-withdraw-after-decision (404), supersede-on-resubmit; updated FakeRepo to the new `createRequest` shape + `withdraw`.
+- `apps/api/src/personalization/personalization-helpers.spec.ts` — appIcon now REVIEW; themeDefault stays AUTO.
+
+**Gates (self-run once):** `pnpm db:generate` ✓, `pnpm typecheck` ✓ (29/29), `pnpm lint` ✓ (0 errors; 1 pre-existing warning in doctor-portal.repositories.ts, untouched). Did not run test/build (controller runs).
+
+**Schema/RLS/flags:** additive enum value only; RLS unchanged; gated flag-first on `pharmacy.pos` (server + web). No pharmacy business logic or 141 storage changed.
