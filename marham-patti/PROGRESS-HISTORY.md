@@ -5056,3 +5056,27 @@ WORK TYPE: FEATURE (branch feature/144-roles-packages-deregulation)
 **Gates (self-run once):** `pnpm db:generate` ✓, `pnpm typecheck` ✓ (29/29), `pnpm lint` ✓ (0 errors; 1 pre-existing warning in doctor-portal.repositories.ts, untouched). Did not run test/build (controller runs).
 
 **Schema/RLS/flags:** additive enum value only; RLS unchanged; gated flag-first on `pharmacy.pos` (server + web). No pharmacy business logic or 141 storage changed.
+
+## 146 — vendor-realtime-notifications — DONE (2026-07-29)
+
+WORK TYPE: FEATURE (branch feature/146-vendor-realtime-notifications). PHASE 17 item 9.
+
+**Goal.** Wire the vendor console's dead bell to a working realtime notification system, EXTENDING spec-112's transport (not forking it) with a new PLATFORM scope alongside the per-tenant scopes.
+
+**Approach — extend the bus, add platform-scope storage.**
+- `RealtimeBus` (112) gained `publishPlatform`/`subscribePlatform` on the SAME instance/DI token; `InMemoryRealtimeBus` adds a second Subject for the single `rt:platform` channel. Tenant methods untouched. `NotificationsModule` now exports `REALTIME_BUS` + `PUSH_SENDER` so the vendor console reuses them.
+- Storage is platform-scope-only (apply_platform_rls, like the 73 RBAC tables), NOT the tenant `notifications` tables (those are RLS-bound to a tenant and route by tenant Role; vendor recipients are VendorAdmins routed by permission). New tables: `platform_notifications`, `platform_notification_receipts` (per-admin read state), `platform_notification_mutes` (per-category opt-out), `platform_push_subscriptions`. Enum `PlatformNotificationCategory`; severity reuses 112's `NotificationSeverity`. Migration 20260729020000; additive; existing RLS unchanged.
+
+**Shared catalog (`@mp/shared/platform-notifications.ts`).** 24 kinds across 7 categories (Tenants/Approvals/Billing/Subscriptions/Domains/PlatformHealth/Security), each with category, severity, i18n keys and a required permission key (null for Security). `platformChannel()`, envelope type, and `isPlatformRecipient(meta, {keys, mutedCategories})` — the ONE predicate used by both fan-out and SSE filter: permission gate AND mute gate, SECURITY never opt-out. Load-time assertions keep the catalog honest.
+
+**API (vendor module).** `PlatformRealtimeService` (typed emitters for every §2.2 event; raise resolves recipients = active admins filtered by `PlatformPermissionService.keysForVendor` + mutes, persists receipts, live-publishes, best-effort push; fail-soft). `PrismaPlatformRealtimeRepo` (runWithPlatformScope). `PlatformRealtimeController` @ `vendor/notifications` (@Public + VendorAuthGuard): SSE stream, center, unread-count, mark-read/all, GET/PUT preferences (rejects muting SECURITY), push subscribe/unsubscribe. Impersonation start/end now emit SECURITY notifications (in-module concrete wiring); the typed emitters are exported for the other source flows to call.
+
+**Retention.** New data class `PLATFORM_NOTIFICATION` (180d default) added to `RETENTION_DEFAULTS` + `PLATFORM_SCOPED_CLASSES`; `prunePlatformClass` deletes aged `platform_notifications` (receipts cascade).
+
+**Web.** `lib/vendor-notifications.ts` (SSE hook over `vendorFetch`, bounded-backoff reconnect + backfill-on-reconnect, PWA push registration). `VendorNotificationBell` (unread badge, centre grouped Today/Earlier, mark-read/all, empty state, severity toasts, prefix-free deep links via `consoleHref`) replaces the static bell in `VendorChrome`. Profile Preferences card replaced its "arrives with 146" placeholder with per-category Switch toggles; SECURITY renders locked-on ("Always on"). i18n: 48 flat `pnotif*` title/body keys + vendor.notif* UI keys in en+ur (English-only console; parity verified 0/0).
+
+**Gates.** `pnpm prisma generate`, `pnpm typecheck`, `pnpm lint` all clean (lone lint warning is pre-existing in doctor-portal.repositories.ts). Tests: `platform-notifications.shared.spec.ts` (predicate: permission gate, mute gate, security-not-opt-out, no-clinical copy) + `platform-notifications.service.spec.ts` (permission-filtered fan-out, mute honoured except SECURITY, no-clinical params, SECURITY-unmutable, fail-soft). 112 realtime spec uses the real bus, unaffected.
+
+**Decisions.** (1) Platform notifications live in their OWN platform-scope tables, not the tenant tables — RLS + tenant-required + role-vs-permission routing make sharing rows impossible; this is a scope partition on the same bus/semantics, not a second system. (2) Full typed-emitter API for all §2.2 events built + tested; concrete source wiring done for the Security (impersonation) events in-module; remaining source flows call the exported emitters. (3) "RLS unchanged" honoured — new tables use the established platform-scope policy; no existing policy touched.
+
+[CHECKPOINT]
