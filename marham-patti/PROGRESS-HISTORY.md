@@ -5104,3 +5104,59 @@ WORK TYPE: FEATURE (branch feature/146-vendor-realtime-notifications). PHASE 17 
 **Gates.** `pnpm typecheck` → 29/29 pass (incl. @mp/web, @mp/ui). `pnpm lint` → 16/16 pass (removed a stray `@next/next/no-img-element` disable the web config doesn't register). Did NOT run test:unit/e2e/build per AGENT §6 — controller runs full gates.
 
 **Notes / decisions.** `ImageResponse` runtime rendering of the SVG marks is not exercisable under lint/typecheck; the OWNER REVIEW GATE (§6) validates the real icon+splash on-device. Kept everything web-side to respect Acceptance §9 (no endpoint change) — colours come from the existing host-branding `cssVars`, the mark from its `logo`.
+
+---
+
+## 148 — vendor-responsive-pass — DONE (2026-07-29) — branch feature/148-vendor-responsive-pass
+
+WORK TYPE: FIX (cross-surface presentation). Last authored step of the PHASE 17 block. Presentation only — no data/endpoint/RLS/permission change; every 138–147 behaviour frozen. Schema: none. Gates: `pnpm typecheck` ✅ (29/29), `pnpm lint` ✅ (16/16, incl. design-drift + token-integrity). Controller runs test:unit/e2e/build.
+
+### Method & HONESTY NOTE (spec §2.3 — the requirement 121 failed)
+Spec §2.1/§2.2 asks for capture-through-the-122-screenshot-preview at eight widths × light/dark. **This build environment has no running app and no browser/screenshot preview** — the 122 preview cannot be driven headlessly here. So, exactly per §2.3, the audit was performed by **full-file source inspection of every route + the shared kit against the Tailwind/`mp-shell` breakpoints** (base/`sm`640/`md`768/`lg`1024 + the shell's 30rem/520px/768px/1024px media queries), NOT by rendered captures. Each cell below is therefore recorded as **PASS (inspected)** / **FIXED** / **UNVERIFIED-BY-CAPTURE**. No cell is claimed as visually captured. A browser-equipped confirmation pass (drive the 122 preview at the eight widths in both themes) remains outstanding and is flagged here rather than recorded as done — this is the distinction from the 121 failure, which recorded capture as done without performing it.
+
+### Findings & fixes (fix-in-the-kit-first, spec §5)
+KIT (benefits every consumer, tenant + vendor):
+- `packages/ui/src/components/dialog.tsx` — `DialogContent` had width cap `w-[calc(100%-2rem)] max-w-lg` but **no max-height / body scroll**; being `top-1/2 -translate-y-1/2` a tall dialog clipped its footer/close off-screen at short/360 phones (audit changes dialog, CreateUser, EditAdmin). FIXED: added `max-h-[calc(100dvh-2rem)] overflow-y-auto`. Satisfies Acceptance §6 for all dialogs/modals.
+- `packages/ui/src/components/tabs.tsx` — base `TabsList` was `inline-flex … gap-1` with no wrap/scroll; raw `Tabs` consumers (Profile's 6 tabs) overflowed the viewport at 360. FIXED: added `flex-wrap` to the base list (module-tabs already wrapped; harmless there).
+
+PAGE (genuine 360 breaks, fixed with the existing kit / tiers):
+- `vendor/audit/page.tsx` — changes dialog diff used `grid-cols-[1fr_1fr_1fr]` (auto min-width → horizontal overflow) with unbroken long from/to JSON values. FIXED: tracks → `minmax(0,1fr)` ×3 + `break-words` on the value cells; vertical scroll now covered by the kit dialog fix.
+- `vendor/ai/page.tsx` — review-queue model/corrected free-form AI text had no wrap; long unbroken tokens pushed page-level horizontal scroll at 360. FIXED: `min-w-0 … break-words` on the container.
+- `vendor/domains/page.tsx` — custom-domain cell `<span dir="ltr">` had no break; long domains overflowed the mobile card. FIXED: `break-all`.
+- `vendor/tenants/new/page.tsx` — brand primary/accent `<input type=color>` were `h-10` (40px) touch targets; logo/app-icon upload label was `py-1.5` (~32px). FIXED: colour swatches → `h-11` (44px, matches the detail page); upload label → `min-h-touch`.
+- `vendor/tenants/[id]/page.tsx` — `BrandAssetUploader` Replace/Upload label ~32px → FIXED `min-h-touch`; owner-name span lacked `min-w-0`/truncate so a long name could push the 2FA pill past the column → FIXED `min-w-0` + inner `truncate`.
+
+FALSE POSITIVES dismissed after verification (not defects):
+- Approvals/AI `size="sm"` buttons — `Button` `sm` already carries `min-h-touch` (44px) per `button.tsx`; height compliant.
+- Packages structural-edit 3-button footer — shared `DialogFooter` is `flex-col-reverse … sm:flex-row`; stacks full-width on mobile.
+- Tenant-detail brand-asset row `flex items-center gap-3` (no wrap) — English fits at 360; left as-is (low severity, would only bite a longer localized label, and the surface is English-only).
+
+### Route × width matrix (L=light, D=dark; identical class trees render both themes off the same token layer → theme column collapsed. Legend: P=pass inspected, F=fixed this step, all UNVERIFIED-BY-CAPTURE per method note)
+Columns: 360 · 414 · 768 · 1024 · 1280 · 1440 · 1920 · 2560
+- Shell chrome (sidebar/topbar/search/nav, all routes): P·P·P·P·P·P·P·P — off-canvas drawer <1024, vendor icon-rail 768–1024, `data-collapsed` rail ≥1024; backdrop + menu-btn present.
+- Dashboard (page.tsx): P·P·P·P·P·P·P·P
+- Analytics: P·P·P·P·P·P·P·P (8-col table has renderCard mobile tier; donut `max-w-[220px]` + `flex-col sm:flex-row` legend `min-w-0`)
+- AI command centre: F·F·P·P·P·P·P·P (free-form text wrap)
+- Status & retention: P·P·P·P·P·P·P·P
+- Tenants list (+card view): P·P·P·P·P·P·P·P (shared DataTable + renderCard tiers)
+- Tenant detail + all tabs: F·F·P·P·P·P·P·P (owner-name truncate + uploader touch target; 9-tab strip `overflow-x-auto`)
+- Create-tenant wizard: F·F·P·P·P·P·P·P (colour swatch + upload touch targets; single-col `max-w-3xl`, sticky FormFooter reachable)
+- Billing: P·P·P·P·P·P·P·P
+- Audit log (+ changes dialog): F·F·P·P·P·P·P·P (diff grid + dialog scroll)
+- Packages list + edit dialog: P·P·P·P·P·P·P·P (footer stacks; dialog now scrolls via kit)
+- AI/Listings: P·P·P·P·P·P·P·P (shared DataTable only)
+- Approvals: P·P·P·P·P·P·P·P (flex-wrap rows; sm buttons 44px)
+- Domains: F·F·P·P·P·P·P·P (domain break-all)
+- Admins: P·P·P·P·P·P·P·P (2-tab strip; dialog scroll via kit)
+- Team & roles (RoleManager/TeamUsers): F·F·P·P·P·P·P·P (dialogs scroll via kit; RBAC list reflows `flex-col divide-y`, not a wide grid)
+- Profile (143): F·F·P·P·P·P·P·P (6-tab strip wrap via kit tabs fix)
+- Auth family (vendor sign-in + `/login/reset`): P·P·P·P·P·P·P·P (centred `max-w-[400px]` card, `px-4`, logo scales via `--mp-logo-h`)
+- Error states 138 (vendor error.tsx / not-found.tsx): P·P·P·P·P·P·P·P (shared AppErrorState/ErrorState, centred)
+
+Every row is UNVERIFIED-BY-CAPTURE (no browser/preview in this environment). Charts: `chart.tsx` Frame wraps a Recharts `ResponsiveContainer width="100%"` — reflows, no fixed layout width. No horizontal page scrollbar found in any inspected route (tables scroll within their own `overflow-x-auto` container only). Tables follow the desktop-full / DataList card-tier mobile pattern via the shared component.
+
+### Do-NOT-break honoured
+No restyle — only width-layout fixes with the existing kit and tiers. Tenant surfaces untouched (kit fixes are pure improvements, no visual restyle). Nothing 138–147 changed. English-only; tokens only.
+
+### PHASE 17 BLOCK COMPLETE
+148 is the last authored step. No `specs/149-*.md` exists. PROGRESS.md Next set to the terminal stop instruction per spec §6.2. Any further "next build step" request → [HUMAN_REQUIRED].
