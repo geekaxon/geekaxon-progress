@@ -4971,3 +4971,45 @@ WORK TYPE: FEATURE + FIX (one part is a security fix). Owner review gate (spec �
 ### GATES
 - `pnpm db:generate` OK. `pnpm typecheck` PASS (29/29). `pnpm lint` PASS (0 errors; 1 pre-existing unrelated warning in doctor-portal.repositories.ts). Did not run test:unit/e2e/build per the loop rules (controller runs full gates).
 - i18n: added identical `vendor.profile.*` keys to en.json + ur.json (English-only console, mirrored per parity gate). Reset copy changed in both.
+
+---
+
+## 144 — roles-packages-deregulation — DONE (2026-07-29) — branch feature/144-roles-packages-deregulation
+
+**Spec:** /specs/144-roles-packages-deregulation.md (Phase 17, item 7). Governance change: system roles + packages become seed data the vendor fully manages, with a lockout floor; the Grandfathered subscription state is retired.
+
+### Roles become fully editable, with a lockout floor (§2.1)
+- **Platform (PlatformRole):** removed the `isSystem||isProtected` edit/delete refusals. Added `renameRole` (rename + description, any role incl. seeded, name-uniqueness enforced). `setRoleKeys` and `deleteRole` now allowed on seeded roles, guarded by:
+  - the **role-existence floor** `assertFullAdminFloor` — refuses an edit/delete that would take the count of roles holding a full-admin key (`admins.manage`/`platform.admin`) from ≥1 to 0. Only-blocks-if-it-reduces-to-zero, so it never fires from an already-empty test/bootstrap state.
+  - a **holder-in-use** refusal on delete (`holderCount>0` → names the admin count, reassign-first).
+- **Holder side of the floor** lives in VendorAdminService (`assertEnabledOwnerRemains`): disabling or demoting an admin is refused when it would leave zero enabled admins on the coarse VENDOR_OWNER tier (which confers `admins.manage`). Chosen over a PlatformUserRole-holder count because the bootstrap owner holds admin power via the coarse tier, not necessarily via a role assignment.
+- **Tenant (AppRole):** removed the `isSystem||isProtected` block; a tenant's OWN roles are editable/renameable/deletable. A GLOBAL/shared system role (tenant_id NULL) is still not edited/deleted/renamed in place — that would change it for every tenant (isolation, Do-NOT-break) — so the refusal is reworded to point at cloning. Added `renameRole` + `renameCustomRole` repo seam. The per-tenant full-admin floor holds structurally: the tenant's full admin is the immovable global TENANT_OWNER, so no own-role delete can breach it (documented in code).
+- **Audit:** platform role create/clone/edit/delete already audited; added `vendor.console.role_renamed`. Tenant role CRUD was unaudited — wired AuditService into RbacController (imports AuditModule) and record `rbac.role.created/renamed/updated/deleted`.
+- **Precedence (§2.4/§6):** stated in the vendor role editor via an Alert (`vendor.rbac.precedenceTitle/Note`): flag → package ceiling → permission; a role can never grant what the package excludes. Tenant matrix already renders out-of-plan permissions disabled with a "not in your plan" hint (pre-existing), which states the same.
+
+### Packages become fully manageable (§2.2)
+- Schema: added `SubscriptionPackage.archived` (default false); migration `20260729000000_roles_packages_deregulation` adds the column.
+- **Archive/unarchive** (`setPackageArchived` + `PUT /vendor/packages/:id/archive`): archived packages are hidden from NEW assignments (create-tenant + assign filters now exclude `archived`, and the retired `key!=='grandfather'` filters are gone); existing tenants unaffected.
+- **Delete** (`deletePackage` + `DELETE /vendor/packages/:id`): refused while any tenant is assigned (message names the count + points to archive); allowed when unassigned.
+- **Cosmetic vs structural split** in `SubscriptionService.updatePackage`: cosmetic (name/description/sortOrder) applies immediately; structural (ceiling/limits/price/AI/marketplace/whitelabel/active) with tenants assigned requires an explicit `applyToExisting` choice or is refused (no silent structural change). `applyToExisting:true` mutates in place (all tenants move + flag cache bust); `false` snapshots the current terms into a new archived legacy clone, repoints existing tenants onto it, then applies the new terms to the original (future assignments only). Console list now carries `assignedCount` (`listPackagesWithCounts`), and the web packages page shows the tenant count, an Archived badge, Archive/Restore/Delete row actions, and a 3-way structural dialog (apply / preserve / cancel).
+- **Audit:** `vendor.package.updated` now records `{structural, choice, affectedTenants, before, after}`; added `vendor.package.archived/unarchived/deleted`.
+- **Boot reconcile** changed from clobbering-upsert to create-if-absent (`update:{}`), so seeded packages are true initial data — the vendor's edits survive restarts.
+
+### Grandfathered retired (§2.3)
+- Removed the `grandfather` seed package, `GRANDFATHER_PACKAGE_KEY`, `SeedPackage.system`, `assertNotGrandfather`, and the `startTrial` grandfather guard. Lifecycle enum was already TRIAL→ACTIVE→SUSPENDED→CANCELLED (no enum change needed).
+- Migration retires it under a transaction-local platform scope (`set_config('app.platform_scope','on',true)` — the 61/90 RLS-bypass lesson): records a `subscription_events` row (actor_type `system`) per affected tenant, repoints every grandfather subscription onto **Premium** (the only sold package whose ceiling is also unrestricted `["*"]`, so no tenant loses a capability — Do-NOT-break), then deletes the package. Premium fits, so no `[HUMAN_REQUIRED]`.
+
+### Design decisions recorded
+- Tenant-scope seeded roles are GLOBAL shared rows; making them per-tenant editable in place would leak across tenants, so the tenant customises by cloning (existing path) and the per-tenant floor is guaranteed by the immovable global TENANT_OWNER. This is the isolation-first reading of §2.1 (AGENT golden rule #4 / Do-NOT-break override the literal "editable in both scopes").
+- Grandfather migration target = Premium (capability-equivalent, now billed) rather than guessing per-tenant.
+
+### Tests
+- `platform-permission.service.spec`: replaced the immutability test with (a) seeded-role rename works, (b) the floor refuses stripping/deleting the LAST full-admin role (ForbiddenException), (c) a role held by admins can't be deleted (names the count), (d) a custom role edits/deletes fine.
+- `subscriptions.spec`: dropped the removed `GRANDFATHER_PACKAGE_KEY` import; retargeted the "unrestricted/rate-0" tests onto Premium / a runtime-created free package; added a package-management block (cosmetic-immediate, structural-refused-without-choice, apply-in-place, preserve-clones-and-repoints, delete-refused-while-assigned + archive).
+- Updated fakes: `FakeSubscriptionRepo` (+archive/delete/counts/repoint), `StubSubscriptionService` (listPackagesWithCounts, new updatePackage return shape, archive/delete, dropped grandfather), `FakePlatformRoleRepo` (+rename/holderCount/enabledHolderCount), `FakeAppRoleRepo` (+renameCustomRole). Removed the vendor.spec grandfather-refusal test.
+- i18n: added vendor.packages.* + vendor.rbac.* keys to en + ur (parity verified).
+
+### Gates
+- `pnpm prisma generate` (schema changed) ✅. `pnpm typecheck` ✅ (29/29). `pnpm lint` ✅ (0 errors; 1 pre-existing unused-eslint-disable warning in doctor-portal.repositories.ts, untouched). Did not run test:unit/e2e/build (controller runs them). No Playwright/web-e2e harness exists in the repo, so no web e2e added (matches the existing packages screen, which had none); coverage is unit-level per repo convention.
+
+WORK TYPE: FEATURE (branch feature/144-roles-packages-deregulation)
