@@ -4944,3 +4944,30 @@ PHASE 17 item 5 + the owner's round-1 defects from 138–141. Presentation/routi
 **Gates:** `pnpm typecheck` ✓ (29/29), `pnpm lint` ✓ (design-drift + token-integrity clean). Did not run test:unit/e2e/build (controller runs full gates). Note left: `tenant-gate` and `ImpersonationBanner` still `assign('/vendor')` cross-host — pre-existing, tenant-surface concern, out of 142 scope.
 
 **Owner review gate:** PROGRESS.md Next set to the owner-gate string; ended [CHECKPOINT].
+
+## 143 — vendor-profile-and-auth — DONE (2026-07-29) — branch feature/143-vendor-profile-and-auth
+
+WORK TYPE: FEATURE + FIX (one part is a security fix). Owner review gate (spec §6) — Next set to HUMAN_REQUIRED.
+
+### FIX — reset-password account-enumeration (spec §2.2/§2.3, Acceptance §6–8)
+- Shared reset screen (vendor + tenant) leaked whether an address was registered via `checkEmailBody` ("...on its way to {email}..."). Rewrote the copy to neutral ("If that address belongs to an account, a reset link is on its way. It expires in 30 minutes.") in en.json + ur.json and dropped the `{email}` interpolation in ResetForm.tsx. One shared screen/endpoint, so tenant + vendor both fixed.
+- Backend `AuthService.passwordResetRequest`: now ALWAYS mints the reset token (same crypto work on both branches → indistinguishable timing), records the event, and sends the reset email ONLY for a real account — via a new `SecurityMailPort.passwordReset` (reuses the existing `auth.password_reset` notifications template). The email is NOT awaited, so a send adds no latency (no timing side-channel). HTTP response was already a uniform 202 `{status:'ok'}`.
+- New `ResetRateLimiter` (in-memory keyed sliding window, mirrors the ai-command/directory precedents; no throttler dep): per-address (5 / 15 min) AND per-IP (20 / 15 min). Wired in AuthModule; controller passes the client IP (reused `loginContext`). A 429 is identical regardless of existence.
+- Reset-screen logo now 100px high, width auto (spec §2.3): scoped CSS on a new `.auth-brand--reset` marker so the login screen is untouched; theme variant already resolved by `logoVariantFor('auth')`.
+- Test: apps/api/src/auth/password-reset-enum.spec.ts — registered vs unregistered both resolve to undefined (no throw), email dispatched only for the real account, and the per-address limit trips (429).
+
+### FEATURE — vendor self-service profile page (spec §2.1, Acceptance §1–5)
+- New `apps/web/app/(vendor)/vendor/profile/page.tsx` (reached at `/profile`; the 142 avatar menu already links here). Six independently-saving sections composed from @mp/ui, each with toast confirmation: Details (name editable, email read-only, avatar upload with 141-style progress + 140 IdentityMark render), Password (change with current-password confirmation), Two-factor, Sessions & devices, Login history, Preferences (theme via useTheme; notifications deferred to 146 with a labelled placeholder).
+- Backend: added authenticated `/vendor/me/*` routes on VendorController + methods on VendorAdminService (PUT me name; POST me/password; GET me/2fa; POST me/2fa/reset[/confirm]; POST me/sessions[/revoke|/revoke-others]; GET me/login-history; PUT/DELETE me/avatar). Reuses existing primitives (verifyPassword/hashPassword, TotpService, VendorRefreshToken family-revoke). Auth rules, lockout, RLS, permissions all UNCHANGED.
+- 2FA: for a vendor admin 2FA is MANDATORY (never role/staging-relaxed), so the status endpoint always returns `required:true`, disable is never offered, and "reset authenticator" re-keys via a pending secret (abandoned reset just re-enrolls on next login — never a lockout).
+- Sessions: VendorRefreshToken already had userAgent/ip/lastSeenAt columns (spec 62) but they were never populated — now captured at login/mfa/enroll (threaded req meta through vendor-auth.controller → issueBundle → createRefresh). Sessions are grouped by refresh FAMILY; the current family is flagged from the presented refresh token; revoke-one and revoke-all-others reuse family revocation.
+- Login history: VendorAdmin logins are not in the tenant-scoped LoginEvent table. Rather than add a table + RLS (forbidden by the spec's "RLS unchanged"), recorded `vendor.login.success`/`vendor.login.failure` into the existing platform-scoped VendorAuditLog stream (ip/userAgent in the summary) and read them back for the caller's own history.
+
+### DECISIONS / DEVIATIONS (for owner review)
+- Avatar storage: the 141 object store is tenant-scoped (stored_objects.tenant_id NOT NULL, tenant RLS) and a vendor admin has no tenant; adding a platform-scoped object path would touch RLS/storage (forbidden). So the vendor-admin avatar is stored as a validated, size-capped (≤256 KB PNG/SVG) `data:` URL on the new `VendorAdmin.avatarUrl` column, rendered by IdentityMark (`src`) with the 140 initials fallback. This keeps the 141 UPLOAD-FEEDBACK + 140 RENDER patterns while leaving RLS untouched.
+- Notification preferences (146) do not exist yet — the Preferences tab ships the working theme control and a labelled "arrives with the notifications module" note.
+- Schema: additive only — `VendorAdmin.avatarUrl String?`. `pnpm db:generate` run. No migration authored (controller/deploy handles migrate deploy).
+
+### GATES
+- `pnpm db:generate` OK. `pnpm typecheck` PASS (29/29). `pnpm lint` PASS (0 errors; 1 pre-existing unrelated warning in doctor-portal.repositories.ts). Did not run test:unit/e2e/build per the loop rules (controller runs full gates).
+- i18n: added identical `vendor.profile.*` keys to en.json + ur.json (English-only console, mirrored per parity gate). Reset copy changed in both.

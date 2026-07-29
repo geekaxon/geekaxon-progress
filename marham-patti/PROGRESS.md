@@ -6,14 +6,14 @@
 
 ## Current Status
 - **Project:** Marham Patti — multi-tenant white-label healthcare platform.
-- **Phase:** **PHASE 17** — vendor platform finalisation (138–148): 138 ✅ · 139→142 ✅ · 143 · 144→145 · 146→147 · 148. Standing rules: English only; branding via @mp/brand; vendor sees operational/commercial data only, **never clinical**; Phase 12 suites pass.
-- **Last completed:** **142 — vendor-routing-and-shell**.
+- **Phase:** **PHASE 17** — vendor platform finalisation (138–148): 138 ✅ · 139→143 ✅ · 144→145 · 146→147 · 148. Standing rules: English only; branding via @mp/brand; vendor sees operational/commercial data only, **never clinical**; Phase 12 suites pass.
+- **Last completed:** **143 — vendor-profile-and-auth** (owner review gate).
 - **Next:** none — owner review gate. Stop with [HUMAN_REQUIRED].
-- **Branches:** through 140 on staging. 141–142 on feature branches.
+- **Branches:** through 140 on staging. 141–143 on feature branches.
 
 ### Recent steps
+- **143 — vendor-profile-and-auth** — DONE (2026-07-29) — self-service vendor profile + closed the reset-password enumeration leak (neutral copy, rate limit, bigger logo).
 - **142 — vendor-routing-and-shell** — DONE (2026-07-28) — prefix-free console URLs, server-resolved theme (no flash), avatar menu, and the seven 138–141 review fixes.
 - **141 — branding-asset-storage** — DONE (2026-07-28) — assets stored as objects (R2 or local), served by URL; base64 gone; idempotent boot migration.
-- **140 — identity-rendering-everywhere** — DONE (2026-07-28) — shared identity-mark with the 75% inset; wired to avatars, data lists and the tenants list.
 
 > Older steps in PROGRESS-HISTORY.md
