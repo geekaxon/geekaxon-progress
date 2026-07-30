@@ -6,15 +6,15 @@
 
 ## Current Status
 - **Project:** Marham Patti — multi-tenant white-label healthcare platform.
-- **Phase:** Vendor signed off at 151. **PHASE 19** — tenant finalisation against the mockups. Group 152→154: schema and deploy hardening, the English-only sweep, then the POS visual match. Standing rules: tenant app English only; identity via @mp/brand; business logic frozen; Phase 12 suites pass unchanged; verification is visual.
-- **Last completed:** **154 — pos-visual-match**.
-- **Next:** none — awaiting next spec block
-- **Branches:** through 152 on staging. 154 on fix/154-pos-visual-match.
+- **Phase:** **PHASE 19** — tenant finalisation against the flat mockups. Group 155→157: the component kit, the shell, then the auth family, each matched to exact values in both themes. Standing rules: tenant app English only; identity via @mp/brand; business logic frozen; Phase 12 suites pass unchanged; verification is visual.
+- **Last completed:** **155 — kit-visual-match**.
+- **Next:** **156 — shell-visual-match** — /specs/156-shell-visual-match.md
+- **Branches:** through 154 on staging. 155 builds on fix/155-kit-visual-match.
 - **Note:** spec 137 is retired — superseded by 154. Never build it.
 
 ### Recent steps
-- **154 — pos-visual-match** — DONE (2026-07-30) — POS recomposed to the desktop mockup: two-zone grid, sticky summary, exact cart line and quantity anatomy.
-- **153 — tenant-english-only-sweep** — DONE (2026-07-30) — staff screens resolve English through the framework; no dir flip; lint guard bites.
-- **152 — schema-and-deploy-hardening** — DONE (2026-07-30) — consent enum-type migration, deploy drift gate, --container token.
+- **155 — kit-visual-match** — DONE (2026-07-30) — component kit restyled to the reference's exact values, both themes.
+- **154 — pos-visual-match** — DONE (2026-07-30) — counter matched to the flat POS mockups, desktop and mobile.
+- **153 — tenant-english-only-sweep** — DONE (2026-07-30) — RTL and lang plumbing removed from the staff app.
 
 > Older steps in PROGRESS-HISTORY.md
