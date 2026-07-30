@@ -5310,3 +5310,62 @@ Gates: pnpm lint ✓ (16 tasks), pnpm typecheck ✓ (29 tasks). Did not run test
 **Structure.** No classed wrapper was removed — every element kept, only `dir` attributes and lang plumbing dropped (dashboard's class-less `<div dir=…>` → bare `<div>`; no CSS selector targets it), so zero layout risk.
 
 **Gates.** `pnpm typecheck` clean; `pnpm lint` (eslint + drift + english-only guard) clean. Did not run test:unit/e2e/build (controller runs full gates). No schema change → no prisma generate.
+
+## 154 — pos-visual-match (DONE 2026-07-30) — branch fix/154-pos-visual-match — WORK TYPE: FIX (presentation only)
+
+Spec: /specs/154-pos-visual-match.md. Mockups read at source (flat HTML with real CSS):
+specs/mockups/pharmacy/pos-desktop.html + pos-mobile.html. Behaviour byte-identical to spec 134 —
+no handler, API call, calculation, permission check or idempotency path touched. Presentation only;
+tokens untouched (152 landed the last one). Files changed: apps/web/app/globals.css and
+apps/web/app/(app)/pharmacy/pos/PosClient.tsx (no logic).
+
+Root cause per §1: an older spec-137 CSS layer (last-wins block in globals.css) carried the wrong
+appearance over the 134 surfaces — correct behaviour, wrong composition. Fixed by rewriting that
+layer AND the base .mp-pos-* rules to the mockup's exact pixel values, keeping the app's mp-* class
+names (per §2.2 — do not rename to the mockup's classes; change what each rule contains).
+
+Desktop (§3), values copied from pos-desktop.html final cascade:
+- Two-zone workspace: .mp-pos-grid @1280 → minmax(0,1fr) 336px, gap 18px (mockup .pos; the file's v2
+  cascade sets 336px, so used over §3.1's quoted 328px per "the file wins"). .mp-pos-aside sticky
+  top 96px, gap 14px, align-self start (mockup .pos__side). Working-zone / summary gaps set to 14px
+  in JSX to match .pos__col.
+- Search results (mockup .pos-results): floating panel z-index 25, min-width min(560px,100%),
+  border-strong, radius-lg, shadow-xl. List scroll-padding-block:56px 92px + max-height 288px — the
+  "never obscured" keyboard rule expressed in CSS (§3.2). Result rows (.pos-res) 52px min-height,
+  gap 14px, radius-sm, no separators, .is-hi inset accent ring. Stock as a soft status pill.
+- Held rail (mockup .heldrail/.heldpill): horizontal scroll, scrollbar hidden; brand-tinted 46px
+  pills; 8px accent dot with a 3px accent ring (.heldpill__dot), accent-coloured caption.
+- Cart (mockup .cart): surface-card + hairline + radius-lg + shadow-sm, header 16px/20px no divider,
+  invoice-style sunken pill for the count. Added a column-label row (.mp-poscart-cols, mockup
+  .cart__cols) above the lines via existing i18n keys (cart.item/unitPrice/qty/lineTotal). Line grid
+  is the mockup's 5-column minmax(0,1fr) 88px 96px 104px 40px; name 14.5px/650, meta 12px secondary,
+  unit price only (dropped the "ea" caption), total 14.5px/650 end, remove 40px transparent→danger.
+- Quantity control (mockup .qtyc__box): 44px×94px box, surface-sunken, 28px keys, 36px input,
+  justify-self center in the qty column. Behaviour (keypad-on-click, clear-to-zero-until-blur)
+  unchanged.
+- Summary card (mockup .sumcard): padded flex stack (not bordered rows); .sumline 13.5px secondary,
+  .sumtotal hairline over a 24px/700 grand total. Discount control (mockup .disc): padded card,
+  46px % field, 44px pill presets. Action bar (mockup .fabar): sticky bottom:18px, radius 18px,
+  surface-raised, shadow-xl, 27px money block. Exactly ONE grand total per width preserved
+  (breakpoint-guarded in JSX: wide .mp-cartsum, tablet .mp-pos-totalbar .amt, mobile .mact__v).
+
+Decisions recorded:
+- Action bar kept position:sticky (bottom:18px) rather than the mockup's position:absolute — an
+  absolute bar needs a positioned scroll ancestor the in-app shell does not guarantee; sticky
+  reproduces the floating-foot look without that coupling. Nearest-anatomy call per §5.
+- Line-discount input retained inside the name cell (carries behaviour; the mockup cart row omits
+  it) — restyled to the meta type scale, kept functional per §5.
+- 328px vs 336px: used the file's final cascaded value (336px) per the spec's "the file wins" rule.
+
+Mobile (§4) divergence — recorded for visual iteration, NOT yet recomposed: the app's mobile POS
+still uses its 134-era atoms (.mscan/.mcart/.mline/.mslider/.mact) rather than the mockup's
+.mpos-search/.mline(qty stepper)/.mtotal/.mbar/.mkeypad/.mpick. Grand-total singularity and 44px
+dock targets hold; the full mobile anatomy swap is a larger JSX recomposition best done against the
+360 screenshot pass (§6), which this agent cannot run.
+
+Gates: pnpm lint PASS (incl. design-drift: no retired atoms; token-integrity; tenant-english-only),
+pnpm typecheck PASS. Did NOT run build/test:unit/test:e2e (controller runs full gates).
+
+CHECKPOINT reached. Ends [HUMAN_REQUIRED] per spec §7: §6 verification is screenshot-driven on
+staging (deploy + preview capture at 1440/360, light/dark) — infra this agent cannot perform — and
+§7 mandates ending the block with [HUMAN_REQUIRED] and Next = "awaiting next spec block".
