@@ -5283,3 +5283,30 @@ Three defects hardened; no behaviour/UI/API change.
 Tests. New static-analysis suite packages/db/src/enum-native-types.spec.ts (jest, .spec.ts, no DB): (1) every enum-typed column resolves to its native enum type across accumulated migration SQL, never TEXT — parses schema.prisma with brace-balanced model extraction (needed: model bodies contain `{}` JSON defaults that broke a naive [^}]* regex), resolves table via @@map and column via @map, and takes the last type assignment (CREATE TABLE / ADD COLUMN / ALTER COLUMN TYPE) per column; (2) ConsentType and SubjectType each CREATE TYPE exactly once; (3) SQL enum members equal schema members in order. Validated offline: 140 enum columns, 0 offenders (matches spec's stated 140).
 
 Gates: pnpm lint ✓ (16 tasks), pnpm typecheck ✓ (29 tasks). Did not run test:unit/e2e/build per rules. schema.prisma unchanged → no prisma generate needed (typecheck triggered it anyway).
+
+## 153 — tenant-english-only-sweep — DONE (2026-07-30)
+
+**Work type:** FIX. Branch `fix/153-tenant-english-only-sweep` (off 152).
+**Spec:** /specs/153-tenant-english-only-sweep.md. Schema: none. RLS: unchanged.
+
+**Goal.** ARCHITECTURE §2.11 / spec 132 §2.4: the tenant STAFF app (`apps/web/app/(app)/`) is English-only. Remove the bilingual machinery (`?lang=` plumbing, `resolveLang`, `serverLocale`, computed `dir=`) from that surface only, resolving every string to its English value THROUGH the retained i18n framework (no inlined literals). No visual/behaviour/copy change beyond removed `dir` attributes.
+
+**File list (§3.1).** `grep -rl "resolveLang|dir(lang)|serverLocale|auth-i18n" app/(app)/` → 79 hits enumerated; 54 files changed in the end (46 via a one-shot transform, 3 content-direction components + SettingsClient + 3 outbound-link files + the guard). Matches the spec's "~43" (the grep also catches every legit `tr`/`Lang` importer, which needed no change).
+
+**Transform (regular files, done by a temp Node script then deleted).**
+- 40 server `page.tsx`: dropped `serverLocale` import; reduced `auth-i18n` import to `{ tr }`; removed `dir`/`getMessages(dir)`/`@mp/i18n` `dir` imports; deleted `const lang = resolveLang(...)` / `const locale = await serverLocale()`; `getMessages(locale)`→`getMessages('en')`; removed `dir={dir(lang|locale)}` attrs (kept the `<main>`/`<div>` element, dropped only the attribute); `tr(lang, …)`→`tr('en', …)`; `<XClient lang={lang}>`→`lang="en"`. searchParams: only-`lang` types → whole param + unused `const sp` removed; multi-field types (`patientId`/`doctorId`/`appointmentId`/`encounterId`) → stripped just `lang?: string` and kept `sp`.
+- 6 print-doc clients (Vitals/Consultation/Lab/Pharmacy/Billing/Prescriptions): dropped the `dir` import; the generated print HTML `dir="${dir(lang)}"` → static `dir="ltr"` (English print is always LTR; identical output since `lang` is 'en').
+
+**Content-direction components (hand-edited).** ConsentManager, NotificationManager, ConsentGate imported `dir` and rendered `dir={…}` derived from the CONTENT's own stored language (consent-doc `d.lang`, notification-template `tplLang`, gate doc `o.document.lang`). §5 is absolute ("zero `dir` imports, no computed `dir=` under (app)") and the §3.4 guard bites on any `dir` import, so these were removed too. **Recorded consequence:** an Urdu-authored consent document / SMS template preview now renders in the staff app's default (LTR) flow rather than RTL — accepted per the spec's explicit "apart from removed `dir` attributes" carve-out and the English-only mandate. `lang`/`tr` threading kept (staff UI copy stays English via the framework).
+
+**Settings (§3.3).** SettingsClient: removed `<LanguageSwitcher />`, its import, and the `mp-settings-row` (label existed solely for it). Left the rest of the spec-08 language surface untouched (the explicit EN/UR `choose()` buttons + `useI18n`) to avoid overreach / breaking spec-08 assertions. LanguageSwitcher component + its PlatformChrome/EntranceChrome consumers untouched.
+
+**Outbound links.** Removed dead `?lang=${lang}` from 4 hrefs (DirectoryLink, DirectoryClient×2, DoctorClient→/login); targets no longer read the param, `lang` still used for `tr`.
+
+**Guard (§3.4).** Added to `apps/web/scripts/design-drift-check.mjs` (the spec-94 native-`<select>` guard idiom, run via `pnpm lint`), a path-scoped second pass over `app/(app)/` ONLY: fails on any import of `resolveLang`/`dir` from `auth-i18n`/`@mp/i18n` and on any `dir={…}` (computed) attribute; message states the app is English-only per ARCHITECTURE §2.11 with the framework retained. Plus positive assertions (§4.2): PlatformChrome + EntranceChrome still render `<LanguageSwitcher`, and `lib/auth-i18n.ts` still exports `dir`/`resolveLang`/`tr`/`LANGS`. Verified: passes clean; BITES on an injected `(app)` violation (exit 1); IGNORES the same import placed under `(patient)` (exit 0). No web unit-test runner exists (web has no `test` script), so the guard lives in the lint mechanism — the spec's primary §3.4 path — not a `test:unit` file.
+
+**Out of scope (unmodified, confirmed by diff):** `(patient)`/`(platform)`/`(field)`/`(auth)`/`(vendor)`, PlatformChrome, EntranceChrome, LanguageSwitcher, `lib/auth-i18n.ts`, `lib/server-i18n.ts`, `@mp/i18n`, every Urdu message file.
+
+**Structure.** No classed wrapper was removed — every element kept, only `dir` attributes and lang plumbing dropped (dashboard's class-less `<div dir=…>` → bare `<div>`; no CSS selector targets it), so zero layout risk.
+
+**Gates.** `pnpm typecheck` clean; `pnpm lint` (eslint + drift + english-only guard) clean. Did not run test:unit/e2e/build (controller runs full gates). No schema change → no prisma generate.
