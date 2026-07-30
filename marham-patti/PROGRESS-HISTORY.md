@@ -5218,3 +5218,68 @@ WORK TYPE: FIX. Five traced fixes from the owner test round (149 reported these 
 1.4 Error "Go to dashboard" 404 on the vendor host. The `(vendor)` group's own error.tsx/not-found.tsx already resolved vendor home `/`, but the ROOT `apps/web/app/not-found.tsx` (what an unmatched vendor-host path can render) and the shared top-level surfaces hardcoded tenant audience → `/dashboard`. Made them surface-aware via `isVendorHost()`: `not-found.tsx` (vendor → vendor content + platform lockup), `no-access/page.tsx`, `session-expired/page.tsx`, `offline/page.tsx` (pass `audience`). Files changed for this item: app/not-found.tsx, app/no-access/page.tsx, app/session-expired/page.tsx, app/offline/page.tsx. error-states.ts `homeHref` unchanged (already `/` for vendor).
 
 1.5 `/login` must serve the login page; only `/login/vendor` 404s. `packages/ui/src/lib/surface-routing.ts` `resolveSurfaceRoute` (vendor case) 404'd both `/login` and `/login/vendor`. Now `/login` REWRITES onto `VENDOR_LOGIN_PATH` (the vendor login page, which already redirects a signed-in admin to `vendorHome()` via `hasVendorSession()`), and only `/login/vendor` (+ children) 404s. Updated `surface-routing.spec.ts` (import VENDOR_LOGIN_PATH; `/login` → rewrite). Tenant/public login paths and apex/`/vendor` 404s untouched.
+
+## 151 — auth-routing-and-avatar — DONE (2026-07-29)
+Branch: feature/151-auth-routing-and-avatar. WORK TYPE: FIX (routing + presentation; no data/RLS/permission change).
+
+**§1.1/§1.4 Auth routing model (server-side, no flash).** The vendor session lives only in localStorage, so the edge middleware could not resolve auth state. Added a presence-only mirror cookie `mp_vendor_auth=1` (constant `VENDOR_SESSION_COOKIE` in packages/ui/src/lib/surface-routing.ts) written by storeVendorBundle / cleared by clearVendorBundle in apps/web/lib/vendor-session.ts (new writeVendorSessionCookie + syncVendorSessionCookie helpers; carries no token, grants no authority). New pure `resolveVendorAuthRedirect(pathname, {authed, screenshotPreview})` encodes the table: logged-out `/`→`/login`; logged-in `/login`+`/reset`→`/`; screenshot preview exempt; only the three prefix-free paths governed (`/login/vendor` stays 404 via resolveSurfaceRoute). Middleware (apps/web/middleware.ts) reads the cookie (+ mp_screenshot cookie / validated token) and issues the server-side redirect for the vendor surface before render. Client fallbacks self-correct on cookie drift with no wrong-screen flash: VendorRouteGuard now redirects a signed-out visitor to `/login?next=` (renders null until known; screenshot preview renders children); VendorLoginForm and ResetForm sync the cookie on mount and gate rendering (`ready`/`vendorReady`) so no auth card flashes for a signed-in admin who is redirected. Reset "back to sign in" on vendor now targets `/login` (was `/`).
+
+**§1.2 Avatar object-fit cover.** IdentityMark gained a `fit: 'inset'|'cover'` prop (default inset = the 75% insignia rule). Avatar (user-photo alias) defaults to `fit='cover'` → `size-full object-cover`, cropped to the circle; profile page IdentityMark passes fit="cover". Insignia marks (tenants list/detail, raw imgs) keep the 75% inset. Initials fallback unchanged. Verified every `<Avatar>` usage is a person; tenant insignia use IdentityMark/raw img.
+
+**§1.3 "Go to home".** error-states.ts homeLabel for the vendor audience: "Go to overview" → "Go to home" (target unchanged = console home `/`). Comments in root and (vendor) not-found.tsx updated.
+
+**Tests.** surface-routing.spec.ts: resolveVendorAuthRedirect table (logged in/out, exempt preview, ungoverned paths). system.spec.tsx: avatar cover vs insignia inset. Existing resolveSurfaceRoute matrix untouched (auth is an overlay, not a change to the pure surface routing).
+
+**Gates:** pnpm lint ✓, pnpm typecheck ✓. (test:unit/e2e/build left to controller per AGENT §6.)
+
+## 152 — schema-and-deploy-hardening — DONE (2026-07-30) — WORK TYPE: FIX (branch fix/152-schema-and-deploy-hardening)
+
+Three defects from spec 152, all FIX-type, no behaviour/UI/API change.
+
+§3.1 Migration `packages/db/prisma/migrations/20260730000000_consent_enum_types/migration.sql`:
+the 20260703180000_consent_terms migration wrote five enum columns as TEXT while schema.prisma
+declared them as enums. Verified via grep that CREATE TYPE "ConsentType"/"SubjectType" exist nowhere,
+so the migration creates both (guarded with DO $$ ... EXCEPTION WHEN duplicate_object) then converts
+all five columns via ALTER COLUMN ... TYPE ... USING: consent_documents.audience→Audience,
+type→ConsentType, lang→Lang; consent_records.subject_type→SubjectType, type→ConsentType. Enum members
+copied verbatim from schema.prisma (ConsentType: SYSTEM_USE,TREATMENT,DATA_USE,AI_ASSISTANT_DISCLAIMER,
+SERVICE_TERMS; SubjectType: USER,PATIENT). DDL only — no DML, no RLS bypass needed. No fallback/default
+added (bad values must fail loudly). File was pre-staged by a partial run; confirmed byte-correct.
+
+§3.2 deploy.sh drift gate: inserted step "6. Drift gate" immediately before migrate deploy — runs
+`prisma migrate status`, captures output+exit code, and branches: pending-only → log & continue;
+drift/schema-ahead → fail() abort (no repair, no migrate dev, no db push); unreachable DB (P1001/
+can't reach/connection refused/env var missing) → fail() abort rather than deploy blind; any other
+non-zero → fail(). Uses the surrounding `pnpm --filter @mp/db exec prisma` invocation, the existing
+log()/fail() helpers. Header pipeline comment updated to "...prisma generate -> drift gate -> migrate
+deploy -> BUILD_ID -> build -> Lighthouse gate -> pm2 restart -> health." Dangerous-command fence,
+Node detection, build/PM2/health untouched.
+
+§3.3 --container token: added `--container: 1200px;` to the base :root layout-token block in
+apps/web/app/globals.css beside --sidebar-w/--topbar-h/--content-max. Base block only (dimension, not
+colour). Consumed by nothing this step per spec.
+
+§4 Tests: new packages/db/src/schema-enum-types.spec.ts (Jest, file-only static analysis, no DB).
+Parses schema.prisma (110 enums, 140 enum-typed columns resolved to table.column via @@map/@map) and
+the concatenated migration SQL. Test 1: every enum column's final SQL type equals its enum, never TEXT
+(would catch this exact drift). Test 2: CREATE TYPE "ConsentType"/"SubjectType" appear in exactly one
+migration each. Test 3: SQL enum members equal schema members, same order. Validated offline with a
+throwaway node script: 110 enums / 140 columns / 0 offenders / both member lists match.
+
+Gates: `pnpm lint` clean (design-drift + token-integrity pass with new token), `pnpm typecheck` clean.
+schema.prisma unchanged so no prisma generate required (it ran anyway as a typecheck build dep, OK).
+Did not run test:unit/e2e/build per CLAUDE.md. Acceptance §5 all satisfied.
+
+## 152 — schema-and-deploy-hardening — DONE (2026-07-30) — WORK TYPE: FIX (branch fix/152-schema-and-deploy-hardening)
+
+Three defects hardened; no behaviour/UI/API change.
+
+1.1 Schema↔DB enum drift. The 20260703180000_consent_terms migration wrote five enum-declared columns as TEXT: consent_documents.audience(Audience), .type(ConsentType), .lang(Lang) and consent_records.subject_type(SubjectType), .type(ConsentType). Audience/Lang have native types; ConsentType/SubjectType had NO CREATE TYPE anywhere (grep confirmed 0 hits). New migration packages/db/prisma/migrations/20260730000000_consent_enum_types/migration.sql: two guarded DO $$ CREATE TYPE blocks (duplicate_object → NULL) then two ALTER TABLE ... ALTER COLUMN ... TYPE ... USING conversions for all five columns. DDL only, no DML → no RLS bypass. Enum members copied from schema.prisma verbatim: ConsentType = SYSTEM_USE,TREATMENT,DATA_USE,AI_ASSISTANT_DISCLAIMER,SERVICE_TERMS; SubjectType = USER,PATIENT.
+
+1.2 deploy.sh drift gate. Inserted §6 before migrate deploy: runs `pnpm --filter @mp/db exec prisma migrate status`, captures output+rc. Classifies output — pending-only ("not yet been applied") logs and continues; drift/out-of-sync/failed-apply → fail() abort (no repair, no migrate dev, no db push); connection error (P1001/can't reach/env var not found) → fail() abort; any other non-zero → fail(). Uses existing log()/fail() helpers and the surrounding pnpm/DATABASE_URL resolution. Header pipeline comment updated to include "drift gate". Dangerous-command fence, Node detection, build, PM2, health-check untouched.
+
+1.3 --container token. Added `--container: 1200px` to apps/web/app/globals.css :root, adjacent to --sidebar-w/--topbar-h/--content-max (base block only; it's a dimension, shared light/dark). Consumed by nothing this step.
+
+Tests. New static-analysis suite packages/db/src/enum-native-types.spec.ts (jest, .spec.ts, no DB): (1) every enum-typed column resolves to its native enum type across accumulated migration SQL, never TEXT — parses schema.prisma with brace-balanced model extraction (needed: model bodies contain `{}` JSON defaults that broke a naive [^}]* regex), resolves table via @@map and column via @map, and takes the last type assignment (CREATE TABLE / ADD COLUMN / ALTER COLUMN TYPE) per column; (2) ConsentType and SubjectType each CREATE TYPE exactly once; (3) SQL enum members equal schema members in order. Validated offline: 140 enum columns, 0 offenders (matches spec's stated 140).
+
+Gates: pnpm lint ✓ (16 tasks), pnpm typecheck ✓ (29 tasks). Did not run test:unit/e2e/build per rules. schema.prisma unchanged → no prisma generate needed (typecheck triggered it anyway).

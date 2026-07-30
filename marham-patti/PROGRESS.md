@@ -6,15 +6,15 @@
 
 ## Current Status
 - **Project:** Marham Patti — multi-tenant white-label healthcare platform.
-- **Phase:** 1–150 ✅. **PHASE 18** (owner-test vendor fixes, specs 149–150) complete. Standing rules: English only; identity via @mp/brand; vendor operational/commercial data only, never clinical; Phase 12 suites pass unchanged.
-- **Last completed:** **150 — vendor-surgical-fixes**.
-- **Next:** none — no spec beyond 150. Stop with [HUMAN_REQUIRED].
-- **Branches:** through 149 on staging. 150 builds on feature/150-vendor-surgical-fixes.
-- **Known separate item:** spec 137 (tenant POS visual) authored but never built — tenant work, deferred until vendor is signed off.
+- **Phase:** Vendor signed off at 151. **PHASE 19** — tenant finalisation against the mockups. Group 152→154: schema and deploy hardening, the English-only sweep, then the POS visual match. Standing rules: tenant app English only; identity via @mp/brand; business logic frozen; Phase 12 suites pass unchanged; verification is visual.
+- **Last completed:** **152 — schema-and-deploy-hardening**.
+- **Next:** **153 — tenant-english-only-sweep** — /specs/153-tenant-english-only-sweep.md
+- **Branches:** through 152 on staging. 153 builds on fix/153-tenant-english-only-sweep.
+- **Note:** spec 137 is retired — superseded by 154. Never build it.
 
 ### Recent steps
-- **150 — vendor-surgical-fixes** — DONE (2026-07-29) — tenant role switches editable; avatar white plate; auth logo follows theme; error home; /login serves login.
-- **149 — vendor-console-fixes** — DONE (2026-07-29) — consolidated owner-test fixes; five items reported done but not delivered → 150.
-- **148 — vendor-responsive-pass** — DONE (2026-07-29) — 360→2560 audit.
+- **152 — schema-and-deploy-hardening** — DONE (2026-07-30) — consent enum-type migration, deploy drift gate, --container token.
+- **151 — auth-routing-and-avatar** — DONE (2026-07-29) — server-side auth redirects, avatar object-fit cover.
+- **150 — vendor-surgical-fixes** — DONE (2026-07-29) — tenant role switches, reset logo, error link, login routing.
 
 > Older steps in PROGRESS-HISTORY.md
