@@ -5392,3 +5392,65 @@ staging (deploy + preview capture at 1440/360, light/dark) — infra this agent 
 **§5 POS re-check:** keypad is the only shared kit component that POS composes; its structure/props/behaviour are unchanged (only class values + one icon size), and it was matched to the same 214px/44px reference spec 154 used, so POS continues to match its mockups. Full 1440/360 light/dark screenshot comparison against pos-desktop/mobile.png is a controller/staging step (no in-session browser).
 
 **Follow-up for a visual pass (not blocking):** confirm §B-G against the /ui gallery in staging screenshots, light + dark, and re-confirm dark chart-tooltip legibility live.
+
+## 156 — shell-visual-match — DONE (2026-07-30)
+**Branch:** fix/156-kit-visual-match (correction; presentation only). **Work type:** FIX.
+**Spec:** /specs/156-shell-visual-match.md (reference section A · Shell & frame). Schema/RLS unchanged.
+
+### What
+Matched the tenant staff AppShell frame to reference section A at exact values, both themes. The
+implementation uses `.mp-shell-*` classes (the mockup's `.pnav`/`.ptop`/`.pghead` are the design-
+reference names only); the `--mp-*` tokens already alias onto the canonical `--surface-card`/
+`--border-hairline`/`--accent*`/`--text-*` layer (established in kit step 155), so colours were
+already correct — the drift was geometry approximated from a picture in Phase 16. All edits in
+apps/web/app/globals.css; no class/component renames, no behaviour touched (route guard, flag-aware
+nav filtering, spec-122 screenshot bypass, spec-132 collapse/pin persistence, @mp/brand resolution
+all unchanged). AppShell.tsx untouched.
+
+### Changes (globals.css, desktop shell block ~1810–2180)
+- `.mp-shell-sidebar` (`.pnav`): padding→0, dropped gap and box-shadow, `--border-hairline`/
+  `--surface-card`; each child now owns its padding so the header hairline spans full width.
+- `.mp-shell-brand` (`.pnav__hd`): fixed `height:var(--topbar-h)` border-box + bottom hairline +
+  `padding:0 16px; gap:11px` — the sidebar header and top bar now form one unbroken 60px line for
+  the staff shell (previously only the vendor variant did). Vendor `.mp-shell-brand` override lost
+  its now-wrong negative margins (base is full-bleed); reduced to `margin:0; padding:0 1rem`.
+- `.mp-shell-nav` (`.pnav__scroll`): `padding:10px 10px 4px`, gap 0 (group-label top padding spaces
+  groups). `.mp-shell-navgroup-label` (`.pnav__grp`): 10px / `--ls-caps` / `--text-tertiary` /
+  `--fw-semibold` / `padding:14px 8px 5px`.
+- `.mp-shell-navlink`: adopted `.pnav--pos` geometry per §3.2 — `height:44px; padding:0 12px;
+  border-radius:var(--radius-md); gap:12px`, colour `--text-secondary`, `--text-sm`, `--fw-medium`;
+  hover adds `--text-primary`; icon 18px inheriting currentColor.
+- ACTIVE NAV — DELIBERATE READING OF THE REFERENCE (§3.2), not an omission: the reference carries
+  two active treatments (solid `.pnav__item.is-active` fill and soft `.pnav--pos .is-active`).
+  Chose the single soft `--accent-soft`/`--accent`/`--fw-semibold`/no-shadow treatment app-wide —
+  it is what pos-desktop/pos-mobile render (already deployed, consistent with 154), honours the
+  standing "teal is an accent, never wallpaper" rule, and one treatment beats a per-screen variant.
+  Dropped the separate `html.dark` active override — `--accent-soft`/`--accent` are theme-aware.
+- `.mp-shell-navcount` (`.cnt`): neutral `--surface-hover`/`--text-secondary`, 10px, `padding:1px 7px`,
+  `--radius-pill` (was amber/warning — that tone is now reserved for an at-risk `--alert` count);
+  active count `--accent 18%`/`--accent`, dark override dropped.
+- `.mp-shell-user` (`.pnav__foot`): `padding:11px 12px; gap:10px; flex:none`, top hairline, no margin.
+  `.mp-shell-user-avatar` (`.avatar-sm`): 30px, `--radius-pill`, `--accent-soft`/`--accent`, 11px,
+  dark override dropped. name→`--text-sm`/`--fw-medium`, role→`--text-xs`/`--text-secondary`.
+- `.mp-shell-collapse-btn` (`.pnav__pin`): 30px, `1px --border-hairline`, `--radius-sm`; added the
+  `[aria-pressed='true']` soft-accent `is-on` state.
+- `.mp-shell-topbar` (`.ptop`): `height:var(--topbar-h); gap:16px; padding:0 22px` (was min-height
+  56px / 0.6rem / 1rem). `.mp-shell-topbar-heading` (`.ptop__title`): 15px / 650 / `-0.012em`.
+- Collapsed rail (@media ≥1024, `[data-collapsed]`): added reference `.pnav--rail` padding resets —
+  brand `padding:0`, nav `10px 8px`, navlink `padding:0`, user `11px 0`. Width already 68px via
+  `--sidebar-w-collapsed`; group labels + counts already hidden.
+
+### Not changed / verified as already matched
+- Mobile chrome/dock (`.mp-mobile .mchrome/.mdock/.mscroll`, built specs 124/154) already match
+  reference §4: glass `--glass-bg` + backdrop-filter (richer than the flat reference's color-mix,
+  by design), 26px dock, accent active tab, `.mdock__badge` accent count. Dock reads from the
+  `staffMobileTabs` registry (flag-filtered); the breakpoint guard (`useIsMobile` <768) keeps mobile
+  chrome and the desktop top bar from co-mounting. No More overflow sheet invented (§4.1) — the
+  existing More→drawer button is pre-existing spec-124 behaviour, untouched.
+- Breadcrumbs (§3.5): `.mp-kit .crumb` matched in step 155; the top-bar eyebrow uses theme-aware
+  `--text-secondary`, legible in dark.
+
+### Gates
+`pnpm lint` clean — including design-drift (no retired atoms) + token-integrity (every --mp-* resolves)
++ tenant-english-only checks. `pnpm typecheck` clean. CSS-only change; no schema, no prisma generate.
+Did not run test/build (controller runs full gates).
