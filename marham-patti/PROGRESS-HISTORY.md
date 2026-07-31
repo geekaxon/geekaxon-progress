@@ -5454,3 +5454,50 @@ all unchanged). AppShell.tsx untouched.
 `pnpm lint` clean — including design-drift (no retired atoms) + token-integrity (every --mp-* resolves)
 + tenant-english-only checks. `pnpm typecheck` clean. CSS-only change; no schema, no prisma generate.
 Did not run test/build (controller runs full gates).
+
+## 157 — auth-visual-match — DONE (2026-07-30) — branch fix/157-auth-visual-match (FIX, presentation only)
+
+Matched the tenant staff auth family (`(auth)/login`, `/login/reset`) to `specs/mockups/pharmacy/auth-screens.html` at exact values, both themes. This was a values audit against the flat mockup, since 136 matched only against a picture.
+
+Findings: the card anatomy already matched the mockup exactly (`.authpage`, `.authcol`, `.authcard`, `.auth-brand`, `.auth-head`, `.auth-form`, `.auth-foot`, `.auth-link`, `.auth-back`, `.auth-req`, `.auth-done`/`__ring`, `.auth-mail`, `.auth-resend`, `.tenant-lock*`), as did all §2.3 copy/structure carried over from 136: subtitle "Sign in to your workspace." (i18n `staffSubtitle`), tab title `Sign in — [Tenant Name]` (generateMetadata), "Powered by Marham Patti" below the card (AuthPoweredBy in `.authcol`), exactly one logo node per slot (single `<Logo>` mount, no for-light/for-dark dual mount — 135 fix preserved), errors as top-right toast (`toast.error`), spinner + "Signing in…" on submit, no clinic/tenant-name/patient fields on the tenant staff surface, `strokeWidth={2.2}` inline on the done-ring icons.
+
+The only real drift was in the icon-field / password-reveal affordances (`.mp-kit .input-wrap` / `.pw-wrap` / `.pw-toggle`), which still carried older 133/126 numbers rather than the mockup's shared component values:
+- `.input-wrap > svg` inset-inline-start 12px → 11px (mockup `left:11px`).
+- `.input-wrap > .input` padding-inline-start 36px → 34px (mockup `padding-left:34px`).
+- `.pw-wrap > .input` padding-inline-end 42px → 48px (mockup `padding-inline-end:48px`).
+- `.pw-toggle` height:100%;width:42px → width:44px;height:44px (mockup 44×44; spec §3 explicit; equals control-lg=44px so visually unchanged but now exact).
+- `.pw-toggle svg` 17px → 18px (mockup 18px).
+Kept the robust `top:50%;translateY` vertical-centering mechanism and RTL-safe logical props (EN-only surface) — visually identical to the mockup's flex/align-items approach with identical markup.
+
+Out of scope untouched: vendor/patient auth surfaces, all auth/session/lockout/2FA/non-enumeration behaviour, server-resolved branding + theme (no flash). `.toaster`/`.toast__close` owned by the kit (155). Schema/RLS unchanged.
+
+Gates: `pnpm lint` clean (pre-existing unrelated api warning only), `pnpm typecheck` clean. CSS-only change; did not run test/build/prisma (no schema change).
+
+---
+
+## 158 — tenant-identity-resolution — DONE (2026-07-31) — branch fix/158-tenant-identity-resolution
+
+WORK TYPE: FIX. Phase 19. Resolution plumbing so a tenant sees its OWN identity, never the platform's; auth/error surface composition stays for 159.
+
+### What changed
+- **@mp/brand** (`packages/brand/src/index.ts`): new pure `resolveAssetSet(assets)` → `ResolvedAssetSet` (5 slots × {light,dark}) applying 139 cross-theme + slot-family fallback (appIcon→insignia; favicon→insignia via resolveTenantAsset), never to platform. New `resolveBrandMark(tenant, slot, mode)` → `BrandMark` discriminated union (`asset` | `initial` | `platform`) — the ONE shared decision every surface uses. Types `ResolvedSlotAsset`, `ResolvedAssetSet`, `BrandMark`, `BrandMarkInput` exported.
+- **API asset seam**: `BrandRepo.listAssets(tenantId)` (Prisma reads `brandAsset` under `runWithTenant`, audience='all') + `FakeBrandRepo.listAssets`/`.assets` map. `BrandService.resolveAssetSet(tenantId)` wraps the pure fn.
+- **API payload** (`vendor-invite-branding.service.ts`): `InviteBranding` keeps `logo` (back-compat, invite screen) and gains `assets: ResolvedAssetSet`, `initial` (upper first char of tenantName), `brandColor` (tenant primary), `brandOn` (#FFFFFF). Non-whitelabel tenant now returns its name+initial+palette with all-null assets (the initial-mark state). Whitelabel fetches brand+assets in parallel.
+- **Web resolver** (`lib/tenant-branding.ts`): `TenantBrand` widened to mirror the payload. `tenantDisplayName(brand)` — shared title/name precedence (whitelabel appName ONLY when != platform default, else clinic name, else null); Ganatra's appName holds "Marham Patti" (data bug) so it falls to the clinic name. `brandMarkForSlot(slot)` — cache()d server resolver = getTenantBrand + serverTheme + resolveBrandMark.
+- **Title flash fix**: deleted the client `document.title` write in `lib/brand.tsx` (§3.3). Root `layout.tsx` `generateMetadata` resolves the doc title per host (tenant → display name, else platform tagline). `login`/`reset` `generateMetadata` switched to `tenantDisplayName`. Invite: `invite/page.tsx` now has server `generateMetadata` (invite link is always on the tenant's own host, so host branding = the token's tenant) and the client `document.title` write in `BrandedInviteScreen` was removed.
+- **PWA** (`lib/pwa.ts`): `resolvePwaBrand` uses the **App Icon** slot via `resolveBrandMark` (not `tenant.logo`, which is the Horizontal lockup), dropped the SVG-only `isRenderableSvg`/`isRenderable` gate (generator rasterises any format), and the installed app name/icon are the TENANT's on any tenant host — **reversing 147's "a non-whitelabel tenant keeps the platform chrome"** (recorded here as required). Fallback chain App Icon → Insignia → tenant initial (generator route) → platform icon only when no tenant. `resolvePwaAssetSource` returns `markSrc|null` + `initial` so the generator draws the letter. New `resolveFavicon` (§3.5): Favicon → Insignia → initial → platform, distinct from the manifest App Icon; wired into `pwaMetadata` `icons.icon`. Generator route (`pwa/asset/route.tsx`) draws a rounded initial tile (primary fill, contrast ink) when no mark asset.
+- **Logo sizing** (§3.7): auth lockup tenant `<img>` in `AuthShell` now `max-height:40px; width:auto` (was unconstrained).
+- **Env** (§3.8): `.env.example` `API_INTERNAL_URL` comment now states the silent-degradation failure mode + per-env port requirement. New `apps/web/instrumentation.ts` `register()` warns (non-fatal, nodejs runtime only) when `API_INTERNAL_URL` is unset while `PLATFORM_BASE_DOMAIN` is set.
+
+### Decisions / notes
+- Vendor console byte-for-byte: `platformOnly` audiences short-circuit to the platform icon/name; a vendor/apex host resolves `getTenantBrand()` → null → platform mark. Title/favicon/manifest/icon unchanged for vendor (verified by inspection against the prior resolution).
+- Auth/error surface *composition* (rendering the initial mark in AuthShell/error pages) is 159 per spec §6 — 158 ships the resolver `brandMarkForSlot` + payload they consume. AuthShell's own `renderableLogo` fallback is untouched pending 159.
+- Manifest's scalable "any" icon entry (@mp/ui `manifestIcons`, unchanged) points at `brand.svgIcon`; for a no-asset tenant that is now the generator (PNG) URL, mildly mislabeled `image/svg+xml`, but the sized PNG icons carry the identity and the tab favicon (a `<link>`) accepts a PNG fine. Left @mp/ui untouched (shared surface).
+- Test 5 ("document.title never assigned in lib/brand.tsx") satisfied by deletion; apps/web has no jest infra, so no source-grep test added. Pure logic tested in @mp/brand via the API brand spec instead.
+
+### Tests
+- `apps/api/src/brand/brand-config-helpers.spec.ts`: `resolveAssetSet` (family fallback, all-null empty) + `resolveBrandMark` (asset per theme, initial, platform-only-when-no-tenant) — maps §4.1–§4.4.
+- `apps/api/src/vendor/vendor-invite-branding.spec.ts`: stub `brand.resolveAssetSet` added; asserts whitelabel ships per-theme assets + initial + brandColor/brandOn, and non-whitelabel carries name+initial with null assets.
+
+### Gates
+- `pnpm typecheck` clean (29/29). `pnpm lint` clean for the touched packages (only pre-existing warnings remain: api doctor-portal unused-disable). `prisma generate` not needed (no schema change). Full unit/e2e left to the controller per CLAUDE.md.

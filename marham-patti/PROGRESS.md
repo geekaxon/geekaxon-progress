@@ -6,15 +6,15 @@
 
 ## Current Status
 - **Project:** Marham Patti — multi-tenant white-label healthcare platform.
-- **Phase:** **PHASE 19** — tenant finalisation against the flat mockups. Group 155→157: the component kit, the shell, then the auth family, each matched to exact values in both themes. Standing rules: tenant app English only; identity via @mp/brand; business logic frozen; Phase 12 suites pass unchanged; verification is visual.
-- **Last completed:** **156 — shell-visual-match**.
-- **Next:** **157 — auth-visual-match** — /specs/157-auth-visual-match.md
-- **Branches:** through 154 on staging. 156 builds on fix/156-shell-visual-match.
+- **Phase:** **PHASE 19** — tenant finalisation vs the flat mockups. Group 158→159 fixes the owner's first auth test round: identity resolution done (158), then auth+error surfaces (159). Tenant surfaces only; vendor byte-for-byte unchanged.
+- **Last completed:** **158 — tenant-identity-resolution**.
+- **Next:** **159 — auth-error-surface-completion** — /specs/159-auth-error-surface-completion.md
+- **Branches:** through 157 on staging. 158 builds on fix/158-tenant-identity-resolution.
 - **Note:** spec 137 is retired — superseded by 154. Never build it.
 
 ### Recent steps
-- **156 — shell-visual-match** — DONE (2026-07-30) — sidebar, top bar and rail matched to the reference; one soft-accent active nav treatment app-wide.
-- **155 — kit-visual-match** — DONE (2026-07-30) — component kit restyled to the reference's exact values, both themes.
-- **154 — pos-visual-match** — DONE (2026-07-30) — counter matched to the flat POS mockups, desktop and mobile.
+- **158 — tenant-identity-resolution** — DONE (2026-07-31) — full asset set, initial fallback, server title, tenant favicon/PWA.
+- **157 — auth-visual-match** — DONE (2026-07-31) — auth family to the flat mockup, six states.
+- **156 — shell-visual-match** — DONE (2026-07-31) — sidebar, top bar, mobile chrome and dock.
 
 > Older steps in PROGRESS-HISTORY.md
