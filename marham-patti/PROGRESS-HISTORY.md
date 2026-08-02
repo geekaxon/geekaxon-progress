@@ -5642,3 +5642,108 @@ Realigned the staff/public mobile auth composition (originally authored in 159 b
 **Gates:** `pnpm lint` clean (eslint + design-drift + token-integrity + tenant-english-only all pass); `pnpm typecheck` clean. No schema/RLS change. Did not run test:unit/e2e/build (controller runs full gates).
 
 End of the authored group. Next block (Inventory) authored after this group is owner-tested — no spec 165 exists yet.
+
+## 165 — tenant-dark-palette-and-identity-polish — DONE (2026-08-02)
+WORK TYPE: FIX (branch fix/165-tenant-dark-palette-and-identity-polish). Refinements from the owner's 161–164 test. Vendor console byte-for-byte unchanged throughout (incl. its Mint Bright dark accent).
+
+**§1 Tenant colour reaches dark (headline defect).** Root cause traced in apps/web/app/globals.css: the tenant DARK block derived --accent/--accent-hover/--accent-press/--accent-soft from platform tokens (--teal/--mint) + hardcoded literals, so a custom palette (which only injects --brand-teal) never entered dark. Payload finding: the branding payload delivers ONE flat, theme-agnostic cssVars set (--brand-* on <html> via layout + BrandProvider); it does NOT carry 139's per-theme palette values through to CSS. Per spec §1.1, derivation from the single injected primary is therefore the complete fix (noted; per-theme light≠dark primaries are not wired to CSS, so a flat palette is fully covered and a per-theme one uses the light primary in both themes).
+- Dark block: --accent = color-mix(var(--brand-teal) 82%, #fff); hover 66%/#fff; press 90%/#fff; soft 15% over --surface-sunken. Lightened toward white to reproduce the vibrancy the default got from the brighter --teal (default #06888d ≈ old #1ea7a2), now parameterised by the tenant hue. --border-focus/--text-link → var(--accent); --text-link-hover → var(--accent-hover). No literal remains in the tenant dark accent family. --text-on-brand stays #fff (matches the current default dark contrast profile; 139 AA guard unchanged).
+- Light :root: --accent-hover/--accent-press now DERIVE from --brand-teal via color-mix (82%/66% toward black ≈ the old static ramp) instead of the un-injected --brand-teal-hover/-press literals — fixes the owner's "button hover shows teal" on a custom palette. --border-focus → var(--accent); --focus-ring → color-mix(var(--accent) 32%).
+- Interactive .mp-* rules switched raw --brand-teal-mid/-deep/literals → semantic tokens: .mp-input:hover/:focus (→ --border-focus + --focus-ring, killing the rgba(10,138,142) literal), .mp-pw-toggle/.mp-btn/.mp-consent-gate-body/.mp-palette-card focus outlines (→ --border-focus), .mp-btn bg → --accent, .mp-btn:hover → --accent-hover. Scope decision: 6 remaining `color: var(--brand-teal-mid)` are non-interactive decorative label colours (outside §1.1's hover/press/border/focus scope) and are shared with vendor surfaces, so left as-is to preserve vendor byte-for-byte.
+- Vendor pins: since :root/html.dark are shared with the vendor console (which only re-overrides the accent family, not focus/border), .mp-vendor-root + html.dark .mp-vendor-root now re-pin --border-focus/--focus-ring (and light --accent-hover/-press/--text-link-hover) to their exact pre-165 teal values, so the console renders identically.
+- Test: packages/ui/src/lib/tenant-dark-palette.spec.ts (source-inspection, matching the repo's CSS-guard style) asserts the dark accent family derives from var(--brand-teal), the light ramp/focus derive from the accent, the shared input/button focus rules use semantics, and the vendor dark accent stays #a5e8e0 with teal-pinned focus.
+
+**§2 Insignia sizing.** AuthShell TenantLock condition 2 insignia max-height 28px → 34px (name stays 22px).
+
+**§3 Error pages share the ONE auth lockup.** The error surfaces carried their own 2-condition errorLockup (tenant-logo / initial / platform). Unified onto the shared authLockup (Horizontal alone / Insignia+name / name alone / platform) rendered by the SAME TenantLock view: layout.tsx + not-found.tsx now resolve authLockup(brand, mode); lib/error-lockup.tsx context + AppErrorState + ErrorState typed on AuthLockup; ErrorState.BrandLockup deleted its bespoke initial/tenant/platform branching and now renders <TenantLock lang="en" variant="horizontal"> inside .mp-kit. @mp/ui errorLockup helper left intact (still unit-tested) but no longer used by the app. All consumers verified (offline/no-access/session-expired/tenant-gate/vendor pass {kind:'platform'}; global-error stays platform-only by construction).
+
+**§4 404 title flip killed + wording.** Root cause: the (app) layout's title.template `%s — [name]` re-wrapping Next's default "Not Found" on a client-nav 404. Root not-found title → { absolute: 'Page not found — [Tenant]' } (template-immune); added apps/web/app/(app)/not-found.tsx as the nearest boundary for in-app notFound(), also with an absolute title + the shared tenant lockup, so the tenant title survives hydration. Wording standardised to "Page not found — [Tenant]".
+
+**§5 Favicon deterministic (subagent).** Verified markIconHref always emits the generator URL for kind:'initial'; verified the /pwa/asset route sets Cache-Control public,max-age=31536000,immutable + honours ?v= (no change needed). Added ONE retry to getTenantBrand on a transient (network/non-ok) failure — distinguishing it from a definitive non-tenant null — so a flaky fetch no longer drops the tenant favicon to the platform icon. Test added (packages/ui pwa.spec.ts): a zero-asset tenant resolves the favicon to the generator ?v= URL.
+
+**§6 App-icon chain = App Icon → initial only (subagent).** Removed the appIcon→Insignia family-fallback from resolveAssetSet (packages/brand); favicon chain (Favicon→Insignia→initial) untouched. 160/161 assertions updated (apps/api brand-config-helpers.spec + vendor-invite-branding.spec: appIcon now {light:null,dark:null} for a no-appIcon tenant).
+
+**§7 Mobile auth vertically centred.** globals.css ≤640px: .authcol overflow hidden→auto (keyboard-open scrolls, never clips); content block centred via auto margins (.authcard margin-top:auto + .auth-powered margin-bottom:auto) which collapse to 0 on overflow — no justify-content:center top-clip. Full-bleed + safe-area padding kept, no card chrome, desktop unchanged. Mockup superseded on this one property (owner decision).
+
+**Gates:** pnpm typecheck ✓ (29/29), pnpm lint ✓ (design-drift + token-integrity both pass; the lone api warning is a pre-existing unused eslint-disable in doctor-portal.repositories.ts, untouched here). Did not run test:unit/e2e/build per standing rules.
+
+Checkpoint: block-final. Next spec block missing → [HUMAN_REQUIRED].
+
+## 166 — per-theme-palette-and-lockup-boundary — DONE (2026-08-02)
+Branch: fix/166-per-theme-palette-and-lockup-boundary. WORK TYPE: FIX. Gates: pnpm lint + pnpm typecheck both clean (the one API lint warning is a pre-existing unused eslint-disable in doctor-portal.repositories.ts, untouched). Did NOT run test:unit/e2e/build per standing rules. Vendor console untouched (not a tenant host; its Mint Bright dark accent #a5e8e0 CSS + the tenant-dark-palette.spec vendor assertions unchanged).
+
+§1 — dark palette never reached the payload. `resolveBrand(overrides, mode)` already existed but nothing called it with 'dark'. Fix carries BOTH palettes end to end:
+- BrandService.resolveFor(tenantId, mode='light') now takes a mode and the cache key is `${tenantId}::${mode}` (mode-aware — was tenant-only, which would serve one theme's colours for both). New dropCache() clears both mode entries on updateProfile/invalidate.
+- InviteBranding (vendor-invite-branding) gains `cssVarsDark` = brandCssVars(resolveFor(tenantId,'dark')); mirrored onto web TenantBrand + HostBrandInput. Non-whitelabel / default frame sets cssVarsDark = brandCssVars() (theme-agnostic default).
+- Root layout emits the tenant dark palette as a scoped `<style> html.dark{ --brand-*: v !important }` (new pure helper host-brand.ts#tenantDarkPaletteCss). `!important` is deliberate: the LIGHT set rides on `<html>`'s inline style (and client applyCssVars re-inlines it post-auth), and only an important author rule beats an inline decl; the rule matches only under `.dark`, so light mode is untouched and a theme toggle repaints with no refetch. Existing tenants (no authored dark palette) resolve cssVarsDark===cssVars, so their dark output is byte-for-byte as before; only tenants with a distinct dark palette change (the fix). globals.css html.dark accent derivation (color-mix of var(--brand-teal)) is retained and now reads the correct per-theme --brand-teal.
+
+§2 — lockup must not cross the theme boundary (owner decision). Added @mp/brand#resolveAssetSetStrict (per-theme, NO cross-theme fallback, no favicon→insignia family step) + BrandService.resolveAssetSetStrict; carried as `assetsStrict` on the payloads. authLockup now reads assetsStrict with a strict per-mode pick (mode==='dark'?p.dark:p.light) — a light-only Horizontal no longer appears on dark; the surface falls to Insignia/app-name instead. DIVERGENCE recorded per spec: 139's cross-theme fallback is REMOVED from the lockup chain ONLY; it stays in force for favicon + app-icon (resolveAssetSet unchanged) — do not "correct" this later. Ink/theme filename pairing (spec 93) unchanged: `mode` selects the tenant's stored slot for that theme, never inverted; asserted in the new lockup tests.
+
+§3 — "Powered by Marham Patti" is now a link. New pure surface-routing#resolvePlatformUrl(baseDomain) → https://<base> or null (no hostname baked in; follows PLATFORM_BASE_DOMAIN). AuthPoweredBy takes an href and renders `<a target=_blank rel="noopener noreferrer">` (PWA-safe: same-tab nav would strand the installed app); null href → plain text (bare staging host). AuthShell computes it server-side; the reset page passes it through to the client ResetForm. Styling: affordance-only underline that inherits the muted colour (globals .auth-powered a). Error surfaces do not render the mark, so nothing to change there.
+
+§4 — favicon follows the BROWSER scheme, not the app theme. pwa.ts resolveFavicons no longer reads serverTheme(); it resolves both the light and dark tenant favicons and emits them as icons.icon = [{url, media:'(prefers-color-scheme: light)'}, {…dark}]. Each side keeps the 139 cross-theme + Insignia family fallback and the 165 initial-mark final link via markIconHref. When both sides resolve to the same href (light-only tenant / no tenant / vendor) a single media-less link is emitted, so non-tenant + vendor output stays byte-for-byte. PWA app icon unaffected (single slot).
+
+§5 — 404 title flip, mechanism found + proven. Symptom: "Page not found — [Tenant]" flips to "Not Found — Marham Patti". No live document.title write survives (160 removed the last; grep confirmed none). Mechanism: on a SOFT navigation that triggers notFound(), Next does not re-apply the not-found boundary's own generateMetadata (title.absolute); the nearest normal layout metadata wins — the (app) layout's title.template '%s — [name]' with the platform-default name, filled by Next's built-in "Not Found" segment title. 161 + 165 only hardened the SERVER metadata, which the soft-nav path ignores, so it persisted. Fix: new @mp/ui client ErrorTitle re-asserts the server-computed tenant 404 title in an effect (the LAST writer after the boundary commits — same value the server rendered, so no flash), rendered by BOTH not-found boundaries on the tenant path (vendor 404 title left as the platform string). Test asserts document.title AFTER effects flush (post-hydration), matching the delayed symptom a first-paint assertion misses.
+
+Tests added: packages/ui tenant-per-theme-palette.spec (per-theme resolveBrand/brandCssVars + resolveAssetSetStrict), auth-lockup.spec rewritten for the within-theme boundary + ink/theme pairing, surface-routing.spec resolvePlatformUrl, components/error-title.spec (post-hydration title). API vendor-invite-branding.spec: mock gains resolveAssetSetStrict; asserts cssVarsDark + strict-vs-cross asset sets.
+
+Terminal step of the block: PROGRESS.md Next set to "none — awaiting next spec block"; ending [HUMAN_REQUIRED] per the spec's STOP instruction (no next spec exists — the valid missing-spec reason).
+
+## 167 — favicon-chain-and-link-scope — DONE (2026-08-02)
+
+**Work type:** FIX. Branch `fix/167-favicon-chain-and-link-scope`. Two corrections from the 166 owner-test round. Vendor console byte-for-byte unchanged; only tenant surfaces + the shared resolver touched.
+
+### §1.1 Favicon drops the Insignia step (Favicon → initial, symmetric with the App Icon)
+- `packages/brand/src/index.ts` `resolveTenantAsset`: removed the `if (variant === 'favicon') return pick('insignia', …)` family-fallback line. The favicon slot now resolves to its OWN artwork (cross-theme within the slot) or null → the surface draws the tenant INITIAL. Reverses the 132 chain; confirms the owner's final decision. Doc comments on `resolveTenantAsset` / `resolveAssetSet` / `resolveAssetSetStrict` rewritten to state both icon chains are now symmetric (Favicon → initial, App Icon → initial); the Insignia is never a favicon.
+- Because every surface shares this ONE resolver, the change propagates automatically: `apps/web/lib/pwa.ts` `resolveFavicons` (tab icon via `resolveBrandMark`/`resolveAssetSet`) and the vendor `faviconKey` convenience pointer recomputed in `vendor-console.service.ts` (`resolveTenantAsset(assets,'favicon','light')`) both stop deriving from the insignia. faviconKey now matches iconKey's existing behaviour (null when only an insignia is uploaded). Comments updated in pwa.ts, vendor-console.service.ts, vendor.types.ts, and web console.ts.
+- Kept intact from 165/166: prefers-color-scheme media variants, deterministic always-emitted icon link, `?v=` cache-bust, cross-theme fallback within the favicon slot, and the 165 initial-mark final link. Lockup chain (Horizontal → Insignia + name → name, within one theme) and platform favicon (`platformFavicon`, non-tenant) untouched.
+
+### §1.2 Only "Marham Patti" is the anchor
+- New pure helper `splitAttribution(label, name)` in `packages/ui/src/lib/surface-routing.ts`: splits an attribution label around the first occurrence of the platform name → `{ prefix, anchor, suffix }`; null anchor when the name is absent (→ plain text, no mis-anchor).
+- `AuthPoweredBy` in `apps/web/app/(auth)/login/AuthShell.tsx` now renders "Powered by " (+ any suffix) as plain text and ONLY `DEFAULT_BRAND.identity.appName` ("Marham Patti", never hardcoded) inside the `<a>`. Href still from `resolvePlatformUrl(PLATFORM_BASE_DOMAIN)`, `target="_blank" rel="noopener noreferrer"` preserved. No href or unsplittable label → plain text, as before. Shared component so login + reset (ResetForm) both get it; error pages carry no "Powered by" line.
+- `globals.css` `.mp-kit .auth-powered a`: added `display:inline-block; padding:0.85rem 0.6rem; margin:-0.85rem -0.6rem` so the narrower anchor keeps a ~44px touch target without shifting the centred line.
+
+### Tests
+- `brand-config-helpers.spec.ts`: the "derives favicon from insignia" test now asserts null (Favicon → initial); the split-chains test asserts favicon AND appIcon are both null for an insignia-only tenant.
+- `vendor-branding-asset.spec.ts`: "derives faviconKey from insignia" → asserts faviconKey null when only an insignia is uploaded.
+- `pwa.spec.ts`: added an insignia-only tenant test — favicon AND appIcon both resolve to the initial (generator URL), never the insignia.
+- `surface-routing.spec.ts`: added `splitAttribution` suite — prefix/anchor/suffix split, anchor is exactly the name, "Powered by " stays plain, null anchor when name absent.
+
+### Gates
+- `pnpm lint` clean (1 pre-existing unrelated warning in doctor-portal.repositories.ts). `pnpm typecheck` clean. Schema unchanged (no prisma generate). test:unit/e2e/build left to the controller.
+
+**Checkpoint:** block-final — last authored step in this group; Inventory spec not yet authored → [HUMAN_REQUIRED] per spec §5 STOP INSTRUCTION.
+
+## 168 — favicon-kind-and-poweredby-placement — DONE (2026-08-02)
+WORK TYPE: FIX (branch fix/168-favicon-kind-and-poweredby-placement). Spec /specs/168.
+
+§1 Favicon kind. Root cause (diagnosed on staging, spec §1): the `<link rel="icon">`
+tags requested the App-Icon raster (`kind=icon` at 512×512, ~63KB) — a 512px raster in a
+16px tab slot renders as an empty smudge, and the 167 Favicon→initial chain never ran
+because the app-icon path served the tab. Fix routes the favicon links through a small
+`kind=favicon` raster at 32px, leaving the manifest App-Icon / apple-touch icons on
+`kind=icon` at 512 untouched (§1.1 hard constraint).
+Changes:
+- packages/ui/src/lib/pwa.ts: added `favicon` to `PwaAssetKind`; new `PWA_FAVICON_SIZE=32`
+  const; `markIconHref` gained an `as?: 'icon'|'favicon'` opt — the INITIAL mark now points
+  at `kind=favicon&w=32&h=32` when `as:'favicon'`, else the unchanged `kind=icon&w=512`.
+- apps/web/lib/pwa.ts: `resolveFavicons` passes `as:'favicon'`; `resolvePwaAssetSource`
+  maps `kind=favicon` to the tenant Favicon slot (splash→vertical, else appIcon).
+- apps/web/app/pwa/asset/route.tsx: `kind=favicon` composes like `icon` (transparent
+  field, initial tile) and defaults w/h to 32; App-Icon composition unchanged.
+- packages/ui/src/lib/pwa.spec.ts: updated the zero-asset favicon test to expect
+  `kind=favicon&w=32`; added an explicit `as:'favicon'` unit test. Existing default
+  (app-icon) tests still assert `kind=icon&w=512`.
+
+§2 Powered-by placement (mobile ≤640px). Previously the card + "Powered by" attribution
+were centred together as one group (card margin-top:auto, attribution margin-bottom:auto).
+Now the CARD centres alone (margin-top:auto + margin-bottom:auto) and the attribution pins
+to the column's padded bottom (margin 0), which already carries
+`padding-bottom: calc(18px + env(safe-area-inset-bottom))`, so the safe-area is respected.
+All autos collapse to 0 when content outgrows the column (keyboard open) → scrolls from the
+top, fields never clipped, mark may scroll under the keyboard but never overlaps a field.
+globals.css `@media (max-width:640px)` block only. Desktop (≥641px) unchanged; the 167
+anchor scope (only "Marham Patti" links, new tab) unchanged. Vendor console untouched.
+
+Gates: pnpm lint ✓, pnpm typecheck ✓ (design-drift + token-integrity + tenant-english-only
+checks pass). No schema/RLS change. Did not run test:unit/e2e/build per standing rules.

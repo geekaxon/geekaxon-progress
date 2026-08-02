@@ -6,15 +6,14 @@
 
 ## Current Status
 - **Project:** Marham Patti — multi-tenant white-label healthcare platform.
-- **Phase:** **PHASE 19** — tenant finalisation. Group 161→164 finalises identity + global components + auth: lockup + fallback fixes, the v2 kit delta, the More-sheet wiring, then auth mobile full-bleed. Tenant only; vendor unchanged.
-- **Last completed:** **164 — auth-mobile-fullbleed**.
-- **Next:** none — build order complete
-- **Branches:** through 160 on staging. 162 builds on fix/162-kit-delta-v2.
-- **Note:** spec 137 retired (superseded by 154). Never build it.
+- **Phase:** **PHASE 19** — tenant finalisation. Group 168→173: the favicon-kind fix + powered-by placement, then the shell + kit **v2 proof block** — every selector family diffed against the v2 reference, mismatches fixed, diffs recorded clean. One owner test round at the end. Tenant only; vendor unchanged. Each spec on its own fix/<N> branch.
+- **Last completed:** **168 — favicon-kind-and-poweredby-placement**.
+- **Next:** **169 — shell-desktop-v2-match** — /specs/169-shell-desktop-v2-match.md
+- **Branches:** through 167 on staging. 168 on fix/168-favicon-kind-and-poweredby-placement.
+- **Note:** spec 137 retired. Inventory waits on the retail-catalog (units + general items) scoping recorded in ARCHITECTURE.
 
 ### Recent steps
-- **164 — auth-mobile-fullbleed** — DONE (2026-08-02) — staff/public auth goes full-bleed at 640px per v2 mockup: card chrome dissolves, column fills, content top-aligned.
-- **163 — mobile-more-sheet** — DONE (2026-08-02) — dock More tab opens a registry-driven bottom sheet: module overflow, account block, in-place appearance, sign out.
-- **162 — kit-delta-v2** — DONE (2026-08-02) — additive v2 kit delta: header/chrome tokens, mscroll 180px, modal scroll, badge, chrome variants, More-sheet styles.
+- **168 — favicon-kind-and-poweredby-placement** — DONE (2026-08-02) — tab icon uses small favicon raster; mobile powered-by pinned to screen bottom.
+- **167 — favicon-chain-and-link-scope** — DONE (2026-08-02) — favicon → initial; link scope narrowed.
 
 > Older steps in PROGRESS-HISTORY.md
