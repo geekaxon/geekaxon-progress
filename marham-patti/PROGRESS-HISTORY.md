@@ -5921,3 +5921,22 @@ Grep over button/form-field interactive rules (`.mp-kit .btn*`, `.input*`, `.fie
 
 ### Gates
 `pnpm lint` ✓ (eslint + design-drift + token-integrity + tenant-english-only all green). `pnpm typecheck` ✓ (@mp/web cache-miss, clean). Vendor surfaces untouched. Did not run test/build (controller gates).
+
+## 172 — kit-data-display-v2-match — DONE (2026-08-02)
+**Work type:** FIX (presentation only). Branch `fix/172-kit-data-display-v2-match`.
+**Spec:** /specs/172-kit-data-display-v2-match.md. Reference: specs/mockups/pharmacy/component-reference.html §D (Data display).
+
+**Diff result.** The already-present `.mp-kit` data-display selectors (pill/badge/badge--soft, avatar/img/--sm/--lg, logotile family, card/--raised, statgrid, full statcard family, tbl-wrap/tbl-toolbar/table.tbl incl. th/sortable/th-inner/num/td/hover/is-selected, tbl-cell-user, emptystate family) were re-diffed declaration-by-declaration against the mockup and were already exact — no edits needed. Global `.skeleton`/`.skel-line`/`.skel-circle` also already matches (mp-shimmer keyframe == mockup cl-shimmer). The `.statcard__value` keeps its spec-required `font-variant-numeric:tabular-nums` (spec §2).
+
+**Added (families §D exercises / §2 enumerates but `.mp-kit` lacked), values copied verbatim from the mockup:**
+- Marks: `.badge--count`, `.badge--dot`; `.avatar--c2/--c3/--c4` gradients.
+- Table: `.tbl-toolbar__sel`; `.tbl-check`, `.tbl-actions`; `.rowactions` family incl. iconbtn/danger hover and the `tr:hover/tr:focus-within .rowactions .iconbtn` reveal contract (spec §2 "hover AND focus"), `.rowactions__sep`.
+- Pager + view toggle: `.pager`/`__info`/`__pages`/`__btn`(+hover/is-active/[disabled]/svg); `.viewtoggle`(+button/svg/is-active), sunken track, 3px pad.
+- States: `.tabs-underline` + `.tabs-pill` (full button/hover/is-active/disabled sets); tooltip `.iconbtn--44`, `.tipdemo`, `.tipbox` (+arrow), with the mockup's `[data-theme="dark"]` translated to `html.dark .mp-kit`.
+All scoped under `.mp-kit`; all colour/size via tokens (verified --grey-0/--grey-900/--text-on-brand/--radius-pill/--shadow-md/--ease-out/--dur-base present in both themes).
+
+**Gallery (apps/web/app/ui/StaffKit.tsx).** Exercised the new families so /ui proves them in both themes: table toolbar now shows `tbl-toolbar__sel` + `viewtoggle`; a selected row; a `tbl-actions` column with `rowactions` (edit + danger delete); a `pager` under the table; the avatars row gained `avatar--c4/--c2/--c3`; a new "Badges · tabs · tooltip" section renders `badge`/`badge--soft`/`badge--count`, a `tabs-pill` group (incl. disabled), and a `tipdemo`/`tipbox` specimen on an `iconbtn--44`. Added the matching lucide imports (List, LayoutGrid, ChevronLeft, Pencil, Info) and fixture strings.
+
+**Untouched:** tablet sticky-first-column contract (113) in `.mp-inv`; vendor; per-screen `.mp-inv`/`.mp-dc` table/pill overrides.
+
+**Gates:** `pnpm lint` clean (eslint + design-drift + token-integrity + tenant-english-only all pass); `pnpm typecheck` clean. test:unit/e2e/build left to controller.
