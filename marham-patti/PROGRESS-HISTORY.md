@@ -6013,3 +6013,29 @@ packages/ui/src/index.ts, packages/ui/src/lib/tenant-whitelabel.spec.ts, package
 apps/api/src/brand/brand.controller.ts, apps/web/lib/host-brand.ts,
 apps/web/components/brand/SidebarBrand.tsx, apps/web/components/shell/AppShell.tsx,
 apps/web/app/globals.css, packages/i18n/{src,dist}/messages/{en,ur}.json.
+
+---
+
+## 176 — topbar-to-mockup — DONE (2026-08-02)
+
+**Branch:** fix/176-topbar-to-mockup. **Work type:** FIX (presentation + wiring). Schema/RLS unchanged. Desktop only.
+
+**What changed**
+- **Desktop tenant topbar rebuilt to the mockup `.ptop` composition** (`AppShell.tsx`, desktop branch only — mobile glass chrome untouched, deferred to the mobile pass). Old `.mp-shell-topbar` markup (eyebrow app-name + heading, bare Install/Log out buttons, `NotificationBell`, `ShortcutsModal`, `ThemeToggle`) replaced by: `.ptop__lead` (title + optional live-count `.ptop__tag` over `.ptop__sub`), `.ptop__hint` ("Press / to search", 177 wires it), `CounterControl` (kept for POS till binding, spec 100), and `<TopbarActions>`.
+- **New `components/shell/TopbarActions.tsx`** — the `.ptop__acts` cluster: keyboard `iconbtn--44` → shared `ShortcutsModal` (controlled, trigger off); bell `iconbtn--44` + numeric `.dot` → the 173 `notifmenu` populated from the LIVE centre via `useRealtimeNotifications` (same hook the mobile bell uses — logic reused, only presentation re-homed); sun-moon theme `iconbtn--44`; `.ptop__divider`; `.userbtn` → 173 `usermenu` (identity header, My profile→/settings, appearance `themeseg`, Install app, separator, Sign out in danger tone). Push registration moved here too (desktop parity). Mutually-exclusive popovers, outside-click/Escape close. `notifmenu` footer "View all" gated on `notifications.manage`. Severity→`notifrow__ic--warn/ok/info` mapping.
+- **`InstallApp.tsx`** — added controlled `open`/`onOpenChange`/`trigger` props (mirrors `ShortcutsModal`) so the user menu drives the sheet trigger-less; the sheet is mounted OUTSIDE the popover so it survives the menu closing. Install row hidden once `usePwaInstall().installed`.
+- **`lib/nav.ts`** — `NavItem` gains `subtitleKey?` (topbar `.ptop__sub`) and `tagKey?` (topbar `.ptop__tag`, rendered only when its bound `countKey` count resolves). All 34 routes carry a subtitle; only `/pharmacy/inventory` carries a tag. Added `navItemForPath(pathname)` (longest-prefix via `activeHref`) as the topbar identity source. Title reuses the existing `labelKey` (mockup title == nav label).
+- **i18n** (`en.json` + `ur.json`, parity verified 0-diff both ways): new `navSub.*` (34 subtitles), `ptopSearchBefore`/`ptopSearchAfter`, `ptopTagInventory` ("{count} items"), `userMenuLabel`, `notifViewAll`. Reused `moreAccountProfile`, `moreAppearance`, `install.button`, `ui.theme_*`, `ui.themeToggle`, `shellLogout`, `shellShortcuts`, `notif*`.
+- **`app/globals.css`** — added the tenant `.ptop` topbar section + the 173 overlay anatomies as real (un-`.mp-kit`-scoped) classes: `.ptop`, `.ptop__lead/head/title/sub/tag/hint/acts`, `.ptop__divider`, `.mp-shell-ptop` (sticky), `.iconbtn--44` (+`.dot`), `.userbtn*`, `.avatar-sm`, `.ptop__pop`, `.usermenu*`, `.themeseg*`, `.notifmenu*`, `.notifrow*`. Vendor's `.mp-shell-topbar` / `.mp-account` / `.mp-notif` left fully intact.
+
+**Decisions**
+- **Audited selectors match the mockup file values** (`.ptop`, `.ptop__title/sub/tag/hint`, `.ptop__acts`, `.iconbtn--44`, `.dot`, `.userbtn*`, `.avatar-sm`) verbatim. `.ptop__lead` extends the mockup's `min-width:0` with the flex-column the mockup carried inline, plus `flex:1` (pins actions to the trailing edge) and `overflow:hidden` (nowrap title/sub never wrap/push). `.ptop__head` is the inline title+tag row promoted to a class. Overlay position values (`usermenu`/`notifmenu`) are anchored to their trigger via `.ptop__pop` instead of the mockup's fixed `top:56px` — those selectors are outside the acceptance audit set.
+- **Tag label = "{count} items"**, bound to the existing inventory sidebar count (`navCounts.inventory` = active-medicine count, NOT a reorder figure). The mockup's illustrative "12 to reorder" would misreport that count with no reorder endpoint in scope (schema:none), so the honest label is used. Only inventory declares a tag → "tag appears only where a count exists" holds.
+- **Nav toggle (`.mp-shell-menu-btn`) retained** on `.ptop` for the 768–1023 band where the sidebar is a drawer (hidden ≥1024 by existing CSS; <768 is the mobile chrome). Not part of the `.ptop` anatomy.
+- **CounterControl kept** in the bar — dropping it would lose the forced till pick for POS-capable roles (Phase 12). Renders only for multi-counter pharmacy sessions.
+- **`.ptop__hint` + `.userbtn__t` hidden below 1024** (media query; mockup used a 720px container query) so the actions never crowd on the tablet band.
+- **`ur.json` subtitle values mirror English** — tenant surfaces are English-only (spec 132 §2.4, framework holds English values); parity gate needs keys, which match exactly.
+
+**Gates:** `pnpm typecheck` clean (29 tasks), `pnpm lint` clean incl. design-drift / token-integrity / tenant-english-only checks, EN/UR key parity 0-diff. Did not run build/test:unit/test:e2e (controller runs the full gates).
+
+**Acceptance:** desktop topbar is the `.ptop` mockup; per-selector declarations for the audited set match the file; every route shows registry title/subtitle, tag only where a count exists; no Install/Log out button in the bar (both in the usermenu); unread dot reflects the real centre count; both themes tokened; vendor topbar untouched.

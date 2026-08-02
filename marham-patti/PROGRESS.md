@@ -6,15 +6,15 @@
 
 ## Current Status
 - **Project:** Marham Patti — multi-tenant white-label healthcare platform.
-- **Phase:** **PHASE 19** — tenant finalisation, desktop-first. Group 174→178: auth 35% offset, sidebar pin + logo conditions, topbar to mockup (triggers re-homed into the 173 menus), tenant global search (`/` + kit-composed overlay, filtered API), then remember-me + PWA persistent sessions with the 4-digit PIN gate for POS-capable roles. Tenant only; vendor unchanged. Own branch per spec (174–176 fix/, 177–178 feature/).
-- **Last completed:** **175 — sidebar-pin-and-logo-conditions** — pin glyph + within-theme sidebar logo conditions.
-- **Next:** **176 — topbar-to-mockup** — /specs/176-topbar-to-mockup.md
-- **Branches:** through 173 on staging. 175 builds on fix/175-sidebar-pin-and-logo-conditions.
-- **Note:** Inventory waits on the retail-catalog (units + general items) scoping recorded in ARCHITECTURE.
+- **Phase:** **PHASE 19** — tenant finalisation. Group 174→178: auth offset, sidebar pin/logo, topbar to mockup, global search, then remember-me + PWA sessions with the POS PIN gate. Tenant only; vendor unchanged.
+- **Last completed:** **176 — topbar-to-mockup** — desktop topbar rebuilt to the `.ptop` mockup; install + sign-out in the user menu.
+- **Next:** **177 — tenant-global-search** — /specs/177-tenant-global-search.md
+- **Branches:** through 173 on staging. 176 on fix/176-topbar-to-mockup.
+- **Note:** Inventory waits on the retail-catalog scoping in ARCHITECTURE.
 
 ### Recent steps
-- **175 — sidebar-pin-and-logo-conditions** — DONE (2026-08-02) — lucide pin + is-on; sidebar mark resolves horizontal/insignia/name per theme; smooth pin transition.
-- **174 — auth-desktop-offset** — DONE (2026-08-02) — desktop staff/reset auth top-offset ~35vh; patient/vendor centred; mobile unchanged.
-- **173 — kit-overlays-v2-match** — DONE (2026-08-02) — overlays matched; block diffs recorded clean.
+- **176 — topbar-to-mockup** — DONE (2026-08-02) — `.ptop` title/subtitle/tag from registry; keyboard/bell/theme/user acts; install + sign-out in usermenu.
+- **175 — sidebar-pin-and-logo-conditions** — DONE (2026-08-02) — lucide pin + is-on; sidebar mark resolves horizontal/insignia/name per theme.
+- **174 — auth-desktop-offset** — DONE (2026-08-02) — desktop staff/reset auth top-offset ~35vh; patient/vendor centred.
 
 > Older steps in PROGRESS-HISTORY.md
