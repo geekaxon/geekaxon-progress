@@ -5614,3 +5614,31 @@ Gates: pnpm lint (incl. design-drift + token-integrity: token layer present in B
 **Tests:** `packages/ui/src/components/mobile-more-sheet.spec.tsx` — excludeDockItems (overflow keeps non-dock items, drops dock items, permission-excluded absent, second flagged module = own group, empties dropped); moreAttentionCount + dock More badge (flagged day-close → count 1, none → no badge); component (closed renders nothing; one labelled group per module; appearance switches WITHOUT closing; Sign out calls logout; Escape + close button dismiss; row tap navigates + closes).
 
 **Gates:** `pnpm typecheck` PASS (29/29). `pnpm lint` PASS (design-drift + token-integrity + tenant-english-only all green). Did not run test:unit/e2e/build (controller gate).
+
+## 164 — auth-mobile-fullbleed — DONE (2026-08-02)
+
+**Work type:** FIX (presentation only). Branch `fix/164-auth-mobile-fullbleed`.
+**Spec:** /specs/164-auth-mobile-fullbleed.md. Mockup: specs/mockups/pharmacy/auth-screens.html **v2**.
+
+Realigned the staff/public mobile auth composition (originally authored in 159 by interpretation, before the mockup carried mobile CSS) to the v2 mockup, which now expresses the mobile composition as real CSS scoped under `.phone__screen`.
+
+**What changed (single site: apps/web/app/globals.css, the `.mp-authroot--app` mobile block):**
+- Breakpoint `@media (max-width:767.98px)` → `@media (max-width:640px)` — `.phone__screen` (device frame) maps to the 640px app-world breakpoint per §1. One hard boundary; card chrome and full-bleed never co-mount.
+- `.authpage` and `.authcard` are the only mapped selectors; declarations copied byte-for-byte from the mockup.
+- `.authcol` adopts the mockup `.mauth` flow plus app-world additions (the mockup's phone frame supplied these for free; a real device has no status/home bars to copy).
+- Removed the old vertical-centering of success/foot states (`.auth-done{flex:1;justify-content:center}`, `.auth-foot{margin-top:auto}`) — v2 is content-starts-high (`align-items:flex-start`), nothing vertically centred. Only `.auth-powered{margin-top:auto}` remains, pinning the attribution to the bottom.
+
+**§4.1 per-selector byte-for-byte diff (mockup `.phone__screen`-scoped → built `@media(max-width:640px)`):**
+- `.authpage` — mockup `{padding:0;align-items:flex-start;}` == built `{padding:0;align-items:flex-start;}` — MATCH.
+- `.authcard` — mockup `{background:none;border:0;box-shadow:none;border-radius:0;padding:0;width:100%;}` == built same six declarations — MATCH.
+- `.mauth` (not `.phone__screen`-scoped; applied to `.authcol` per §2) `{flex:1;min-height:0;display:flex;flex-direction:column;background:var(--page-bg);overflow:hidden;}` — all six present on `.authcol`; app-world extras added (align-self:stretch so the col fills the row-flex `.authpage` now that it is flex-start; max-width:none; gap:18px; safe-area padding `max(22px,env(safe-area-inset-top)) 24px calc(18px+env(safe-area-inset-bottom))` = the `.phone__body` gutter + insets).
+
+**§4.2 asserted:** no `.phone*` or `.mauth__top`/`.mauth__home` class or markup in the app. (The only `.phone*` in globals.css is the unrelated `.mp-mobile .phone` /ui gallery device frame; not the auth composition.)
+
+**§3 vendor untouched:** ResetForm adds `mp-authroot--app` only when `!vendor`; AuthShell never renders the vendor door (`.mp-vendor-login`). The 640px rules are scoped to `.mp-authroot--app`, so the vendor login and vendor reset card render byte-identically at every width. Auth behaviour (sessions, lockout, 2FA, non-enumerating reset, server branding/theme, 161 lockup) untouched — layout only.
+
+**Targets/insets:** every control stays ≥44px (base `.authcard .input/.btn` = control-lg; `.auth-back` min-height 44px; `.pw-toggle` 44×44); primary action full width (base `.auth-form .btn--primary{width:100%}`); safe-area top+bottom via env() on `.authcol`.
+
+**Gates:** `pnpm lint` clean (eslint + design-drift + token-integrity + tenant-english-only all pass); `pnpm typecheck` clean. No schema/RLS change. Did not run test:unit/e2e/build (controller runs full gates).
+
+End of the authored group. Next block (Inventory) authored after this group is owner-tested — no spec 165 exists yet.
