@@ -5563,3 +5563,23 @@ WORK TYPE: FIX (branch fix/161-identity-lockup-and-fallback-fixes). Spec /specs/
 
 ### Gates
 - `pnpm typecheck`: 29/29 pass. `pnpm lint`: 16/16 pass (design-drift, token-integrity, tenant-english-only checks green). No schema change → no prisma generate. Did not run test:unit/e2e/build per loop rules.
+
+## 162 — kit-delta-v2 — DONE (2026-08-02) — WORK TYPE: FIX (branch fix/162-kit-delta-v2)
+
+Presentation-only v2 kit delta from specs/mockups/pharmacy/component-reference.html (committed with the spec). Purely additive against the 155 match; no rule removed, no token value changed. Kit is one shared layer, so this lands before the 163 More-sheet wiring.
+
+Tokens (globals.css, §2.1): added --ds-hd-shadow-1/-2 to the light :root (rgba(6,14,16,.09) / .22) and html.dark (rgba(0,0,0,.45) / .6), plus theme-invariant --mchrome:166px and --mgap:14px in the light :root (inherited; the mockup keeps these constant and only the .mscroll--chrome-* variants override --mchrome). Did NOT add --mchrome/--mgap to the base .mscroll so its declarations stay byte-equal to the v2 base rule.
+
+Changed rules (§2.2): .mp-mobile .mscroll padding-top 156px→180px (rest unchanged: 15px/96px). .mp-kit .modal__body gained flex:1;min-height:0;overflow-y:auto (prepended; rest unchanged). .pnav__scroll "scrollbar-width:none REMOVED" — the app's equivalent (.mp-shell-nav) never had scrollbar-width:none; it already uses scrollbar-width:thin with a hover-reveal thumb, so the scrollbar is already visible → NO-OP, no change needed. No literal .pnav/.pnav__scroll class exists in the app.
+
+New rules (§2.3): .mp-mobile .mdock__badge REPLACED with the v2 value (top:2px;left:calc(50% + 8px);min-width/height:16px;font-weight:700;line-height:16px;text-align:center;box-shadow:0 0 0 2px var(--surface-raised)); RTL mirror updated 6px→8px. Added .mscroll--chrome-sm/md/lg (--mchrome 101/116/161px). Added .sheet__hdic and .sheet__foot--row.
+
+More-sheet styles (§2.4, component only, no wiring): landed the bottom-sheet family scoped under .mp-mobile — .sheet__scrim (blur 2px), .sheet (bottom-anchored, radius 26/26/44/44, safe-area bottom pad, max-height/overflow for the frame), .sheet__grip, .sheet__hd (+ .sheet__hdic, full-bleed sticky header), .sheet__body (scrolls, hidden scrollbar), .sheet__foot (+ --row), and the account block .macct / .macct .avatar-lg / .macctrow (52px rows) / .macctrow--danger / .macct__logout (full-width, 50px). Rows compose from existing .mlabel/.mfeed/.mrow atoms (no new row anatomy).
+
+/ui gallery (StaffKit.tsx): added a "More sheet" Spec in the Mobile patterns Section rendering a phone frame — mchrome + .mscroll.mscroll--chrome-sm content + open sheet (grip, hd w/ hdic + close mic, body: Pharmacy mfeed of mrows w/ chevrons + Day-close pending pill, divider, macct, 3 macctrow + 1 macctrow--danger) + full-width macct__logout foot + mdock w/ More badge. New lucide imports: Truck, Wallet, Settings, UserRound, X. Fixture copy via the local m map (i18n guard satisfied).
+
+Mockups (§4): the six v2 files were already committed alongside the spec in specs/mockups/pharmacy/; no regeneration needed.
+
+Diff self-check: every named selector's declarations match the v2 file byte-for-byte (whitespace-normalised) — verified .mdock__badge (1754), .mscroll--chrome-* (2149-2151), .sheet__hdic (1697), .sheet__foot--row (1702), .macct__logout (2124), .modal__body (747), .mscroll 180px (§2.2). Renders in /ui light + dark.
+
+Gates: pnpm lint (incl. design-drift + token-integrity: token layer present in BOTH themes, every --mp-* resolves) PASS; pnpm typecheck PASS. No schema change. Did not run test:unit/e2e/build per CLAUDE.md.
