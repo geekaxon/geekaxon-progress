@@ -5940,3 +5940,24 @@ All scoped under `.mp-kit`; all colour/size via tokens (verified --grey-0/--grey
 **Untouched:** tablet sticky-first-column contract (113) in `.mp-inv`; vendor; per-screen `.mp-inv`/`.mp-dc` table/pill overrides.
 
 **Gates:** `pnpm lint` clean (eslint + design-drift + token-integrity + tenant-english-only all pass); `pnpm typecheck` clean. test:unit/e2e/build left to controller.
+
+## 173 — kit-overlays-v2-match — DONE (2026-08-02)
+**Branch:** fix/173-kit-overlays-v2-match — WORK TYPE: FIX (presentation only). Final spec of the shell+kit v2 proof block (§E · Feedback & overlays).
+
+**Scope.** Diff-driven match of the overlay/feedback family in the `/ui` staff kit against v2 `specs/mockups/pharmacy/component-reference.html` §E, plus the motivating v2 change to `.modal__body`. Files: `apps/web/app/globals.css` (`.mp-kit` scope), `apps/web/app/ui/StaffKit.tsx`.
+
+**Modals (already matched, extended to full v2).** `.mp-kit .modal` gained `display:flex; flex-direction:column; max-height:calc(100vh - 72px)` and `.modal__head,.modal__foot{flex:none}` so the v2 `.modal__body{flex:1;min-height:0;overflow-y:auto}` (present since an earlier step) actually scrolls internally while head/foot stay fixed. `__head/__body/__foot/__icon` paddings unchanged and already 1:1. Added the centred **payment modal** family (`.paymod__hd/.paymod__body/.paymeth/.paytender/.paychange/.payfoot/.btn__kbd`) copied 1:1 from the mockup and rendered as a third overlay stage.
+
+**Drawers.** `.drawer/__head/__body/__foot` already 1:1 with v2 (420px, hairlines, pads) — verified, unchanged.
+
+**Feedback (new).** `.toaster/.toast/__icon(--success/--error/--info/--warning)/__body/__title/__text/__close`; alert **banners** — added `.alert__icon/__body/__title/__text` and the `--info/--success/--warning` variants plus `--error .alert__icon`, with banner geometry (gap12/pad14-16/align-start) keyed off `:has(.alert__body)` so the frozen auth-scoped bare-`<p>` `.mp-kit .alert` (login/reset, uses `--ok/--error`) is untouched; `.progress/__fill`. Toast `--warning` icon colour added for parity (mockup markup uses it though its CSS omitted the rule).
+
+**Popovers & menus (new).** `.popover` (+arrow), desktop `.menu/__item/__item--danger/__sep/__hd` (rendered static via inline `position:static;…;min-width:0`), account menu `.avatar-sm/.usermenu*` + `.themeseg` appearance segment + `.usermenu__out` sign-out, `.notifmenu*/.notifrow*` with unread `.is-new` tint and empty state. All values copied 1:1 from v2.
+
+**Charts.** Not surfaced in the kit; the real chart CSS (`.mp-rep/.mp-dc`) already carries the dark-mode `.chart-tt` legibility override (`#05090a` bg + hairline) called out as regressed twice — left as-is, verified present. No chart markup added to the kit (out of scope for the overlay showcase).
+
+**Auth safety.** The signed-off auth `.alert` family was deliberately not modified; new selectors are child/variant/`:has()`-scoped so they never reach the auth `<p>`.
+
+**Gates.** `pnpm typecheck` clean; `pnpm lint` clean (moved literal display text — Esc/Rs amounts/relative times/AR initials — into `{'…'}` expression form per the file's existing i18n-exempt fixture convention; design-drift + token-integrity + tenant-english-only checks pass). Behaviour frozen; vendor unchanged; schema/RLS untouched.
+
+**End of block.** 168–173 complete: tenant shell + component kit matched and proven against v2, auth signed off. Next block (Inventory) awaits the retail-catalog generalisation scoping decision with the owner — no buildable next spec. PROGRESS Next set to `none — awaiting next spec block`; ended [HUMAN_REQUIRED] per spec §5.

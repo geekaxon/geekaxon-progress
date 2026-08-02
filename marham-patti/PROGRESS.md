@@ -6,15 +6,14 @@
 
 ## Current Status
 - **Project:** Marham Patti — multi-tenant white-label healthcare platform.
-- **Phase:** **PHASE 19** — tenant finalisation. Group 168→173: favicon fix, then the shell + kit **v2 proof block** — every selector family diffed against the v2 reference, mismatches fixed. Tenant only; vendor unchanged. One fix branch per spec.
-- **Last completed:** **172 — kit-data-display-v2-match**.
-- **Next:** **173 — kit-overlays-v2-match** — /specs/173-kit-overlays-v2-match.md
-- **Branches:** through 167 on staging. 168, 169, 170 each on their own fix branch.
-- **Note:** spec 137 retired. Inventory waits on retail-catalog scoping in ARCHITECTURE.
+- **Phase:** **PHASE 19** — tenant finalisation, desktop-first. Group 174→178: auth 35% offset, sidebar pin + logo conditions, topbar to mockup (triggers re-homed into the 173 menus), tenant global search (`/` + kit-composed overlay, filtered API), then remember-me + PWA persistent sessions with the 4-digit PIN gate for POS-capable roles. Tenant only; vendor unchanged. Own branch per spec (174–176 fix/, 177–178 feature/).
+- **Last completed:** **174 — auth-desktop-offset** — desktop staff/reset auth starts ~35% from the top.
+- **Next:** **175 — sidebar-pin-and-logo-conditions** — /specs/175-sidebar-pin-and-logo-conditions.md
+- **Branches:** through 173 on staging. 174 builds on fix/174-auth-desktop-offset.
+- **Note:** Inventory waits on the retail-catalog (units + general items) scoping recorded in ARCHITECTURE.
 
 ### Recent steps
-- **172 — kit-data-display-v2-match** — DONE (2026-08-02) — added missing v2 kit families: pager, view toggle, row actions, count badge, tabs, tooltip.
-- **171 — kit-controls-v2-match** — DONE (2026-08-02) — buttons and form fields diffed to v2; spinner reworked to a 22px base with small/large sizes.
-- **170 — shell-mobile-v2-match** — DONE (2026-08-02) — mobile shell diffed to v2 mockup; dock tab given the 44px touch target and centred box.
+- **174 — auth-desktop-offset** — DONE (2026-08-02) — desktop staff/reset auth top-offset ~35vh; patient/vendor centred; mobile unchanged.
+- **173 — kit-overlays-v2-match** — DONE (2026-08-02) — overlays matched; block diffs recorded clean.
 
 > Older steps in PROGRESS-HISTORY.md
