@@ -5961,3 +5961,55 @@ All scoped under `.mp-kit`; all colour/size via tokens (verified --grey-0/--grey
 **Gates.** `pnpm typecheck` clean; `pnpm lint` clean (moved literal display text — Esc/Rs amounts/relative times/AR initials — into `{'…'}` expression form per the file's existing i18n-exempt fixture convention; design-drift + token-integrity + tenant-english-only checks pass). Behaviour frozen; vendor unchanged; schema/RLS untouched.
 
 **End of block.** 168–173 complete: tenant shell + component kit matched and proven against v2, auth signed off. Next block (Inventory) awaits the retail-catalog generalisation scoping decision with the owner — no buildable next spec. PROGRESS Next set to `none — awaiting next spec block`; ended [HUMAN_REQUIRED] per spec §5.
+
+## 175 — sidebar-pin-and-logo-conditions — DONE (2026-08-02)
+Branch: fix/175-sidebar-pin-and-logo-conditions. WORK TYPE: FIX (presentation). Schema/RLS: none.
+
+**§1 Pin control.** AppShell's desktop sidebar toggle re-homed from the PanelLeftClose/Open
+panel-collapse glyphs to the lucide `Pin` icon (size 15). The button class is now `mp-shell-pin`
+(mirrors the mockup `.pnav__pin`), carrying the accent-soft `is-on` state while PINNED = expanded
+(`is-on` when !collapsed), `aria-pressed={!collapsed}`, and an aria-label/title that flips
+Pin/Unpin (new i18n keys shellPinSidebar / shellUnpinSidebar in en+ur src and dist). Persistence
+(sidebar-pref, spec 132) untouched.
+
+**§2 Smooth transition.** `.mp-shell` grid-template-columns now animates 248↔68 on
+`--dur-base`/`--ease-out`; the inner text (brand name, nav labels, counts, user meta) fades over
+`--dur-fast` and the collapsed rules switched from `display:none` to opacity+zero-size CLIP (width
+clip for flex-row labels, height clip for the block group headings) so nothing wraps mid-transition
+and the icons stay centred. The width + fade transitions live entirely inside a
+`@media (min-width:1024px) and (prefers-reduced-motion: no-preference)` guard → reduced-motion users
+get an instant switch, no animation. NOTE/decision: the collapse pref is applied in a pre-paint
+useLayoutEffect, so a first-paint expand→collapse animation is not expected (pre-paint style changes
+don't start transitions); accepted without an extra mounted-gate.
+
+**§3 Logo conditions — the ONE slot resolver, within one theme (166).** New pure resolver
+`packages/ui/src/lib/sidebarLockup` (sibling of authLockup) maps the STRICT per-theme asset set +
+width to one of six outcomes: expanded → horizontal-alone / insignia+name / name; collapsed →
+rail-insignia / rail-initial (first letter of App Name, tenant-palette tile); plus `platform` for a
+no-tenant host. SidebarBrand rewritten to consume it via useBrand()+useTheme(), dropping the legacy
+identity.logo precedence (auth already moved off it in 161/166). Horizontal renders at max-height
+34px; insignia fills a 32px `.mp-shell-brand-insignia` slot. The shell passes
+`collapsed={collapsed && isDesktopRail}` (new `useIsDesktopRail` = matchMedia ≥1024px) so the rail
+mark only shows where the CSS rail actually applies (never in the tablet/mobile full-width drawer).
+Pinning re-evaluates the set for the new width → Horizontal expanded, Insignia collapsed.
+
+**Plumbing.** ResolvedBrand gained optional `assetsStrict`. `/brand/me` now enriches the resolved
+brand with `assets` + `assetsStrict` (Promise.all over the existing BrandService resolvers) so the
+sidebar has the within-theme set post-auth, matching how host-branding seeds it server-side;
+`hostResolvedBrand` now also copies `assetsStrict` for the first paint.
+
+**Tests.** New sidebar-lockup.spec (expanded ×3, collapsed ×2, theme-boundary light/dark-only
+horizontal + insignia, platform-only-for-no-tenant, presence AND absence via exact toEqual). New
+sidebar-pin-shell.spec (source-scan: lucide Pin + is-on + Pin/Unpin aria; grid transition on kit
+tokens under the no-preference guard; vendor sidebar rules stay under .mp-vendor-root, one pin).
+Updated tenant-whitelabel.spec §2.3 assertions to the new SidebarBrand structure (sidebarLockup,
+collapsed prop) — 114's composition is superseded by 175 §3. i18n parity preserved (en+ur).
+
+**Gates:** pnpm typecheck — clean (29/29). pnpm lint — clean (0 errors; 1 pre-existing unrelated
+warning in doctor-portal.repositories.ts). test:unit/e2e/build left to the controller per CLAUDE.md.
+
+**Files:** packages/ui/src/lib/sidebar-lockup.ts (+ .spec), packages/ui/src/lib/sidebar-pin-shell.spec.ts,
+packages/ui/src/index.ts, packages/ui/src/lib/tenant-whitelabel.spec.ts, packages/brand/src/index.ts,
+apps/api/src/brand/brand.controller.ts, apps/web/lib/host-brand.ts,
+apps/web/components/brand/SidebarBrand.tsx, apps/web/components/shell/AppShell.tsx,
+apps/web/app/globals.css, packages/i18n/{src,dist}/messages/{en,ur}.json.
