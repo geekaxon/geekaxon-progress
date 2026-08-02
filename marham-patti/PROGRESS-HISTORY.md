@@ -5822,3 +5822,76 @@ persistence, screenshot bypass, branding chain); vendor console unchanged (`.mp-
 - apps/web/app/globals.css — `.mp-shell-brand-tile` 32/9; `.mp-shell-nav` webkit width 8; added
   `.mp-shell-collapse-btn svg` 15×15.
 - packages/ui/src/components/page.tsx — PageHeader row aligned to `.pghead`/`.pghead__t`/`.pghead__acts`.
+
+---
+
+## 170 — shell-mobile-v2-match — DONE (2026-08-02)
+
+**Branch:** fix/170-shell-mobile-v2-match · **Type:** FIX (presentation only) · **Schema/RLS:** none.
+**Reference:** specs/mockups/pharmacy/component-reference.html (v2) — mobile shell + More sheet.
+Diff-driven proof: each §2 selector family's mockup declarations extracted and compared against the
+built `.mp-mobile .*` rules. Class names already match the mockup's (`.mchrome/.mhdr/.mstatus/.mscroll/
+.mdock*/.sheet*/.mlabel/.mfeed/.mrow*/.macct*`), so this pass diffs rule CONTENTS only. Behaviour frozen
+(dock registry filter, 163 sheet interactions, theme mechanism, live position:fixed float).
+
+### Per-selector diff (mockup → built)
+
+§2.1 Chrome + scroll:
+- `.mchrome` absolute/top0/inset0/z30/bottom-hairline → MATCH (geometry). Background: mockup flat
+  `color-mix(in srgb,var(--surface-card) 92%,transparent)`; app renders TRUE glass via the theme-tuned
+  `--glass-bg` token + `backdrop-filter:blur(24px) saturate(1.7)` + `--glass-shadow-top`. The spec note
+  "blur on the chrome ONLY" endorses the blur mechanism the flat HTML cannot show; `--glass-bg` is
+  per-theme tuned (light coolwhite .72 / dark #0f1618 .66, recessed vs surface-card) so snapping to the
+  flat light-only color-mix would regress dark. ACCEPTED DIVERGENCE (deliberate glass system, per 169's
+  precedent of keeping app systems). Border `--glass-hair` is locally aliased to `--border-hairline`
+  (5573) → identical to the mockup's `var(--border-hairline)`.
+- `.mhdr` → the app carries a screen-specific header SCALE (hero base 28px / `.mhdr__wrap` 21px /
+  `.mchrome--compact` 17px, + `.mhdr__ey` eyebrow) that is its deliberate v2 realization; the mockup's
+  single 19px `.mhdr` is the reference atom. Live variant truncates the title (ellipsis). ACCEPTED
+  DIVERGENCE (no single mockup value to snap to; mirrors 169's topbar-eyebrow acceptance).
+- `.mstatus` (faux iOS clock/signal bar) → NOT rendered by the app; the live mobile shell uses the real
+  device status bar (`.mp-mobile--live .mchrome` pads `env(safe-area-inset-top)`). Mockup-only chrome,
+  N/A (mirrors 169's demo-content acceptance).
+- `.mscroll` top padding: v2 = 180px. Built base `.mp-mobile .mscroll` = `padding:180px 15px 96px` →
+  top 180px ASSERTED CLEAN (matches the mockup's rest-state calc 166 --mchrome + 14 --mgap = 180). No
+  stale 168px anywhere in the mobile band. Bottom pad is screen-driven via the `.pb-*` utilities.
+- `.mscroll--chrome-sm/md/lg` → `--mchrome` 101/116/161px and base token 166px → MATCH (5744-5746, 189).
+
+§2.2 Dock:
+- `.mdock` inset-inline 14 / bottom `calc(12px + env(safe-area-inset-bottom,0))` / z30 / radius 26 /
+  padding 6 / gap 2 → MATCH. Background/border/shadow use the same glass token system as `.mchrome`
+  (accepted divergence, above); dock bg is not a spec-flagged value.
+- `.mdock__item` min-height 44 / column / gap 3 → gap 3 & column MATCHED; **FIXED**: added
+  `min-height:44px` (was absent — the spec-flagged touch target) + `justify-content:center`, and aligned
+  the mockup box-model — padding `8px 0 6px`→`6px 0`, font-weight `medium`→`semibold`, radius `19`→`20`.
+  Kept the app's interaction layer (position:relative, transition, `:active` scale, `.is-active` bg+ring
+  +glow, active svg stroke 2.2) and its 23px/1.9-stroke icon-weight tuning — behaviour frozen.
+- `.mdock__badge` 16px accent pill at `top:2px;left:calc(50% + 8px)`, 10px/700, RTL-flipped → MATCH.
+
+§2.3 More sheet:
+- `.sheet__scrim` `rgba(14,20,22,.5)` + `blur(2px)`, z40, radius 44 → MATCH.
+- `.sheet` bottom-anchored, radius `26px 26px 44px 44px`, shadow `0 -18px 40px -12px rgba(0,0,0,.4)`,
+  padding w/ `env(safe-area-inset-bottom)`, `max-height:calc(100% - 56px)` overflow-hidden → MATCH.
+- `.sheet__grip` 38x5/radius99/border-strong → MATCH.
+- `.sheet__hd` (+ bottom hairline, negative-margin bleed, z2), `.sheet__hdic` 34/radius10/accent-soft,
+  `.sheet__body` (scroll, no-scrollbar, bleed pad), `.sheet__foot` + `--row` (52px / row 46px btns) → MATCH.
+- `.mlabel` → MATCH; letter-spacing uses `--ls-caps` (0.06em) vs the mockup's literal .08em — a ~0.2px
+  delta on 11px, kept token-based per design-token discipline; padding `4px 4px 0` (app label placement).
+- `.mfeed`/`.mrow`/`.mrow__ic(+--teal/ok/info/amber)`/`.mrow__id`/`.mrow__end` → card + row atoms MATCH
+  the mockup declarations (5646-5660). NOTE: a later unscoped `.mp-mobile .mfeed{gap:9px}` (6799, in the
+  supplier/ledger band) overrides the card styling globally — pre-existing, out of this shell step's
+  scope; the More sheet composes its own sheet-scoped `.mfeed>.mrow` full-bleed rows (5796). Left as-is.
+- `.macct` (48px accent-soft avatar, 15/12.5 text), `.macctrow` (min-height 52 / radius 14 / 14.5px),
+  `.macctrow--danger`, `.macct__logout` (full-width 50px) → MATCH.
+
+§2.4 Boundary: breakpoint guard intact — mobile chrome mounts only under `[data-mobile-chrome]` /
+`@media (max-width:767.98px)`; desktop topbar and mobile chrome never co-mount. No change.
+
+### Gates
+`pnpm lint` clean (design-drift + token-integrity + tenant-english-only all pass). `pnpm typecheck` clean.
+No schema change (skipped prisma generate). Tests not run per build-loop (controller runs full gates).
+No component test asserts the changed dock-item declarations. Vendor console untouched.
+
+### Files
+- apps/web/app/globals.css — `.mp-mobile .mdock__item`: +min-height:44px, +justify-content:center,
+  padding 6px 0, font-weight semibold, radius 20px (aligned to mockup `.mdock__item`).
