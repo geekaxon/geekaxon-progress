@@ -6,15 +6,15 @@
 
 ## Current Status
 - **Project:** Marham Patti — multi-tenant white-label healthcare platform.
-- **Phase:** **PHASE 19** — tenant finalisation vs the flat mockups. Group 158→159 fixes the owner's first auth test round: identity resolution done (158), then auth+error surfaces (159). Tenant surfaces only; vendor byte-for-byte unchanged.
-- **Last completed:** **158 — tenant-identity-resolution**.
-- **Next:** **159 — auth-error-surface-completion** — /specs/159-auth-error-surface-completion.md
-- **Branches:** through 157 on staging. 158 builds on fix/158-tenant-identity-resolution.
+- **Phase:** **PHASE 19** — tenant finalisation complete. The flat logo field is gone from the branding payload and every web brand shape; each tenant surface resolves its mark through one slot resolver, and tenant staff auth is English-only.
+- **Last completed:** **160 — tenant-identity-consumption**.
+- **Next:** none — awaiting next spec block
+- **Branches:** through 159 on staging. 160 built on fix/160-tenant-identity-consumption.
 - **Note:** spec 137 is retired — superseded by 154. Never build it.
 
 ### Recent steps
-- **158 — tenant-identity-resolution** — DONE (2026-07-31) — full asset set, initial fallback, server title, tenant favicon/PWA.
-- **157 — auth-visual-match** — DONE (2026-07-31) — auth family to the flat mockup, six states.
-- **156 — shell-visual-match** — DONE (2026-07-31) — sidebar, top bar, mobile chrome and dock.
+- **160 — tenant-identity-consumption** — DONE (2026-08-02) — flat logo deleted; one slot resolver everywhere; tenant staff auth EN-only.
+- **159 — auth-error-surface-completion** — DONE (2026-07-31) — reset copy, error lockup, "Go to home".
+- **158 — tenant-identity-resolution** — DONE (2026-07-31) — API asset set built; web consumption missed (fixed in 160).
 
 > Older steps in PROGRESS-HISTORY.md
