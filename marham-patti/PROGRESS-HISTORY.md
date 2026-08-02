@@ -5534,3 +5534,32 @@ Done:
 Tests: packages/ui/src/lib/auth-lockup.spec.ts (authLockup §4.2-4.6 + resolveBrandMark initial §4.5); packages/ui/src/lib/pwa.spec.ts +vendor platformOnly (§4.9 vendor unchanged); apps/api/src/tenancy/tenant-auth-english.spec.ts (§4.7 no dir/resolveLang in staff/shared auth, patient still bilingual; §4.8 forgot href /reset); apps/web/lib/brand-contract.type-test.ts (§4.1 compile-level: TenantBrand/HostBrandInput/ResolvedBrand carry the four fields, `logo` absent). Updated vendor-invite-branding.spec.ts (dropped the two b.logo assertions).
 
 Gates: pnpm typecheck clean (29/29). pnpm lint clean (0 errors); design-drift + tenant-english-only self-checks pass. Did NOT run test:unit/build (controller runs them). Block-final: no step 161; Next set to "none — awaiting next spec block"; ends [HUMAN_REQUIRED] per spec STOP INSTRUCTION.
+
+## 161 — identity-lockup-and-fallback-fixes — DONE (2026-08-02)
+
+WORK TYPE: FIX (branch fix/161-identity-lockup-and-fallback-fixes). Spec /specs/161-identity-lockup-and-fallback-fixes.md. Tenant surfaces only; vendor console untouched. No schema/RLS.
+
+### §2.1 Lockup — three exclusive conditions
+- `packages/ui/src/lib/auth-lockup.ts`: replaced 160's single `logo` kind (which conflated Horizontal+Insignia and always rendered the name beside the logo — the §1.1 defect) with three exclusive AuthLockup kinds: `horizontal` (url only, NO name), `insignia` (url + name), `name` (name only), plus `platform`. authLockup now: Horizontal resolves → horizontal alone; else Insignia → insignia + app name; else name text; null tenant → platform.
+- `apps/web/app/(auth)/login/AuthShell.tsx` TenantLock: renders one of the four. Condition 1 = Horizontal img `max-height:40px; width:auto`, no name text node. Condition 2 = `.tenant-lock__inline` flex row, insignia `max-height:28px` + name span `22px`/semibold/`--text-primary`. Condition 3 = name `24px`/semibold/centred. Platform = Logo fallback unchanged. Both login and reset (ResetForm) consume TenantLock, so all three auth surfaces follow the rule.
+- `apps/web/app/globals.css`: added `.mp-kit .tenant-lock__inline` (flex row, gap 10px) + its img reset.
+- Error page (ErrorState/errorLockup) kept its 159 horizontal→initial-mark→platform chain (owner-verified, and §2.2 keeps initial marks); it already never renders logo+name together, so no change there.
+
+### §2.2 Favicon — broken final link
+- Extracted the shared mark→icon decision into pure `markIconHref(mark, {mode, version, fallbackIcon})` in `packages/ui/src/lib/pwa.ts` (asset→url; initial→`/pwa/asset` icon generator URL; platform→fallback). Imports `BrandMark` type from `@mp/brand`.
+- `apps/web/lib/pwa.ts`: both resolvePwaBrand (svgIcon) and resolveFavicon now call markIconHref — one implementation, so the favicon can no longer drop the initial link while the app icon keeps it. Dropped now-unused pwaAssetHref import from the app module.
+
+### §2.4 Error boundary titles
+- Added pure `errorPageTitle(label, tenantName, platformName)` in `packages/ui/src/lib/error-lockup.ts`, exported via index.
+- `apps/web/app/not-found.tsx`: replaced static `metadata` (hardcoded "Page not found — Marham Patti", the §1.4 defect) with `generateMetadata` resolving per host — tenant name on a tenant host, platform name on vendor/platform/apex. Kept robots:{index:false}.
+- `apps/web/app/error.tsx`: documented that its title comes from the root layout's host-resolved generateMetadata (a client boundary cannot export metadata); no code change needed.
+- `apps/web/app/global-error.tsx`: replaces the layout, so added a `<head><title>` with the platform string via errorPageTitle (no tenant context here by design).
+- Grepped all error components: root not-found/error/global-error handled; `(vendor)/error.tsx` + `(vendor)/not-found.tsx` are vendor surfaces → left byte-for-byte (platform strings).
+
+### Tests
+- `packages/ui/src/lib/auth-lockup.spec.ts`: rewritten to the three conditions (horizontal alone / insignia+name / name / platform) incl. cross-theme.
+- `packages/ui/src/lib/pwa.spec.ts`: markIconHref (asset passthrough, initial→generator never empty/fallback, platform→fallback) + zero-asset tenant resolves BOTH favicon and appIcon to the generator initial.
+- `packages/ui/src/lib/error-lockup.spec.ts`: errorPageTitle ends with tenant name on a tenant host, platform string unchanged otherwise.
+
+### Gates
+- `pnpm typecheck`: 29/29 pass. `pnpm lint`: 16/16 pass (design-drift, token-integrity, tenant-english-only checks green). No schema change → no prisma generate. Did not run test:unit/e2e/build per loop rules.
