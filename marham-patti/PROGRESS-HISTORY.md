@@ -5895,3 +5895,29 @@ No component test asserts the changed dock-item declarations. Vendor console unt
 ### Files
 - apps/web/app/globals.css — `.mp-mobile .mdock__item`: +min-height:44px, +justify-content:center,
   padding 6px 0, font-weight semibold, radius 20px (aligned to mockup `.mdock__item`).
+
+## 171 — kit-controls-v2-match — DONE (2026-08-02)
+
+**Type:** FIX (presentation only). Branch `fix/171-kit-controls-v2-match`. Spec `/specs/171-kit-controls-v2-match.md`.
+**Scope:** v2 proof of component-reference §B (Buttons & actions) and §C (Form fields). Mockup `specs/mockups/pharmacy/component-reference.html` authoritative.
+
+### Per-selector declaration diff (mockup ↔ built `.mp-kit`)
+Buttons §B — CLEAN (byte-for-byte): `.btn` base + `svg`/`:focus-visible`/`:active`/`[disabled]`/`--sm`/`--lg`/`--primary`(+hover/active)/`--secondary`(+hover)/`--destructive`(+hover)/`--ghost`(+hover); `.iconbtn`(+svg/hover/focus)/`.iconbtn--bordered`. All already consume semantic `--accent`/`--accent-hover`/`--accent-press` — no raw `--brand-*` or teal literal in any button state.
+Form fields §C — CLEAN: `.field`, `.field__label`(+`.opt`), `.field__help`, `.field__err`, `.input`(+placeholder/hover/focus/is-error/is-error:focus/[disabled]), `.selectbox`(+trigger/hover/svg/is-open/ph), `.input-wrap`, `.pw-wrap`/`.pw-toggle` (44×44, inset-inline-end:0). Palette clean.
+Mismatches found & fixed:
+  1. `.spinner` was the v1 in-button form (16px, 2px currentColor ring, transparent head, mp-kit-spin .6s) with helper rules `.btn .spinner{margin-inline-end:8px}` and `.btn--primary .spinner{color:var(--text-on-brand)}`. v2 defines a spinner *family*: base `.spinner` 22px / 2.5px ring / neutral `--surface-hover` track / `--accent` head / .7s, plus `.spinner--sm` (16px, 2px) and `.spinner--lg` (32px, 3px). Replaced to match; dropped the two helper rules (button gap:8px already spaces the label; head/track colours are explicit, so the primary override was inert — matches mockup). Kept keyframe name `mp-kit-spin` (no rename; identical 0→360 rotation as mockup `cl-spin`).
+  2. `.field__err svg` sizing (mockup 13×13) was absent from CSS and inline-styled 14px in the gallery. Added `.mp-kit .field__err svg{width:13px;height:13px}` and removed the inline size in StaffKit so CSS drives it.
+
+### Markup touch-ups (presentation only, behaviour frozen)
+- `apps/web/app/(auth)/login/StaffLoginForm.tsx`, `.../reset/ResetForm.tsx` (×2): in-button submit spinner `spinner` → `spinner spinner--sm`, matching v2 §B where the small spinner rides beside the retained label.
+- `apps/web/app/ui/StaffKit.tsx`: dropped inline `style={{width:14,height:14}}` on the `.field__err` AlertTriangle.
+
+### Palette assertion (§4)
+Grep over button/form-field interactive rules (`.mp-kit .btn*`, `.input*`, `.field*`, `.selectbox*`, `.iconbtn*`, `.pw-toggle*`, `.spinner*`): zero raw `--brand-*` and zero teal/mint hex literals — every interactive state resolves through `--accent*`/`--border-focus`/`--focus-ring`. Out-of-scope raw `--brand-teal` glows on `.mp-mobile .mfab`/`.mact--bare .btn`/`.mtok` (§A/§H shell, owned by 168–170) and the fixed-identity `.mp-inv` printed invoice hexes (a static document, not an interactive rule) were left untouched.
+
+### Not changed (verified, no delta)
+- Searchable select `.mp-pos-sel-*` (spec-134 behaviour) and `.mp-mobile .segctl`: production realisations of the mockup `.pos-sel__*`/`.segctl`; trigger sits at `--control-lg` (44px), track sunken pad 3px/gap 2px — appearance already matches, behaviour frozen, class names retained (no renames).
+- `.switch`/`.check`/`.radio`/`.btngroup`/`.splitbtn`/`.btn__kbd`: mockup atoms not rendered by the tenant kit gallery or any tenant surface — nothing to diff; not added (build-only-this-module, no dead CSS).
+
+### Gates
+`pnpm lint` ✓ (eslint + design-drift + token-integrity + tenant-english-only all green). `pnpm typecheck` ✓ (@mp/web cache-miss, clean). Vendor surfaces untouched. Did not run test/build (controller gates).
