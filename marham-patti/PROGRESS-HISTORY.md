@@ -5583,3 +5583,34 @@ Mockups (§4): the six v2 files were already committed alongside the spec in spe
 Diff self-check: every named selector's declarations match the v2 file byte-for-byte (whitespace-normalised) — verified .mdock__badge (1754), .mscroll--chrome-* (2149-2151), .sheet__hdic (1697), .sheet__foot--row (1702), .macct__logout (2124), .modal__body (747), .mscroll 180px (§2.2). Renders in /ui light + dark.
 
 Gates: pnpm lint (incl. design-drift + token-integrity: token layer present in BOTH themes, every --mp-* resolves) PASS; pnpm typecheck PASS. No schema change. Did not run test:unit/e2e/build per CLAUDE.md.
+
+## 163 — mobile-more-sheet — DONE (2026-08-02) — FEATURE (branch feature/163-mobile-more-sheet)
+
+**Spec:** /specs/163-mobile-more-sheet.md (Phase 19). Schema: none. RLS: unchanged.
+
+**What:** The mobile dock's overflow moves from the sidebar drawer into a proper "More" bottom sheet matching the v2 reference (component-reference.html §H). Dock becomes THREE primary tabs + a trailing More tab (four total, targets large at 360). The More tab opens `<MobileMoreSheet>`; when a row inside carries attention it shows a `.mdock__badge` count.
+
+**New component `packages/ui/src/components/mobile-more-sheet.tsx`** (dumb, registry-driven, presentation-only):
+- Anatomy: `.sheet__scrim` + `.sheet` (grip, "More" header with `.mic` close + hairline + color-mix surface, scrollable `.sheet__body`, fixed `.sheet__foot`).
+- Body order: module groups (`.mlabel` + `.mfeed` of `.mrow` rows: `.mrow__ic--teal` tile, label, optional right count `.badge--count` / status `.pill--pending`, chevron) → `.divider` → account block (`.macct` with the identity mark + name/role, then `.macctrow` items) → inline `.segctl` Appearance (Light/Dark/System, acts in place, sheet stays open) → footer Sign out (`.macctrow--danger .macct__logout`).
+- Behaviour: scrim tap / close button / grip swipe-down / Escape all dismiss; row tap navigates + closes; appearance acts without closing; Tab focus trap; body scroll lock while open; trigger regains focus on close.
+- Exported pure helpers (testable without the shell): `excludeDockItems(groups, dockHrefs)` — the registry overflow (visible groups minus dock items, empty groups dropped); `moreAttentionCount(groups, accountRows)` — count of attention rows for the dock badge (counts items, not magnitudes).
+- `MobileDock.more` extended with an optional `badge` → renders `.mdock__badge` (>0 only).
+
+**Wiring — `apps/web/components/shell/AppShell.tsx`:**
+- `DOCK_PRIMARY=3`; primary tabs = `staffMobileTabs(...).primary.slice(0,3)`; More tab opens the sheet (`setMoreOpen`), `more.badge = moreAttentionCount(...)`, `more.active = moreOpen`.
+- Sheet groups = `excludeDockItems(visibleNav(me), [...dockHrefs, ...ACCOUNT_HREFS])`, mapped to i18n labels + `<NavIcon>` + counts. `ACCOUNT_HREFS = ['/settings','/admin/notifications']` are surfaced via the account block, so excluded from the module overflow (not a nav definition — routing only).
+- Account rows: My profile (/settings), Notifications (/admin/notifications, only when `notifications.manage`), Keyboard shortcuts (opens the shared shortcuts modal), Settings (/settings). Avatar via `<IdentityMark size=lg fit=cover>`. Appearance driven by `useTheme` (mode/setMode). Sign out → existing `logout()`.
+- `ShortcutsModal` made optionally-controlled (`open`/`onOpenChange`/`trigger`); the mobile branch mounts a trigger-less controlled instance the sheet opens.
+
+**CSS (`apps/web/app/globals.css`, new 163 block):** live overlay overrides (`.mp-mobile--live .sheet__scrim/.msheet__sheet` → `position:fixed`, flush bottom, z 60/61 above the z-30 dock/chrome); interactive-row resets so `.mrow`/`.macctrow` work as `<a>`/`<button>`; `.mrow__chev`; account/appearance layout; `.mp-mobile .segctl` (ported from mockup); `.mp-mobile .badge/.badge--count/.pill/.pill--pending` (mobile scope lacked them); header color-mix surface.
+
+**i18n:** added `moreAccountProfile`, `moreAppearance` to en.json + ur.json (parity). Reused `mobileMore`, `navNotifications`, `shellShortcuts`, `navSettings`, `shellLogout`, `shellCloseMenu`, `ui.theme_*`.
+
+**Decisions:**
+- Live unread-notification wiring on the More badge deferred: `useRealtimeNotifications` owns a persistent SSE stream (NotificationBell), and calling it again in the shell would open a second stream. Left the badge mechanism registry-driven; day-close/unread attention will bind once a shared unread source (or day-close status hook) exists. The badge + attention mechanism is proven by the unit test with synthetic data.
+- Mobile hamburger drawer left as-is (out of scope); the More sheet is additive.
+
+**Tests:** `packages/ui/src/components/mobile-more-sheet.spec.tsx` — excludeDockItems (overflow keeps non-dock items, drops dock items, permission-excluded absent, second flagged module = own group, empties dropped); moreAttentionCount + dock More badge (flagged day-close → count 1, none → no badge); component (closed renders nothing; one labelled group per module; appearance switches WITHOUT closing; Sign out calls logout; Escape + close button dismiss; row tap navigates + closes).
+
+**Gates:** `pnpm typecheck` PASS (29/29). `pnpm lint` PASS (design-drift + token-integrity + tenant-english-only all green). Did not run test:unit/e2e/build (controller gate).
