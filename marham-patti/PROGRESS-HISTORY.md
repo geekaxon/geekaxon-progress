@@ -5747,3 +5747,78 @@ anchor scope (only "Marham Patti" links, new tab) unchanged. Vendor console unto
 
 Gates: pnpm lint ✓, pnpm typecheck ✓ (design-drift + token-integrity + tenant-english-only
 checks pass). No schema/RLS change. Did not run test:unit/e2e/build per standing rules.
+
+---
+
+## 169 — shell-desktop-v2-match — DONE (2026-08-02)
+
+**Branch:** fix/169-shell-desktop-v2-match  · **Type:** FIX (presentation only) · **Schema/RLS:** none.
+**Reference:** specs/mockups/pharmacy/component-reference.html — section A (Shell & frame), v2.
+Diff-driven: each §2 selector family's mockup declarations extracted and compared against the
+built `mp-*` shell rules. Class names stay the app's own; only rule contents changed. Mapping
+mockup↔app: `.pnav`→`.mp-shell-sidebar`, `.pnav__hd`→`.mp-shell-brand`, `.pnav__mark`→
+`.mp-shell-brand-tile`, `.pnav__brand`→`.mp-shell-brand-name`, `.pnav__pin`→`.mp-shell-collapse-btn`,
+`.pnav__scroll`→`.mp-shell-nav`, `.pnav__grp`→`.mp-shell-navgroup-label`, `.pnav__item`(=`.pnav--pos`)→
+`.mp-shell-navlink`, `.cnt`→`.mp-shell-navcount`, `.pnav__foot`/`.avatar-sm`/`.pnav__u`→
+`.mp-shell-user`/`-avatar`/`-meta`, `.ptop`→`.mp-shell-topbar`, `.ptop__title`(v2 override)→
+`.mp-shell-topbar-heading`, `.pghead`/`.pghead__t`/`.pghead__acts`→`@mp/ui` PageHeader row,
+`.crumb`→`@mp/ui` Breadcrumb.
+
+### Per-selector diff (mockup → built)
+
+Sidebar `.pnav`:
+- `.pnav` w246/surface-card/right-hairline/flex-col → `.mp-shell-sidebar` MATCH (width from `--sidebar-w`
+  248 per spec; 246 is the mockup device border, not a design value).
+- `.pnav__hd` h60/pad 0 16/gap 11/center/bottom-hairline/flex-none → `.mp-shell-brand` MATCH (h `--topbar-h`,
+  box-sizing border-box → bottom border at y=60, unbroken with topbar).
+- `.pnav__mark` 32px/radius 9 → `.mp-shell-brand-tile` was 1.9rem(30.4)/0.55rem(8.8) → **FIXED to 32px/9px**.
+  Fill stays tenant-palette wash (114 §2.3), not platform gradient — behaviour frozen.
+- `.pnav__pin` 30/hairline/radius-sm/transparent/text-secondary + `.is-on` accent-soft →
+  `.mp-shell-collapse-btn` MATCH; `.pnav__pin svg` 15px → **FIXED** (added `.mp-shell-collapse-btn svg`
+  15×15; nav icons stay 18).
+- `.pnav__scroll` flex1/pad 10 10 4/overflow-auto, scrollbar visible (no `scrollbar-width:none`) →
+  `.mp-shell-nav` MATCH; confirmed `scrollbar-width:thin` (none never present); webkit gutter 6→**8px FIXED**.
+- `.pnav__grp` 10px/uppercase/ls-caps/tertiary/semibold/pad 14 8 5 → `.mp-shell-navgroup-label` MATCH.
+- `.pnav--pos .pnav__item` h44/pad 0 12/radius-md/gap 12, svg 18 → `.mp-shell-navlink` MATCH;
+  active soft (`.pnav--pos .pnav__item.is-active`: accent-soft/accent/no-shadow/semibold) →
+  `[aria-current=page]` MATCH. Asserted NO solid-fill active variant survives (the base
+  `.pnav__item.is-active` solid+shadow rule is POS-overridden in the file and never mirrored in-app).
+- `.cnt` marginauto/10px/semibold/surface-hover/text-secondary/pad 1 7/radius-pill/tabular →
+  `.mp-shell-navcount` MATCH; active count color-mix accent 18% MATCH; alert variant on `--warning-soft`
+  present in mockup only (no at-risk count wired yet) — no regression.
+- `.pnav__foot` bottom-hairline/pad 11 12/gap 10/center + `.avatar-sm` 30/radius-pill/accent-soft/accent/
+  11px/700 + `.pnav__u` (b text-sm/medium, small text-xs/text-secondary) → `.mp-shell-user`/`-avatar`/
+  `-name`/`-role` MATCH (shell renders name + role line; email class unused here).
+
+Rail `.pnav--rail` (68px): width `--sidebar-w-collapsed` 68; hd center/pad0; brand+u+grp+cnt hidden;
+foot center/pad 11 0; scroll pad 10 8; item center/pad0 → collapsed-state rules MATCH. Pin persistence
+untouched (132).
+
+Topbar `.ptop`: h60/flex/center/gap 16/pad 0 22/surface-card/bottom-hairline → `.mp-shell-topbar` MATCH.
+`.ptop__title` v2 override (15px/650/-0.012em/text-primary) → `.mp-shell-topbar-heading` MATCH (the file's
+later override wins over the base text-h3 rule, so the app already tracks the effective value). App eyebrow
+(`.mp-shell-topbar-eyebrow`, tenant name) is the app's lead sub-line; the mockup's `.ptop__tag`/`.ptop__sub`
+are demo content the shell has no data for — accepted divergence, no chrome mismatch. Unbroken 60px top line
+verified: sidebar-brand and topbar bottom borders both land at y=60 (border-box).
+
+Page header §2.3 (`@mp/ui` PageHeader / Breadcrumb):
+- `.pghead` flex-end/gap 16/wrap → row was items-start/gap-3 → **FIXED items-end / gap-4**.
+- `.pghead__t` gap 5/min-w-0 → was gap-1 → **FIXED gap-[5px]** (+ min-w-0).
+- `.pghead__t h3` 22px/700/-0.02em/text-primary → was text-2xl(24)/bold/text-heading(teal) →
+  **FIXED text-[22px]/tracking-[-0.02em]/text-foreground** (v2 uses primary ink, not the teal heading hue).
+- `.pghead__t p` 13.5px/text-secondary → was text-sm(14) → **FIXED text-[13.5px]** (muted-foreground = secondary).
+- `.pghead__acts` gap 10/wrap → was gap-2(8) → **FIXED gap-2.5**.
+- `.crumb` text-sm/secondary/gap 6, legible dark → Breadcrumb `text-sm text-muted-foreground` (=
+  `--mp-muted-fg`=text-secondary, dark #9aa8a6 legible) + `gap-1.5`(6px) → MATCH; 92/120 dark regression
+  confirmed absent. No edit needed.
+
+### Gates
+`pnpm lint` clean (design-drift + token-integrity + tenant-english-only all pass). `pnpm typecheck` clean.
+No schema change (skipped prisma generate). Tests not run per build-loop (controller runs full gates).
+No component test asserts the changed class strings. Behaviour frozen (guards, nav filter, collapse/pin
+persistence, screenshot bypass, branding chain); vendor console unchanged (`.mp-vendor-root` overrides intact).
+
+### Files
+- apps/web/app/globals.css — `.mp-shell-brand-tile` 32/9; `.mp-shell-nav` webkit width 8; added
+  `.mp-shell-collapse-btn svg` 15×15.
+- packages/ui/src/components/page.tsx — PageHeader row aligned to `.pghead`/`.pghead__t`/`.pghead__acts`.
