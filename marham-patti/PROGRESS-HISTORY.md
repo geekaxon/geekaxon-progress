@@ -6039,3 +6039,27 @@ apps/web/app/globals.css, packages/i18n/{src,dist}/messages/{en,ur}.json.
 **Gates:** `pnpm typecheck` clean (29 tasks), `pnpm lint` clean incl. design-drift / token-integrity / tenant-english-only checks, EN/UR key parity 0-diff. Did not run build/test:unit/test:e2e (controller runs the full gates).
 
 **Acceptance:** desktop topbar is the `.ptop` mockup; per-selector declarations for the audited set match the file; every route shows registry title/subtitle, tag only where a count exists; no Install/Log out button in the bar (both in the usermenu); unread dot reflects the real centre count; both themes tokened; vendor topbar untouched.
+
+## 177 — tenant-global-search — DONE (2026-08-02)
+
+**Work type:** FEATURE. **Branch:** feature/177-tenant-global-search. Spec 177 (owner option A: overlay COMPOSES from existing kit — no new mockup, no new CSS anatomy).
+
+**What shipped**
+- New NestJS module `apps/api/src/search/` (mirrors the `directory` module layout): `GET /search?q=` returns grouped results for the tenant's OWN records only.
+  - `search.service.ts` — cross-module read with NO class-level guard; each group filtered server-side TWO ways: FLAG (plan) via `isPermissionInPlan(key, effectiveFlags)` from `@mp/shared`, and PERMISSION (RBAC) via `PermissionService.permissionsFor(principal).has(key)`. Both must hold → a filtered group is never even queried (flag→permission precedence preserved). Empty groups dropped from the payload.
+  - Groups: product / customer / supplier — all gated by `pharmacy.sell` (→ `pharmacy.pos` in-plan), matching their own module endpoints (medicines, pharmacy/customers, pharmacy/purchase suppliers all use PHARMACY_SELL under PHARMACY_POS_FLAG). Per-group config array leaves room to diverge.
+  - `search.repositories.ts` — every read under `runWithTenant` (RLS), identity-only projections (no clinical fields): Medicine.brandName/genericName/barcode (barcode exact, brand/generic ILIKE, active only), Customer.name/phone, Supplier.name/phone (active only). Capped at SEARCH_GROUP_CAP=5. hrefs deep-link the module list with `?q=` (product→/pharmacy/inventory, customer→/pharmacy/customers, supplier→/pharmacy/suppliers).
+  - Rate limit: in-process per-tenant sliding window (SEARCH_MAX_PER_WINDOW=60 / SEARCH_WINDOW_MS=60_000) mirroring the reset/directory limiters — no schema, no throttler dep. Sub-minimum queries (<2 chars) short-circuit to empty WITHOUT touching the limiter.
+  - `search.controller.ts` (`@Controller('search')`, `@Get()`), `search.module.ts` (imports PermissionsModule + FlagsModule), registered in `app.module.ts` after DirectoryModule.
+  - Design decision: filter `active: true` on all three groups (surface only live records as navigation targets).
+- Client overlay `apps/web/components/shell/GlobalSearch.tsx` — composition only, NO new CSS classes:
+  - Radix `Dialog`/`DialogContent` (focus trap + Esc + trigger-refocus-on-close for free), wrapper `mp-kit mp-mobile` to unlock the kit scopes. Panel uses `.menu menu--search` + `.menu__search .input` (autofocused), `.mlabel` group headers, `.mrow`/`.mrow__ic`/`.mrow__id` rows (icon tile per type: Pill/UserRound/Truck with teal/info/amber tones), `.emptystate`/`.emptystate__icon` for the empty-query hint AND no-results, `.skeleton skel-circle/skel-line` loading rows. The `.menu` dropdown chrome is neutralised to a static block via inline style (position/opacity/transform/pointer-events) — no new anatomy.
+  - `/` opens (guarded by isTypingTarget + no ctrl/meta/alt), Esc closes, ↑/↓ across the flattened group order, Enter navigates (`router.push(hit.href)`), mouse hover syncs the cursor. Debounced 300ms, min 2 chars. The 176 hint pill is now a real click affordance dispatching a `mp:open-search` window event.
+  - Mounted once in `AppShell.tsx` for authenticated staff (desktop entry; mobile entry deferred per spec — the API is shared).
+- i18n: added `tenantSearch.*` block to `packages/i18n/src/messages/{en,ur}.json` (tenant surfaces are English-only; ur mirrors en for key parity).
+
+**Separation:** entirely distinct from the vendor console ⌘K (spec 55) — that box never returns patients (vendor-scoped); this one returns the tenant's OWN records only.
+
+**Tests:** `search.service.spec.ts` (jest) — all entitled groups for full-access user; EVERY group dropped when the gating permission is absent; groups dropped when the plan flag is off; tenant scoping (two-tenant fixture, zero bleed); per-group cap; sub-minimum query short-circuits without rate-counting; rate limit trips (429 HttpException). UI acceptance (`/` guard, Esc, keyboard nav, empty state) verified by inspection — `apps/web` has no client test runner (build/typecheck/lint only), consistent with prior UI steps.
+
+**Gates:** `pnpm typecheck` clean; `pnpm lint` 0 errors (only pre-existing doctor-portal warning). Did not run build/test:unit/test:e2e per CLAUDE.md (controller runs full gates).
