@@ -6063,3 +6063,24 @@ apps/web/app/globals.css, packages/i18n/{src,dist}/messages/{en,ur}.json.
 **Tests:** `search.service.spec.ts` (jest) — all entitled groups for full-access user; EVERY group dropped when the gating permission is absent; groups dropped when the plan flag is off; tenant scoping (two-tenant fixture, zero bleed); per-group cap; sub-minimum query short-circuits without rate-counting; rate limit trips (429 HttpException). UI acceptance (`/` guard, Esc, keyboard nav, empty state) verified by inspection — `apps/web` has no client test runner (build/typecheck/lint only), consistent with prior UI steps.
 
 **Gates:** `pnpm typecheck` clean; `pnpm lint` 0 errors (only pre-existing doctor-portal warning). Did not run build/test:unit/test:e2e per CLAUDE.md (controller runs full gates).
+
+## 178 — remember-me-and-pwa-pin — DONE (2026-08-02)
+
+**Branch:** feature/178-remember-me-and-pwa-pin. WORK TYPE: FEATURE.
+
+**What shipped**
+- **Remember me (§1):** staff login gains a "Remember me" checkbox (hidden in an installed PWA where persistence is implied). Checked/PWA → refresh token minted with new config `REMEMBER_ME_TTL_DAYS` (default 30, documented in `.env.example`); unchecked → unchanged `REFRESH_TOKEN_TTL_DAYS`, byte-identical. `TokenService.issueBundle(p, device, rememberMe)` + `mintRefresh(..., ttlDays)`. Choice carried across the 2FA step (MfaDto.rememberMe + TwoFactorPanel).
+- **PWA persistent session (§2):** localStorage bundle already persists; the distinction is the token TTL above. `isStandalone()` drives the implicit-remember + gate engagement.
+- **Schema (§3):** additive `users` PIN columns (pin_hash, pin_attempts, pin_locked_until, pin_updated_at) + `pharmacy_settings` (pos_pin_gate_enabled default false, pos_pin_idle_minutes default 10). Migration 20260802000000_remember_me_and_pos_pin — pure nullable/defaulted ADD COLUMNs (no DML/deletes → RLS-bypass rule N/A).
+- **PIN module (apps/api/src/pin):** GET /auth/pin/state (policy required + enrolled + idleMinutes), POST enrol (own, password-grade hash), POST verify (200 body ok/wrong+remaining/locked; 5th wrong resets counter, sets lockout marker, revokes ALL sessions, audits lockout), POST reset (Owner/Manager/Admin @Roles; clears hash, audits). PIN 4 digits, hashed via @mp/db hashPassword, never logged/echoed/in audit summary. Wired as PinModule (imports Auth/Permissions/PharmacySettings/Audit).
+- **Gate policy (shared):** `posPinGateApplies(role, keys, posPinGateEnabled)` — POS-capable roles (new catalog key `pharmacy.pos.pin_gate`, defaulted onto CASHIER/SALESMAN/PHARMACIST, plan-gated by `pharmacy.pos`) are always gated; elevated roles (Owner/Manager/Admin/Super) only when the tenant enables it.
+- **PIN gate UI (§4):** `PinGate` wraps `<AppShell>` in the (app) layout — engages only for installed PWA + gated role; renders nothing behind it (no data fetch beyond identity/branding). Composed from `@mp/ui` Avatar + a hand-built masked 4-dot keypad + tenant brand; enrol (enter+confirm) on first open, error shake + attempts-remaining copy, "Switch user" clears the session. Triggers on cold app-open (sessionStorage flag) and after the configurable idle threshold (visibilitychange re-check). Settings screen gains a PIN-gate card (toggle + idle minutes).
+- **i18n:** rememberMe, pinGate* keys (EN+UR) + pharmacySettings.pin.*.
+
+**Not touched (§5):** sale commit/FEFO/day-close (Phase 12 frozen); 2FA orthogonal; screenshot-preview bypass skips the gate (no persisted session + not standalone).
+
+**Tests:** auth remember-me TTL (checked/unchecked/omitted); pin.service.spec — gate policy (POS gated, owner skip/enabled, non-POS never), enrol→verify, wrong+remaining, 5th→lock+revoke+audit, correct resets, not-enrolled 400, no PIN in audit summary, admin reset + 404. Updated pharmacy-settings.service.spec for the two new required DTO fields.
+
+**Gates:** `pnpm prisma generate` ok; `pnpm typecheck` clean (29/29); `pnpm lint` clean (0 errors; 1 pre-existing unrelated warning in doctor-portal). Did not run test:unit/e2e/build per standing rules.
+
+**Decisions:** admin reset guarded by @Roles(Owner/Manager/Admin/Super) since the codebase user-management uses @Roles (no `users.manage` permission key exists); spec's "users.manage" read as intent (Owner/Manager can reset). Lockout resets the attempt counter + records the instant rather than a persistent hard-block, so a fresh full login lets the user retry — no auth-login write path change needed. The spec's `.mkeypad`/`.check`/`avatar` "atoms" are actually `@mp/ui` components + page CSS; composed from those (no `.mkeypad` class exists) — a hand-built keypad was added for masking/shake control.
