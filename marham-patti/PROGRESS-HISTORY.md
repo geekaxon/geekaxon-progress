@@ -6130,3 +6130,195 @@ Files:
 Regression notes: SidebarBrand prop `collapsed` removed (CSS now owns the width-driven swap); AppShell updated + the useIsDesktopRail hook deleted (was only feeding that prop). Existing sidebar-pin-shell.spec assertions all still hold (Pin glyph, is-on, aria, grid transition in no-preference block, single mp-shell-pin mount, vendor scope untouched).
 
 Gates: `pnpm lint` clean (incl. design-drift + token-integrity + tenant-english-only checks); `pnpm typecheck` clean. Did not run test:unit/e2e/build per builder rules — controller runs full gates. UI self-check by inspection against the mockup `.pnav--rail` rules: pass.
+
+---
+
+## 181 — sidebar-transition-quality-and-auth-offset — DONE (2026-08-03)
+
+**Work type:** FIX (presentation + interaction). Branch `fix/181-sidebar-transition-quality-and-auth-offset`.
+**Spec:** /specs/181-sidebar-transition-quality-and-auth-offset.md. Schema: none. RLS: unchanged.
+Tenant surfaces only — vendor sidebar and vendor auth untouched; nav filtering, counts, pin
+persistence (132) and the 175 lockup conditions unchanged.
+
+### §1 — desktop auth offset, ~20% from the top
+
+Owner testing settled the number by experiment (`margin-top: 20%` "looks right").
+**Both 174's 35% desktop offset and 179's desktop dead-centring are SUPERSEDED by this value.**
+
+Implemented as the intended rule, not the literal one-off: a percentage margin resolves against
+the containing block's WIDTH, so `20%` lands somewhere different on every monitor. The offset is
+stated against the available HEIGHT instead — `.mp-authroot` is `min-height:100dvh` and
+`.authpage` is its only flex child, so the surface height IS the viewport height.
+
+    @media (min-width: 641px) {
+      .mp-kit.mp-authroot--offset .authpage {
+        align-items: flex-start;
+        overflow-y: auto;
+        padding-block-start: min(20dvh, max(24px, 100dvh - 600px));
+      }
+    }
+
+- 1440×900 → 180px (= 20%); 1920×1080 → 216px (= 20%); 1366×640 → the `min()` swaps in the
+  short-viewport term and the offset compresses to 40px, with `.authpage` scrolling rather than
+  clipping. `align-items:flex-start` matters as much as `overflow-y:auto`: a CENTRED flex child
+  clips its own top when it overflows, so the card's head would have been unreachable.
+- Applies to the whole tenant staff auth family (login + the reset flow) — both carry
+  `.mp-authroot--offset`. Mobile (≤640px) untouched: the 179 above-centre placement, the 164
+  full-bleed composition and the 168 bottom "Powered by" all live in the `max-width:640px` block.
+- Patient door (no `--offset`) and the vendor console keep dead-centre. Both themes fall out of
+  the tokens — the rule is geometry only.
+
+### §2.1 — logo: fade only, no slide
+
+Removed the `translateX(-6px)` / `translateX(6px)` pair from `.mp-shell-brand-full` /
+`.mp-shell-brand-rail`, in the base rules AND in the rail state, and cut `transform` from their
+transition (now `opacity var(--dur-fast) var(--ease-out)` alone). One mark becomes the other; the
+120ms cross-fade still completes inside the 180ms width transition.
+
+Shared anchor: the rail insignia is absolutely centred over the header, and the rail header now
+centres its 32px mark slot by PADDING — `0 18px`, where 18 = (68 − 32) / 2 — so the outgoing
+lockup's mark and the incoming insignia sit on the same point. `.mp-shell-brand-full` gained
+`margin-inline-end: auto`, which pins it to the leading edge: an auto margin outranks
+`justify-content`, so the header's rail centring can never drag it across the animating width
+while it fades (without this it travelled ~90px, since a flex child centres inside a container
+whose width is itself animating 248px → 68px). Expanded, nothing changes visually — the two auto
+margins (lockup end, pin start) split the same free space, so the pin still sits flush at the
+trailing edge.
+
+**Deviation, recorded deliberately:** §2.3's mockup rule for the header is `padding:0`. Ours is
+`padding: 0 18px` with `justify-content:center` still declared (and computed, but inert by
+construction). The mockup's `.pnav__hd` holds ONE mark; ours holds TWO overlaid ones, and
+`padding:0` would land the outgoing lockup's mark 18px from the incoming insignia. The acceptance
+criterion — the insignia centred in the 68px rail — is met exactly, and by an arithmetic
+identity rather than by free-space distribution.
+
+### §2.2 — labels and icons shift WITH the width
+
+Cause confirmed as stated: the label fade ran on `--dur-fast` while the width ran on `--dur-base`,
+and worse, the label's collapse used `width:0` / `flex:0 0 0`, neither of which is interpolable
+from its base value. The row therefore re-laid out on frame 1 and the icon slid BACK as the width
+caught up — text arriving before its container.
+
+Everything that moves with the rail now rides ONE curve, `--dur-base` (180ms) `--ease-out`:
+
+- Item label + avatar meta collapse through `flex-grow: 1 → 0` (both are `flex:1`, so grow 0 with
+  basis 0 = zero width). flex-grow IS interpolable, so free space appears at exactly the rate the
+  rail narrows — which is what lets the row's `justify-content:center` settle the icon into the
+  middle with nothing to catch up on.
+- The count pill has no flexible basis, so it collapses through its own type metrics
+  (`font-size` + `padding` → 0) — exact, interpolable, and free of a magic `max-width` that would
+  idle through the first half of the transition. Its `margin-inline-start:auto` goes to 0 in the
+  rail or it would swallow the free space the centring needs (auto margins outrank
+  `justify-content`); at t=0 the label still absorbs all free space, so that switch is a no-op.
+- The brand name needs no clip at all: it is a shrinkable flex item with `min-width:0`, so the
+  animating width squeezes it to zero by itself, perfectly in step with the container.
+- Group headings collapse through `line-height` + `padding` (both interpolable); the base rule
+  gained an explicit `line-height: 1.2` (≈ the `normal` it replaces) because `height:auto → 0`
+  cannot animate — that was 180's vertical snap.
+- Labels keep `white-space:nowrap; overflow:hidden; text-overflow:ellipsis` from their base rules
+  throughout, so nothing wraps mid-transition.
+- No element carries a transform. Icon movement is a consequence of its row's padding, gap and
+  justify-content, animated on the same curve (`padding` + `gap` transitions on
+  `.mp-shell-brand`, `.mp-shell-navlink`, `.mp-shell-user`; `.mp-shell-nav` gets padding while
+  keeping its own hover-revealed `scrollbar-color` fade).
+
+### §2.3 — collapsed centring: the actual cause was the flex GAP, not specificity
+
+Recorded because the spec asked for the finding by name: **this was NOT a specificity or ordering
+conflict.** The mockup's rules were landing. They were simply incomplete for a gapped flex row:
+a flex `gap` SURVIVES a zero-width label, so with `justify-content:center; padding:0` a 68px rail
+still carried 12px (nav row) / 11px (brand header) / 10px (avatar foot) of dead space and pushed
+every icon off-centre — and by a DIFFERENT amount on rows carrying a count pill (two gaps) than on
+rows without one, which is why the rail read as ragged rather than uniformly shifted.
+
+Fix: `gap: 0` in the rail state on `.mp-shell-navlink`, `.mp-shell-user` and `.mp-shell-brand`,
+animated on the width's curve. Resulting geometry at 68px: the nav's 8px rail padding leaves a
+52px row, an 18px icon centres at 25–43px of the rail; the avatar foot centres a 30px avatar at
+19–49px; the header's 18px padding centres the 32px mark slot at 18–50px. The pin stays
+`display:none`.
+
+### §2.4 — the focus-within trap: `:focus-visible` + a pointer-only blur
+
+Mechanism used (both halves, as the spec permits "and/or"):
+
+1. **CSS** — the peek guard changed from
+   `:not(:has(.mp-shell-sidebar:hover, .mp-shell-sidebar:focus-within))` to
+   `:not(:has(.mp-shell-sidebar:hover, .mp-shell-sidebar :focus-visible))` on all 12 rail rules.
+   Browsers match `:focus-visible` for keyboard/assistive focus but not for a mouse click, so the
+   POINTER rule is now absolute — pointer leaves, rail collapses, no intervening click — while a
+   keyboard user tabbing into a collapsed rail still opens it. Note the descendant combinator:
+   `:has()` cannot be nested inside `:has()`, so the focus test is written as a descendant of the
+   sidebar rather than as `.mp-shell-sidebar:has(:focus-visible)`.
+2. **JS** — `AppShell` wraps the pin's handler: `onPinClick` toggles, then blurs the button when
+   `e.detail > 0`. `detail` is the click count, so it is the pointer test — a click synthesised
+   from Enter/Space carries `detail === 0` and must KEEP focus or a keyboard user loses their
+   place in the tab order. This also keeps a focus ring off a mouse-driven toggle.
+
+A pinned-open sidebar is not `data-collapsed`, so it still ignores hover entirely.
+
+### §2.5 — both directions equal
+
+Every transition is declared on the BASE selector, never on a collapsed-state one (the one-way
+jank cause the spec names), so collapse→expand and expand→collapse are the same animation played
+in reverse. Verified by test: no `transition` declaration appears inside any guarded rule. The
+whole motion block stays inside
+`@media (min-width: 1024px) and (prefers-reduced-motion: no-preference)`, so
+`prefers-reduced-motion: reduce` switches instantly in both directions with no layout jump.
+
+### Files
+
+- `apps/web/app/globals.css` — §1 desktop auth offset (new `min-width:641px` block replacing the
+  179 comment); `.mp-shell-brand-full` / `.mp-shell-brand-rail` transform removal +
+  `margin-inline-end:auto`; `.mp-shell-navgroup-label` explicit `line-height`; the rail block and
+  the motion block rewritten.
+- `apps/web/components/shell/AppShell.tsx` — `onPinClick` (toggle + pointer-only blur).
+- `packages/ui/src/lib/sidebar-transition-quality.spec.ts` — NEW, 181 §1 + §2.1–§2.5.
+- `packages/ui/src/lib/sidebar-rail-transitions.spec.ts` — 180's suite retargeted to the corrected
+  guard, the transform-free cross-fade and the gap-zeroed rail rules.
+
+### Gates
+
+`pnpm lint` clean (eslint + design-drift + token-integrity + tenant-english-only all pass).
+`pnpm typecheck` clean. `pnpm test:unit` / `pnpm build` deliberately not run per the build-loop
+rules — the controller runs the full gates. Prettier is NOT clean on these files, but was already
+not clean before this step (verified against the pre-change tree), so no reformat was applied.
+
+### Notes / follow-ups
+
+- The design self-check was done by inspection and arithmetic on the computed box model, since the
+  repo has no browser harness; the §3 screenshot captures at 1440×900 / 1920×1080 / 1366×640 and
+  the mid-animation captures remain an owner-side verification.
+- End of the tenant global/shell block. The next tenant work is the retail-catalog generalisation
+  (general items + units of measure) — schema and frozen logic first, then Inventory and POS
+  against their committed unit-aware mockups. No step 182 exists; PROGRESS.md `Next` is
+  `none — awaiting next spec block` per the spec's stop instruction.
+
+## 182 — shell-polish-round — DONE (2026-08-03)
+
+Branch `fix/182-shell-polish-round`. WORK TYPE: FIX (presentation only). Tenant surfaces only; vendor untouched. No schema, RLS unchanged.
+
+**§1 Topbar hint pill — owner override of the mockup, RECORDED.** `component-reference.html` v2 draws `.ptop__hint` as a 32px `--radius-pill` pill. The owner supersedes that: the hint now takes the height and radius of the icon buttons beside it so the whole action row reads as one bar. Implemented in `apps/web/app/globals.css` on `.ptop__hint`: `height: 32px → 44px`, `border-radius: var(--radius-pill) → var(--radius-md)`. Everything else the mockup specifies is untouched — sunken surface, hairline border, 12px `--text-tertiary`, `gap:7px`, `padding:0 11px`, and the `.ptop__hint b` key cap.
+  - Decision recorded: the spec names the height as "`--control-md`/44px", but `--control-md` is the **36px** form-control token (globals.css `:root`, and identically in the mockup at line 191). The neighbours in the topbar are `.iconbtn--44`, which states `width/height:44px` literally. 44px is therefore written literally, with a comment saying why the token was not used — using `--control-md` would have shipped a 36px hint that does not match a single control beside it. Acceptance ("hint pill at 44px") is met.
+  - The ≤1023.98px rule that hides the hint alongside the user's name/role (176 §2) is unchanged.
+
+**§2 Collapsed rail icon centring — the scrollbar gutter.** Owner's diagnosis confirmed in the source: `.mp-shell-nav` is the scroll container and carries `scrollbar-width: thin` (the v2 reference restored the visible scrollbar, 162 / 169 §2.1), which reserves the gutter permanently — so at 68px the icons centred against a content box ~8px narrower than the rail and read as pushed to one side. This is the piece 181 §2.3 did not reach: 181 correctly found and fixed the surviving flex `gap`, and with the gap gone the gutter was the only remaining offset.
+  - Fix, scoped to the collapsed state only: added `scrollbar-width: none` to the existing guarded `.mp-shell-nav` rule, plus a sibling `…:not(…) .mp-shell-nav::-webkit-scrollbar { display: none; }` for the webkit equivalent. Guard is 181 §2.4's, verbatim: `.mp-shell[data-collapsed='true']:not(:has(.mp-shell-sidebar:hover, .mp-shell-sidebar :focus-visible))`.
+  - The **expanded** sidebar keeps the v2 reference's visible scrollbar exactly — base `scrollbar-width: thin`, the 8px `::-webkit-scrollbar` gutter, and the hover/focus-within thumb fade are all untouched. The hover/keyboard peek un-matches the guard, so a peeked rail also shows the scrollbar again.
+  - `overflow-y: auto` is untouched, so wheel and touch still scroll the rail; only the indicator is hidden.
+  - Computed centring at 68px (by inspection of the cascade): nav content box = 68 − 2×8px rail padding = **52px** with no gutter reserved; `.mp-shell-navlink` is `justify-content:center; padding:0; gap:0`, so the 18px icon lands at 25–43px — dead centre. Same for the avatar foot and the 32px header mark (centred by its 18px = (68−32)/2 padding).
+  - The rule sits in the plain `@media (min-width: 1024px)` block, not the `prefers-reduced-motion: no-preference` one, so reduced-motion users get the centred rail too.
+
+**§3 Auth offset — the owner's exact value.** Replaced the desktop rule with the owner's tested expression, byte-for-byte: `margin-top: min(12dvh, max(24px, 100dvh - 455px));`.
+  - **181 §1 is hereby SUPERSEDED** — its `padding-block-start: min(20dvh, max(24px, 100dvh - 600px))` is gone. (174's 35% and 179's desktop dead-centring were already superseded by 181 and stay superseded.)
+  - Note on the spec text: §3 says "replace 181's `min(38dvh, …)`", but 38dvh is the **mobile** (≤640px) rule from 179; 181's desktop value was 20dvh. §3 also says "applies desktop; mobile keeps its 179 placement", so the desktop rule is what was replaced and the mobile 38dvh block is untouched — as §4 requires.
+  - Applied as a `margin-top` on `.authcol` (the content block) rather than as padding on `.authpage`, because the owner's expression is a `margin-top` and because that is the same element+property shape the mobile rule uses. `.authpage`'s block-start padding is zeroed in the same rule so the 56px base padding is not silently added to the owner's number — the block's top edge is exactly the expression. Bottom padding stays for scroll comfort.
+  - Short-viewport safety preserved: `align-items: flex-start` + `overflow-y: auto` remain, and the `100dvh − 455px` term takes over below ~517px of viewport height, bottoming out at the 24px floor. Values: 1440×900 → 108px, 1920×1080 → 130px, 1366×640 → 77px.
+  - Scope unchanged: `.mp-authroot--offset` only (tenant staff login + reset family). The patient door and the vendor console carry no `--offset` and keep dead-centre.
+
+**Vendor untouched — verified.** `VendorChrome.tsx` renders `.mp-shell` with `data-nav-open` only and never `data-collapsed`, so the §2 guard cannot match it; it does not render `.ptop__hint`; and the §3 rule is scoped to `.mp-authroot--offset`, which the vendor door does not carry.
+
+**Tests.** New `packages/ui/src/lib/shell-polish-round.spec.ts` — 13 source-level assertions over §1 (44px + `--radius-md`, parity with `.iconbtn--44`, mockup surface/border/type kept, the 32px pill gone), §2 (rail hides both scrollbars, expanded keeps thin + the 8px gutter + the hover thumb, overflow untouched) and §3 (the expression byte-for-byte, the 20dvh declaration gone, applied on `.authcol` above 641px with the surface padding zeroed, flex-start + scroll kept, mobile 38dvh intact, vendor/patient untouched). The superseded §1 block was removed from `sidebar-transition-quality.spec.ts` (its subject no longer exists) and its docstring now points at the new file; the vendor/patient guard assertions were carried over so nothing is lost. Every assertion was additionally executed directly against the built `globals.css` via node before hand-off — all pass.
+
+**Gates.** `pnpm lint` clean (incl. design-drift, token-integrity, tenant-english-only). `pnpm typecheck` clean. Per CLAUDE.md the unit/e2e/build suites are left to the controller.
+
+**Files:** `apps/web/app/globals.css`, `packages/ui/src/lib/shell-polish-round.spec.ts` (new), `packages/ui/src/lib/sidebar-transition-quality.spec.ts`, `PROGRESS.md`, `PROGRESS-HISTORY.md`.
