@@ -6084,3 +6084,27 @@ apps/web/app/globals.css, packages/i18n/{src,dist}/messages/{en,ur}.json.
 **Gates:** `pnpm prisma generate` ok; `pnpm typecheck` clean (29/29); `pnpm lint` clean (0 errors; 1 pre-existing unrelated warning in doctor-portal). Did not run test:unit/e2e/build per standing rules.
 
 **Decisions:** admin reset guarded by @Roles(Owner/Manager/Admin/Super) since the codebase user-management uses @Roles (no `users.manage` permission key exists); spec's "users.manage" read as intent (Owner/Manager can reset). Lockout resets the attempt counter + records the instant rather than a persistent hard-block, so a fresh full login lets the user retry — no auth-login write path change needed. The spec's `.mkeypad`/`.check`/`avatar` "atoms" are actually `@mp/ui` components + page CSS; composed from those (no `.mkeypad` class exists) — a hand-built keypad was added for masking/shake control.
+
+## 179 — auth-offset-and-pin-corrections — DONE (2026-08-03) — WORK TYPE: FIX (branch fix/179-auth-offset-and-pin-corrections)
+
+Three tenant-only corrections on top of 174/178. Schema/RLS unchanged. Vendor + patient auth untouched.
+
+### §1 Auth vertical placement (globals.css)
+- 174 §1 pushed the DESKTOP staff/public auth column ~35% down; the owner's intent was the reverse. Reverted the desktop offset entirely: deleted the `@media (min-width:641px) .mp-authroot--offset { .authpage flex-start; .authcol margin-block-start: min(35dvh, max(24px,100dvh-455px)) }` block. Desktop now uses the `.authpage` base dead-centre. **174's desktop 35% offset is SUPERSEDED.**
+- Mobile (`@media max-width:640px`): added `.mp-kit.mp-authroot--app.mp-authroot--offset .authcard { margin-top: min(38dvh, max(24px, 100dvh-455px)); margin-bottom: auto }` so the full-bleed column sits a little ABOVE centre (top edge ≈35–40% viewport, owner: "little bit top from the center"). The auto bottom margin still pins "Powered by" to the column foot (168 §2); short viewports compress via the `100dvh−455px` term and the column (`overflow-y:auto`) scrolls, so fields never clip. **165 §7's mobile dead-centring for `--offset` surfaces is SUPERSEDED.**
+- Gated on `--offset`, so the patient door (`desktopOffset={false}`, no `--offset`) and vendor keep 165 dead-centring untouched. Applies to login (AuthShell) + reset (ResetForm), both themes.
+
+### §2 PIN gate dark mode (globals.css)
+- The PIN gate (`components/shell/PinGate.tsx`, mounted in `app/(app)/layout.tsx` inside the root layout's `<html className={resolved}>`) rendered light in dark because 178 left `.mp-pin__card/__key/__name/__title/__prompt` light-locked with no `html.dark` override — the shared `.mp-auth-card` bg (`--mp-auth-card:#fff`) is intentionally light-locked (AA guard).
+- Added `html.dark .mp-pin__*` overrides (card bg `--surface-card`, keys `--surface-hover`, text `--text-primary/--text-secondary`, borders `--border-hairline`, key-hover `--surface-raised`) — same `html.dark` mechanism every other tenant surface uses, so it's server-stamped on first paint = no wrong-theme flash. Scoped to `.mp-pin` so the login card's light-lock is untouched. The `checking` spinner root `.mp-auth-gate` already uses dark-aware `var(--page-bg)` — no change needed.
+
+### §3 PIN requirement as a role permission (not a user toggle)
+- Key `pharmacy.pos.pin_gate` already exists (packages/shared/src/permissions.ts), is seeded ON for CASHIER/SALESMAN/PHARMACIST and OFF for MANAGER/ADMIN (ROLE_PERMISSION_DEFAULTS), read by `posPinGateApplies` / `PinService.state()`, and already rendered in the tenant role editor matrix. So the substantive model was already correct — the only gap was plain-language labelling.
+- Relabelled the catalog description `Act as a POS operator behind the PWA identity PIN gate` → `Require PIN confirmation before selling` (key immutable, additive-only rule respected).
+- Tenant role editor `app/(app)/admin/roles/RoleManager.tsx`: was showing the raw dotted key as the visible label. Now renders `p.description` (plain language) as the label with the dotted key as a muted monospace subtitle (`.mp-rbac-perm-text`/`.mp-rbac-perm-key` CSS added). System (seeded) roles stay read-only per clone-to-edit; custom roles toggle it live via `PUT /rbac/roles/:id/permissions`. Editable only under `@Roles(SUPER_ADMIN,TENANT_OWNER,ADMIN)`. Lockout floor (144, `assertNotLastOwner`) is holder-level only and never touches `setRoleKeys`, so PIN-requirement editing is unblocked — verified, no regression.
+
+### Tests
+- New apps/api/src/permissions/pos-pin-permission.spec.ts: catalog has the pin-gate key labelled "Require PIN confirmation before selling" (scope TENANT); seeded ON for POS roles, OFF for Owner/Manager. Existing pin.service.spec.ts already covers "holding the key gates / not holding it doesn't / elevated role opts back in via posPinGateEnabled".
+
+### Gates
+- `pnpm typecheck` clean (29/29). `pnpm lint` 0 errors (1 pre-existing warning in doctor-portal.repositories.ts, untouched); design-drift + token-integrity + tenant-english-only guards all pass. No schema change (no prisma generate). test:unit/e2e/build left to the controller.

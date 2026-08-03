@@ -6,15 +6,15 @@
 
 ## Current Status
 - **Project:** Marham Patti — multi-tenant white-label healthcare platform.
-- **Phase:** **PHASE 19** — tenant finalisation (174→178) complete. Tenant only; vendor unchanged.
-- **Last completed:** **178 — remember-me-and-pwa-pin** — long-lived "remember me"/PWA sessions with a 4-digit POS identity-PIN gate.
-- **Next:** none — awaiting next spec block
-- **Branches:** through 173 on staging. 178 on feature/178-remember-me-and-pwa-pin.
-- **Note:** Inventory waits on the retail-catalog scoping in ARCHITECTURE.
+- **Phase:** **PHASE 19** — tenant finalisation, **tenant platform only** (owner: platform-by-platform). Next up (180): collapsed sidebar rail to mockup + hover-to-expand + animated transitions. Vendor untouched.
+- **Last completed:** **179 — auth-offset-and-pin-corrections** — desktop auth re-centred, mobile above-centre, PIN dark-mode, PIN as a role permission.
+- **Next:** **180 — sidebar-rail-and-transitions** — /specs/180-sidebar-rail-and-transitions.md
+- **Branches:** through 178 on staging. 179 on fix/179-auth-offset-and-pin-corrections.
+- **Note:** Inventory waits on the retail-catalog (units + general items) scoping in ARCHITECTURE.
 
 ### Recent steps
-- **178 — remember-me-and-pwa-pin** — DONE (2026-08-02) — remember-me/PWA long-lived sessions behind a 4-digit POS identity-PIN gate; 5-strike lockout; all events audited.
-- **177 — tenant-global-search** — DONE (2026-08-02) — `/` overlay over own products/customers/suppliers; plan+permission gated, RLS-scoped, rate-limited.
-- **176 — topbar-to-mockup** — DONE (2026-08-02) — `.ptop` title/subtitle/tag from registry; keyboard/bell/theme/user acts; install + sign-out in usermenu.
+- **179 — auth-offset-and-pin-corrections** — DONE (2026-08-03) — desktop centred, mobile above-centre, PIN dark-mode, PIN a role permission.
+- **178 — remember-me-and-pwa-pin** — DONE (2026-08-03) — remember-me, PWA session, PIN gate; migrate gate fixed.
+- **177 — tenant-global-search** — DONE (2026-08-03).
 
 > Older steps in PROGRESS-HISTORY.md
