@@ -6108,3 +6108,25 @@ Three tenant-only corrections on top of 174/178. Schema/RLS unchanged. Vendor + 
 
 ### Gates
 - `pnpm typecheck` clean (29/29). `pnpm lint` 0 errors (1 pre-existing warning in doctor-portal.repositories.ts, untouched); design-drift + token-integrity + tenant-english-only guards all pass. No schema change (no prisma generate). test:unit/e2e/build left to the controller.
+
+## 180 — sidebar-rail-and-transitions — DONE (2026-08-03)
+
+WORK TYPE: FIX (branch fix/180-sidebar-rail-and-transitions). Presentation only; no schema, no RLS. Tenant staff shell only — vendor sidebar untouched.
+
+Files:
+- apps/web/app/globals.css — rail + transitions.
+- apps/web/components/brand/SidebarBrand.tsx — render BOTH lockups for the cross-fade.
+- apps/web/components/shell/AppShell.tsx — propless SidebarBrand; removed now-dead useIsDesktopRail hook + isDesktopRail var.
+- packages/ui/src/lib/sidebar-rail-transitions.spec.ts — new source-assertion suite for §1–§4.
+
+§1 Collapsed rail to mockup: the deployed rail already centred header/rows/avatar, but the PIN stayed visible. Now hidden in the rail (`display:none`) — the mockup `.pnav--rail .pnav__pin{display:none}`. Insignia/menu-icons/avatar centring confirmed against `.pnav--rail` rules. Old `.mp-shell-pin{margin-inline-start:0}` rail rule removed (superseded by display:none).
+
+§2 Hover/focus-to-expand (owner addition): implemented CSS-only so the React collapse state never changes (a transient peek, not a persisted toggle). Every rail rule + the collapsed grid width is gated on `.mp-shell[data-collapsed='true']:not(:has(.mp-shell-sidebar:hover, .mp-shell-sidebar:focus-within))`. When the sidebar is hovered OR keyboard-focused (focus-within → keyboard parity), the guard fails and the base expanded styles (248px, full lockup, labels, visible pin) take over — the IDENTICAL pinned-expanded frame using the same grid track, so hover and pin produce one frame, no layout jump. A pinned-open sidebar is not data-collapsed, so it never reacts to hover. Touch has no `:hover`, so the pin toggle remains the control there (pointer/keyboard affordance only). Decision: chose `:has()` over a JS hover state to keep the peek instant and avoid re-render churn; `:has()` is broadly supported and already used elsewhere in globals.css.
+
+§3 Transitions: width 248↔68 over --dur-base --ease-out (pre-existing, kept). Logo cross-fade+slide is NEW and required rendering both marks: SidebarBrand now resolves sidebarLockup at BOTH widths and renders `.mp-shell-brand-full` (expanded, in flow) + an overlaid absolute `.mp-shell-brand-rail` (aria-hidden so the app name announces once). In the rail state full fades out + translateX(-6px) while rail fades in from translateX(6px)→0; both transition opacity+transform over --dur-fast. This also makes the hover-peek show the horizontal lockup with no JS. Labels/counts/group-labels/avatar-meta keep their clip-to-zero + opacity fade (175). All transitions live inside `@media (min-width:1024px) and (prefers-reduced-motion: no-preference)` → reduced-motion users get an instant switch. `.mp-shell-brand` given position:relative (no overflow:hidden, to avoid clipping the pin's focus outline; the sidebar already clips at 68px and the off-frame lockup is opacity:0).
+
+§4 Pin breathing room: `.mp-shell-pin { margin-inline-end: 2px }` — a small trailing-edge gap echoing the header's left-padding rhythm. Visual only.
+
+Regression notes: SidebarBrand prop `collapsed` removed (CSS now owns the width-driven swap); AppShell updated + the useIsDesktopRail hook deleted (was only feeding that prop). Existing sidebar-pin-shell.spec assertions all still hold (Pin glyph, is-on, aria, grid transition in no-preference block, single mp-shell-pin mount, vendor scope untouched).
+
+Gates: `pnpm lint` clean (incl. design-drift + token-integrity + tenant-english-only checks); `pnpm typecheck` clean. Did not run test:unit/e2e/build per builder rules — controller runs full gates. UI self-check by inspection against the mockup `.pnav--rail` rules: pass.
