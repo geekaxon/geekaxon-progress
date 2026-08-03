@@ -6455,3 +6455,41 @@ PharmacyModule introduces no DI cycle). Every Phase-12 suite passes with no asse
 untouched apart from its own suites confirming the extended bus.
 Web: only `PosClient.tsx` needed a touch — the near-expiry amber and the expiry line are null-guarded, so an
 undated lot shows its batch with no date and no false warning. No visual change (no undated lots in demo data).
+
+---
+
+## 185 — unit-aware-purchases-returns-reports — DONE (2026-08-03)
+
+**Branch:** `feature/185-unit-aware-purchases-returns-reports`. Spec: `/specs/185-unit-aware-purchases-returns-reports.md`. No CODEREF covers 185 (the companion files stop at 121).
+
+### §1 Purchase entry — the conversion doorway
+- New shared helpers in `packages/shared/src/retail-units.ts`: `unitQtyLabel()` (the pack text a stored line PRINTS — reads back what was typed, falls back to `formatBaseQty`) and `baseCostFromUnitCost()` (unit cost ÷ contains-through-chain, rounded to paisa). `autoBatchNo(nowIso)` lands in `pharmacy-purchase.ts`.
+- `PharmacyService.pricePurchaseLine()` resolves EVERY line before the first write into a new `PricedPurchaseLine` (baseQty / productUnitId / unitQty / pricedQty / unitCost / baseCost / lineTotal / batchNo / expiry). `createPurchase` now prices from that array; `purchaseGrandTotalFromLines()` takes it as a second argument.
+- **DECISION (money):** the payable is billed in the ENTERED unit — `lineTotal = unitQty × unitCost` through the untouched `purchaseLineTotal`. The per-base cost is DERIVED for valuation only and never multiplied back up, so a pack price that does not divide evenly (Rs 1,000.50 a box of 100 → 10.01 a tab) cannot drift a paisa into the supplier ledger. `medicine.costPrice` and `batch.costPrice` both take the per-BASE cost, since every downstream price/profit figure is quoted per base unit.
+- **DECISION (batch data optional, decision 4):** `PurchaseLineInput.batchNo`/`expiry` are now `string | null` (`optionalString` / a new `optionalDate`; the dead `requiredDate` was removed). A missing lot number opens `AUTO-<YYYYMMDD>` — keyed to the receipt DAY so same-day undated receipts of one product top up ONE lot; a missing expiry stays null and 184 §2 already allocates undated lots last.
+- **DECISION (schema, deviates from the spec's "Schema: none beyond 183"):** `PurchaseItem.expiry` had to become nullable — 183 relaxed `batches.expiry` but not the purchase LINE that receives such a lot, so an undated receipt had no truthful value to store. Migration `20260803010000_purchase_item_optional_expiry` does one `ALTER COLUMN … DROP NOT NULL`. Nothing else in the schema moved; no money column touched.
+- `PurchaseLineView` gains `productUnitId`, `unitQty`, `unitLabel`, `unitCost` (recovered from the stored `lineTotal ÷ unitQty`, so paper and payable agree), and `expiry` is now nullable.
+
+### §2 Returns in the unit sold
+- `SaleReturnLineInput` and `PurchaseReturnLineInput` accept `productUnitId` + `unitQty`; both services convert to base via the shared `resolveEnteredQty` before any guard runs, so the 108 mechanics are untouched. Guard messages now report the shortfall in packs (`formatBaseQty`).
+- New `PharmacyService.returnedUnit()`: an explicit unit wins; otherwise the SOLD line's unit is inherited when the returned base quantity is a whole number of them (so a pre-185 client returning 100 tabs of a boxed sale still prints "1 box"), and a part-pack records no unit rather than a fractional lie.
+- **DECISION (purchase-return money):** `unitValue` stays PER BASE UNIT and still defaults to the lot's own recorded cost. The entered unit moves quantity and paperwork only — pricing a credit per pack would have re-introduced the rounding drift §1 avoids, and the spec pins refund/debit-note math as untouched.
+- `ReturnItemRow` / `NewReturnItem` / `ReturnItemView` carry `productUnitId` + `unitQty` (+ `unitLabel` on the view); the prisma `RETURN_ITEM_SELECT`, mapper and both `returnItem.create` paths were extended.
+
+### §3 Reports + prints
+- `expiryReport` gains a `'NONE'` bucket (new `ExpiryHorizon` type) that reads LAST and is EXCLUDED from `totalValueAtRisk` — undated stock is reported, never counted as at risk. The web's `batchesAtRisk()` skips it too.
+- `SoldLineFact` accepts an optional `unitChain`; `SoldMedicine` gains `qtyLabel`, stamped once the whole range is folded (a pack label is a property of the total, not of a line). Top-selling AND the stock card's top-moving both read it.
+- New `productTypeSplit()` + `TypedSaleLineFact` / `ProductTypeSplitRow` / `ProductTypeSplit` and a `ProductTypeLit` type. It folds the SAME in-range sale lines with the SAME per-line arithmetic as `profitReport`, so `split.revenue === profit.revenue` and `split.grossProfit === profit.grossProfit` by construction — additive, nothing existing moves. Both types are always returned so the panel never reflows. Surfaced as `ReportsView.typeSplit`.
+- `MedicineRow` gains `productType` (schema had it since 183 but nothing read it) — added to `MEDICINE_SELECT`, `toMedicine` (defaulting MEDICINE), `NewMedicine` (optional) and the fake.
+- Prints: `ReceiptItem.unitLabel?` on the shared thermal model; `SaleItemView` gains `productUnitId`/`unitQty`/`unitLabel`; `saleView` and `assemblePurchaseDetail` and `returnItemViews` all resolve chains. Thermal sale receipt, thermal refund receipt, A4 purchase invoice and A4 debit note now print "2 box × Rs 850" through the existing 131 anatomy — no new print components.
+
+### Web
+- Purchase screen: batch + expiry no longer gate a line (blank is sent as null); detail/invoice read `unitLabel`/`unitCost` and tolerate a null expiry. Returns screen: printed lines read `unitLabel`; the batch picker no longer crashes on an undated lot (`b.expiry.slice()` was reachable once §1 shipped). Reports screen: new `TypeSplitCard`, the "No expiry" bucket (with a deliberately quiet `.expb--none` style), pack-formatted ranking figures, and the split in the CSV export.
+- i18n: `ppurNoExpiry`, `pretNoExpiry`, `prepNoExpiry`, `prepTypeSplit`, `prepTypeMedicine`, `prepTypeGeneral` — EN + UR.
+
+### Tests
+- New `apps/api/src/pharmacy/unit-aware-purchases-returns-reports.spec.ts` — pack purchase → base stock + derived base cost + pack-billed payable; the non-dividing price case; the base-unit line byte-identical; the undated auto-lot, its same-day top-up, and FEFO drawing it last; boxed sale return restoring the originating batch; sold-unit inheritance; part-pack recording no unit; both over-return guards; purchase return in packs; the "No expiry" bucket; the split summing to the profit report; and the report hub reconciling money while formatting quantities through the chain.
+- Updated for the new semantics: `unit-aware-core.spec.ts` (a purchase cost is now quoted per ENTERED unit — Rs 600 a box of 100 → base cost 6, line total 1,800) and `reports.spec.ts` (`topSelling` rows carry `qtyLabel`). Seven spec seed helpers gained `productType`.
+
+### Gates
+`pnpm prisma generate`, `pnpm lint` (0 errors; one pre-existing unused-disable warning in `doctor-portal.repositories.ts`, untouched) and `pnpm typecheck` (29/29) all clean. Per AGENT.md the unit/e2e/build gates are the controller's.
