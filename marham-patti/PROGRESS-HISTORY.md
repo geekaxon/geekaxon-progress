@@ -6493,3 +6493,101 @@ undated lot shows its batch with no date and no false warning. No visual change 
 
 ### Gates
 `pnpm prisma generate`, `pnpm lint` (0 errors; one pre-existing unused-disable warning in `doctor-portal.repositories.ts`, untouched) and `pnpm typecheck` (29/29) all clean. Per AGENT.md the unit/e2e/build gates are the controller's.
+
+## 186 — inventory-screen-v2 — DONE (2026-08-03)
+
+**Branch:** `feature/186-inventory-screen-v2` · **Spec:** `/specs/186-inventory-screen-v2.md` · **Mockups:**
+`specs/mockups/pharmacy/inventory-desktop.html` + `inventory-mobile.html` (committed in 162). No schema, no RLS change.
+
+### What was built
+
+**Shared pack math (`packages/shared/src/retail-units.ts`)** — two additions so no screen does arithmetic of its own:
+`baseQtyParts(baseQty, chain)` splits a base quantity into the terms the stock cell draws as separate elements
+(`426` → `[4 box, 2 strip, 6 tablet]`), and `packChainText(chain)` states the chain in plain words
+("1 strip = 10 tablet · 1 box = 10 strip"; `''` for a loose 1-level product). `formatBaseQty` now joins what
+`baseQtyParts` returns, so the string display and the element display can never disagree.
+
+**API.** `MedicineRow`/`NewMedicine` gained `categoryId`; new repo seam `replaceProductUnits` (delete-then-create in one
+transaction — the editor submits the WHOLE chain) plus `listProductCategories` / `upsertProductCategory`, implemented on
+Prisma and on the in-memory fake. `parseUnitChain` in the DTO validates what the pack math assumes: 1–3 levels,
+contiguous from 0, exactly one base whose `contains` is 1, every pack level a positive integer — a bad chain is a 400,
+never a silently-zero multiple. `parseCreateMedicine`/`parseUpdateMedicine` now carry `productType`, `categoryId` and
+`units`, and STRIP the medical fields for a GENERAL item (absent, not disabled) on both create and type-switch.
+`inventoryList` ships each row its unit chain, batch count and category name plus `typeCounts` (Medicine/General),
+the active `categories` list and `stockValue` (qty × cost, the same valuation the expiry report uses, so the KPI and
+the reports reconcile). `medicineDetail` ships the chain and resolves a RETIRED category's name so a product tagged
+with one still reads honestly. Routes: `GET/POST /pharmacy/medicines/categories`, both declared before the `:id`
+routes so the literal path wins; the POST is `@Audited`.
+
+**Web.** `PharmacyInventoryClient` rebuilt whole against the two mockups: KPI row (`.statcard`), product-type chips
+(All / Medicines / General items) beside the health chips, a table whose stock cell renders the pack figure over the
+base total with a health bar, a card view, the toolbar (search, page size, view toggle) and the pager; the detail
+drawer with the pack chain in words, a FEFO batch table whose quantities read in packs and whose undated lot reads
+"No expiry" and sorts last, stock history with per-pack deltas; the add/edit drawer with the product-type segment
+FIRST, a unit-setup section that builds the chain with a live plain-words preview and a per-level sale price showing
+"Derived" until touched, and a minimum-stock quantity that names its own unit and is stored in base units; and an
+audited adjust modal whose quantity names a unit and previews "3 box = 300 tablet". Mobile is the same three surfaces
+as the mockup's card list and rows, one composition per breakpoint (`useIsMobile`), never co-mounted.
+Category picking is a native `datalist` — type to filter, type a new name to create it inline — which keeps the whole
+flow keyboard-operable; Enter advances to the next control instead of submitting mid-form.
+
+### Decisions recorded
+
+- **Type chips are data-aware, not flag-aware.** No `general items` feature flag exists anywhere in the repo. The
+  Medicines/General split therefore appears only when the tenant actually holds general items — a medicine-only
+  tenant never sees a chip that would filter nothing, which is the outcome the spec asked for, read from the
+  tenant's own catalog instead of a flag that would have had to be invented.
+- **No "Batches & expiry" section in the form.** The mockup draws a track-batches switch and an opening quantity;
+  locked decision 4 made batch/expiry DATA-driven, not a per-product mode, and spec §3 lists no such control. Adding
+  it would have meant a schema flag the phase explicitly rejected.
+- **Editing a chain with stock present is allowed** (locked decision 6) and shows the recorded warning in the form.
+  Base stock is what is stored, so the edit re-computes every pack display — including historical ones — and moves
+  no quantity. Proven by test.
+- **The minimum stock is stored in base units** and shown against the base unit when re-opened, so the round trip is
+  lossless whatever unit it was typed in.
+- **The base unit's barcode is also the medicine-level barcode**, so every label printed before 183 keeps scanning.
+
+### Verification
+
+- Per-selector declaration diff against BOTH mockups (brace-aware, cascade-correct — the mockups define several
+  selectors twice and the SCREEN-level rule is the one ported): **324 selectors, 283 exact, 18 differing, 23
+  screen-only helpers.** Every difference is deliberate and listed here:
+  `.drawer__head/__body/__foot`, `.modal__head/__body/__foot` padding — supplied by the shared Radix portal container
+  (compose, do not fork); `.minv__row` / `.minvcard` button resets (`width`, `text-align`, `border`, `cursor`) —
+  these rows are real buttons so the list is keyboard-operable; `.mp-mobile .minv` padding/gap zeroed — this screen's
+  `.minv` is a LIST container inside `.minv--shell`, not the kit's card; `.mp-mobile .mkpi__ic { margin-bottom:0 }`
+  and `.msig { border:0 }` — neutralising the 124/127 kit rules this screen sits beside; `.pkpis`,
+  `table.tbl { min-width }` and the sticky first column — inside the tablet media query (the differ flattens
+  at-rules, so they read as diffs); `.tbl-scroll { max-height:288px }` NOT adopted — the repo's 172 kit uncaps it
+  deliberately and a paged 25-row table must not scroll inside 288px; `.pos-sel__trigger { cursor:pointer }` NOT
+  adopted — ours is a read-only item display, not a trigger; `.tbl-wrap { margin-top }` / `.pkpis { margin-bottom }`
+  — the mockup gets that spacing from `.pmain__inner`'s flex gap, which the app shell does not apply inside the page
+  body; `.tbl-toolbar__mini { font:inherit }` — button reset.
+- New suite `apps/api/src/pharmacy/inventory-screen-v2.spec.ts` (7 describes): the pack-figure primitives; chain
+  write + validation (empty, base contains ≠ 1, a gap in the levels, a zero `contains`, a blank name, a 4th level);
+  a 1-level loose product; a GENERAL item carrying no medical fields, and the same on a type switch; a chain edit
+  over live stock moving nothing; a dropped pack level leaving no orphan row; category create/dedupe/active-only;
+  the list's chains, type counts, batch counts, category names and stock value; a product whose only stock is
+  undated raising no expiry warning; the detail drawer's pack chain, per-pack batch quantities, undated-last
+  ordering and retired-category resolution.
+- i18n: 72 new keys added to EN and UR in parity (verified two-way); `pinvPageInfo` now counts "items", not
+  "medicines".
+- Gates: `pnpm lint` clean (0 errors, 0 warnings) and `pnpm typecheck` clean, both run once at the end. Vendor
+  untouched.
+
+### Files
+
+`packages/shared/src/retail-units.ts` · `apps/api/src/pharmacy/{pharmacy.repositories,pharmacy.dto,pharmacy.service,pharmacy.controller,__fakes__}.ts` ·
+`apps/api/src/pharmacy/inventory-screen-v2.spec.ts` (new) · six existing pharmacy specs updated for the new
+`categoryId` column · `apps/web/app/(app)/pharmacy/inventory/{PharmacyInventoryClient.tsx,page.tsx}` ·
+`apps/web/app/globals.css` (the `.mp-inv2` block) · `packages/i18n/src/messages/{en,ur}.json`.
+
+### 186 — inventory-screen-v2 — gate fix (2026-08-03)
+`pnpm test:unit` failed on `apps/api/src/pharmacy/inventory-screen-v2.spec.ts` › "switching an existing
+product to General clears its medical fields": `parseUpdateMedicine` threw `BadRequestException('No fields
+to update')` for a body carrying only `productType`, because the empty-patch guard ran before the
+productType branch that folds in the type switch + `stripMedicalFields`. Fix: moved the productType branch
+above the empty-patch guard in `apps/api/src/pharmacy/pharmacy.dto.ts` — a type switch on its own is a real
+edit; every other field path is unchanged and a truly empty body still 400s. No other spec asserts on that
+message. Gates re-run: `pnpm lint` (0 errors, 1 pre-existing unrelated warning in doctor-portal.repositories.ts)
+and `pnpm typecheck` both pass; the single spec file passes 22/22 locally.
