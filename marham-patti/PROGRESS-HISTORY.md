@@ -6322,3 +6322,34 @@ Branch `fix/182-shell-polish-round`. WORK TYPE: FIX (presentation only). Tenant 
 **Gates.** `pnpm lint` clean (incl. design-drift, token-integrity, tenant-english-only). `pnpm typecheck` clean. Per CLAUDE.md the unit/e2e/build suites are left to the controller.
 
 **Files:** `apps/web/app/globals.css`, `packages/ui/src/lib/shell-polish-round.spec.ts` (new), `packages/ui/src/lib/sidebar-transition-quality.spec.ts`, `PROGRESS.md`, `PROGRESS-HISTORY.md`.
+
+## 183 — retail-units-schema — DONE (2026-08-03)
+
+**Work type:** FEATURE — branch `feature/183-retail-units-schema`. Spec `/specs/183-retail-units-schema.md`. No CODEREF companion exists for 183.
+
+**Scope kept exactly as specified: SCHEMA ONLY.** No reader or writer changed behaviour (spec §4). POS, FEFO, valuation, purchases, returns and reports still read the same quantity columns; those columns are now *defined* as base-unit quantities rather than incidentally being so. 184–185 wire the unit-aware logic, 186–187 the screens.
+
+### Schema (packages/db/prisma/schema.prisma)
+- New enum `ProductType { MEDICINE, GENERAL }`.
+- `Medicine` gains `productType` (default `MEDICINE`) + `categoryId` (nullable), plus `(tenant_id, product_type)` and `(tenant_id, category_id)` indexes. Every medical field untouched; `packSize` survives verbatim as the free-text display note (decision 5). A GENERAL row simply leaves genericName/strength/form/requiresRx null — enforced at the service/DTO layer in 184+, never by a schema split.
+- New `ProductUnit` — `id, tenantId, medicineId, level, name, contains (default 1), barcode?, sellable (default true), salePrice?, priceIsDerived`. Unique `(medicineId, level)` and `(tenantId, barcode)` (Postgres treats NULL barcodes as distinct, so two tenants may reuse a barcode and an unbarcoded unit is never blocked). Index `(tenantId, medicineId)`.
+- New `ProductCategory` — `id, tenantId, name, active`, unique `(tenantId, name)`, index `(tenantId, active)`.
+- `Batch.expiry` → nullable (decision 4).
+- `SaleItem` / `PurchaseItem` / `ReturnItem` each gain nullable `productUnitId` + `unitQty`; the existing qty column stays the BASE quantity, so every historical row reads as a plain base-unit line.
+
+### Migration — `packages/db/prisma/migrations/20260803000000_retail_units_schema`
+Single additive migration. Decisions worth recording:
+- **Idempotent by construction** (acceptance §5 "applies and re-applies cleanly"): `CREATE TYPE` inside a `pg_type` guard, `CREATE TABLE IF NOT EXISTS`, `ADD COLUMN IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS`, `ALTER COLUMN ... DROP NOT NULL` (naturally idempotent).
+- **`product_type` is the one exception to `ADD COLUMN IF NOT EXISTS`** — it is spelled as a bare `ADD COLUMN` inside a `DO $$ ... information_schema.columns ... $$` guard. Reason: the spec-152 §4 enum-drift guard (`packages/db/src/enum-native-types.spec.ts`) resolves an enum column's type by regex over migration SQL and only recognises the bare `ADD COLUMN "col" "Type"` form; with `IF NOT EXISTS` inline it would have reported the column as NOT FOUND and failed. The DO block keeps both properties.
+- **RLS-bypass path (61/90) applied to a cross-tenant BACKFILL, not a DELETE.** The backfill reads `medicines`, which is under FORCE RLS, from a migration with no `app.tenant_id` GUC — under FORCE the table owner is bound by the policy too, so an unguarded backfill would silently have seen zero rows and done nothing. Fix: `NO FORCE` on `medicines` (and on `product_units`, which matters only on a re-apply, when the first run's policy would otherwise hide the rows the NOT EXISTS guard must see) for the length of the statement, then `FORCE` restored on the next statement inside the same transaction. Neither policy is ever dropped. `apply_tenant_rls('product_units')` / `('product_categories')` run AFTER the backfill.
+- **Backfill ids are derived** — `'pu0_' || medicine.id` — so the statement is idempotent by construction on top of the `WHERE NOT EXISTS` guard and the `ON CONFLICT (id) DO NOTHING`. Level-0 row per spec §3: `{level 0, name 'unit', contains 1, sellable true, sale_price = medicine.sale_price, price_is_derived false}`. Nothing is deleted or rewritten.
+
+### Fallout from making `Batch.expiry` nullable (type-level only, zero behaviour change)
+- `apps/api/src/pharmacy/pharmacy.repositories.ts`: added a local `NEVER_EXPIRES_ISO` / `expiryIso()` pair and routed the six `b.expiry.toISOString()` call sites through it. The exported row shapes still promise `expiry: string` because 183 changes no reader; nothing can write an undated lot until 184, so the branch is unreachable today, and if it ever fires it maps "never expires" to a far-future sentinel — exactly where the existing `orderBy expiry asc` already puts a NULL (Postgres sorts NULLS LAST on ASC). 184 replaces it with a first-class optional expiry.
+- `packages/db/src/demo/plan.ts`: the expiry write-off filter now requires a non-null expiry (an undated lot never expires) and the DAMAGE "healthy batch" pick treats an undated lot as healthy. Demo output is unchanged — the demo plan always sets an expiry.
+
+### Tests
+New `packages/db/src/retail-units-isolation.spec.ts` (16 tests, pglite over the REAL migrations). To prove the backfill for real it runs migrations 01…182, seeds three medicines across two tenants (one deliberately price-less, to exercise the NULL-price path), and only THEN applies 183 — production order. Covers: exactly one level-0 unit per pre-existing medicine; the §3 default values and inherited sale price; NULL price stays NULL, never 0; no cross-tenant smear on the backfilled tenant_id; `pack_size` untouched; every medicine defaults to MEDICINE with no category; **the 54 twice-run pattern** — the whole 183 migration re-applied adds no row and does not disturb a hand-added level-1 pack row; RLS on both new tables (own-tenant-only reads, WITH CHECK blocks cross-tenant writes, no context → zero rows, fail-closed); one row per level enforced; barcode unique per tenant yet reusable across tenants; a batch with NULL expiry is accepted; the six new line columns exist and are nullable.
+
+### Gates
+`pnpm prisma generate` ✓. `pnpm typecheck` ✓ (29/29). `pnpm lint` ✓ — 0 errors; the single warning is a pre-existing unused eslint-disable in `doctor-portal.repositories.ts`, untouched by this step. The full `@mp/db` jest suite was run to confirm the Phase 12 suites pass unchanged with the new migration in the chain: **53 suites / 335 tests, all green**. `.env.example` untouched — this step adds no config.
