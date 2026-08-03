@@ -6591,3 +6591,107 @@ above the empty-patch guard in `apps/api/src/pharmacy/pharmacy.dto.ts` — a typ
 edit; every other field path is unchanged and a truly empty body still 400s. No other spec asserts on that
 message. Gates re-run: `pnpm lint` (0 errors, 1 pre-existing unrelated warning in doctor-portal.repositories.ts)
 and `pnpm typecheck` both pass; the single spec file passes 22/22 locally.
+
+---
+
+## 187 — pos-screen-v2 — DONE (2026-08-03)
+
+**Branch:** `feature/187-pos-screen-v2` (WORK TYPE: FEATURE). **Spec:** /specs/187-pos-screen-v2.md.
+**Mockups:** specs/mockups/pharmacy/pos-desktop.html + pos-mobile.html (162-committed, flat).
+**Block-final** — closes PHASE 20 (183→187).
+
+### What shipped
+
+**§1 Unit-aware counter.**
+- `packages/shared/src/retail-units.ts` gains three pure helpers, so no screen does pack
+  arithmetic of its own: `sellableUnitOptions()` (only the levels the tenant marked sellable,
+  base first, each priced through the existing `unitSalePrice`), `defaultSaleUnit()`, and
+  `baseUnitSalePrice()` — see the pricing decision below.
+- New `GET /pharmacy/pos/search` (`PharmacyService.posSearch`) ships each result row with its
+  whole unit chain, its sellable units with prices, its default sale unit and the on-hand as a
+  pack figure ("4 box · 2 strip · 6 tab"), in ONE round trip — a cashier adds a line every few
+  seconds and cannot afford a fetch between the scan and the line appearing. The pre-187
+  `GET /pharmacy/medicines?q=` is untouched and still serves every other caller.
+- New `GET /pharmacy/pos/scan?code=` exposes 184's `scanBarcode` as a ready-to-add POS row +
+  the unit the code named. Box code → 1 box, strip code → 1 strip, legacy medicine code → 1
+  base unit, all through the ONE shared `resolveBarcode`. A scanned level the tenant has since
+  marked NOT sellable still identifies the product; the line then opens at the default unit.
+- The cart line is keyed by (medicine, unit), so the mockup's "same product, two units" case is
+  two independent lines. Switching a line's unit re-prices it and re-computes its base quantity;
+  switching INTO a unit that already has a line merges the two rather than leaving a duplicate.
+
+**Pricing decision (recorded, no approval gate).** `SaleItem.qty` is the BASE quantity and the
+profit report multiplies it by `SaleItem.unitPrice`, so that column must stay per-base. 183 also
+lets a tenant type a pack's own price. Both are satisfied by `baseUnitSalePrice()`: a typed pack
+price is divided back down, DELIBERATELY UNROUNDED, and the money layer rounds the line gross as
+it always did — `round2(perBase × baseQty)` is then the pack's exact total (3 × Rs 1,150 = Rs
+3,450, proved in the suite). For an ordinary derived-price product it returns the base price
+unchanged, so a plain base-unit line is byte-identical to the pre-187 path. The money math's
+SHAPE is untouched; `commitPosSale` changed one expression.
+Receipt: `SaleItemView` gains `printedUnitPrice` (recovered from the stored line total, exactly
+as 185's purchase invoice recovers its unit cost) so the slip reads "2 box × Rs 1,200" instead of
+"2 box × Rs 120". `unitPrice` stays per-base for the reports.
+
+**§2 Realtime stock.** New `GET /pharmacy/pos/stream` (SSE) merges the tenant's `stock.updated`
+(184 §4) and `heldSale.updated` scopes onto ONE connection — a busy till holds one socket, not
+two. `RealtimeBus` gains a third scope (`publishHeldSale`/`subscribeHeldSale`) on the SAME
+per-tenant channel key; there is still no second realtime system. The POS consumes it with
+`apiFetch` (Bearer token) + bounded-backoff reconnect, mirroring the 112 bell. Realtime is UX
+only: the authoritative over-sell guard remains the idempotent FEFO commit.
+
+**§3 Shared held sales — the salesman-handoff.** Additive `held_sales` table + `HeldSaleStatus`
+enum (migration `20260803020000_held_sales`, RLS-forced via `apply_tenant_rls`, no DML so no
+bypass window needed). Tenant + branch scoped, carrying the cart payload verbatim, denormalised
+line/unit/total figures for the rail, and the attribution chain.
+- Endpoints: `GET/POST /pharmacy/pos/held`, `POST /pharmacy/pos/held/:id/resume`,
+  `POST /pharmacy/pos/held/:id/discard`; `commitPosSale` gains an optional `heldSaleId`.
+- The optimistic lock is ONE conditional write (`updateMany … WHERE status IN (expected)`), so
+  there is no read-then-write window to lose. The claim happens BEFORE `createSale`, so the
+  loser of a simultaneous completion never creates a sale. The refusal re-reads the row and
+  names who owns the terminal state ("already completed by Ayesha R.").
+- Attribution: `heldBy → resumedBy → completedBy` on the row; the SALE commits under the
+  COMPLETING user (so day-close variance and the sales reports point at whoever took the money),
+  and the full chain is written to the AuditLog as `pharmacy.pos.sale.fromHeld` (skipped on an
+  idempotent replay, like the back-dated entry).
+- Offline: a park carries an optional `Idempotency-Key`; a replayed park RESOLVES to the chip it
+  already created. (Deliberately optional, unlike the commit — a park is not money, and a
+  counter that parks without one should get a chip, not a 400 mid-queue.)
+- `heldSaleTransition()` / `heldSaleCounts()` are pure and shared with the screen.
+- The client-local `mp.pharmacy.pos.held` localStorage hold from 101 is GONE, replaced by the
+  server rail. `mp.pharmacy.pos.cart` (the un-parked cart in front of the cashier) stays.
+
+**§1/§4 Screens.** `PosClient.tsx` rebuilt to both mockups' anatomy, with every mockup class name
+used verbatim under a `.mp-pos2` root (the containment 186 established for `.mp-inv2`):
+`.heldrail`/`.heldpill`, `.pos-sticky`/`.posbar`/`.pos-search`/`.pos-results`/`.pos-res`,
+`.pos-sel`/`.pos-date`, `.cart.cart--units` with `.cart__qty` = `.unitsel-wrap` + `.qtyc`,
+`.sumcard`, `.disc`, `.fabar`; mobile `.mpos-search`/`.mscan`, `.msalectx`, `.mfeed`/`.mline`
+(unit select on the wrapped row), `.msum`, `.mbar`, `.mpick`. ~430 lines of scoped CSS appended
+to globals.css. The NEW component is `.unitsel` + the shared `.menu` — fully keyboard-operable
+(in the line's tab order; Enter/Space/↓ open, ↑↓ move, Enter picks, Esc closes and returns
+focus), disabled rather than hidden when a product has a single sellable unit, so the line
+anatomy is identical at every product type.
+Exactly one grand total on mobile (`.mbar__t b`); the desktop file itself shows the summary card
+and the floating bar together, and the diff gate is the file.
+Per-line discount control DROPPED from the screen — the committed v2 cart row has no such
+control; `lineDiscountPct` stays in the wire shape at 0, so nothing server-side changed.
+i18n: `pharmacyPos.v3.*` added to en + ur.
+
+### Gates
+- `pnpm lint` — clean (one pre-existing unrelated warning in doctor-portal).
+- `pnpm typecheck` — clean (29 tasks).
+- `pnpm prisma generate` — run after the schema change.
+- Targeted `jest src/pharmacy` — 22 suites / 318 tests pass, including the new
+  `pos-screen-v2.spec.ts` (15 tests): unit-aware search + scan precedence, pack commit + exact
+  typed-pack totals, plain-line byte-identity, the two-session handoff with the full attribution
+  chain, refused second completion (one sale, one decrement), completed/discarded refusals with
+  names, offline park replay, one event per transition, branch isolation, and the pure rules.
+- `src/notifications` — 24 tests pass (the bus gained a scope).
+
+### Not done here (needs a browser, per §5)
+The per-selector diff against both files, the keyboard-only end-to-end sale with no pointer, and
+the two-session realtime round-trip in a live browser are visual/manual acceptance items; the
+logic behind each is covered by the suite above.
+
+### Owner note, carried forward
+Real-tenant feedback after practical use is expected to drive further changes; those are new
+specs, not scope creep resisted here.
