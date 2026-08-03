@@ -6353,3 +6353,105 @@ New `packages/db/src/retail-units-isolation.spec.ts` (16 tests, pglite over the 
 
 ### Gates
 `pnpm prisma generate` ✓. `pnpm typecheck` ✓ (29/29). `pnpm lint` ✓ — 0 errors; the single warning is a pre-existing unused eslint-disable in `doctor-portal.repositories.ts`, untouched by this step. The full `@mp/db` jest suite was run to confirm the Phase 12 suites pass unchanged with the new migration in the chain: **53 suites / 335 tests, all green**. `.env.example` untouched — this step adds no config.
+
+## 184 — unit-aware-core — DONE (2026-08-03)
+
+**Branch:** `feature/184-unit-aware-core`. **Spec:** /specs/184-unit-aware-core.md. No CODEREF covers 184
+(the highest is 113-121). **Schema: none beyond 183** — spec-mandated, and it constrained one decision below.
+
+### §1 Conversion helpers — the ONE pack math
+New `packages/shared/src/retail-units.ts` (exported from the package index): `UnitChainLevel`/`UnitChain`,
+`sortedChain`, `baseUnit`, `unitAtLevel`, `unitById`, `baseFactor`, `toBase`, `toBaseByUnitId`,
+`formatBaseQty`, `derivedPrice`, `unitSalePrice`, `resolveBarcode`. Integer-only conversion (locked
+decision 2). Pure/total: an unknown level or a broken chain yields 0 rather than a plausible-but-wrong
+multiple, and the service turns that into a 400 rather than mis-selling.
+Signature note: the spec writes `toBase(unit, unitQty)`, but the multiplication runs THROUGH the chain, so
+the implemented signature is `toBase(chain, level, unitQty)` (+ `toBaseByUnitId` for a stored id). Same
+helper, chain made explicit — every helper in the file takes the chain first.
+`derivedPrice` returns a rounded `number`, not a Prisma `Decimal`: `@mp/shared` is browser-safe and
+dependency-free, and the entire money layer there is `number` + the ONE `round2`. Consistency beat literalism.
+`resolveBarcode` is generic over the medicine row and fixes the precedence in one place: any unit barcode
+first (naming THAT unit), then the legacy `Medicine.barcode` → the product's BASE unit, so pre-183 labels
+keep scanning. New service method `PharmacyService.scanBarcode` feeds it the two indexed lookups
+(`findProductUnitByBarcode`, `findMedicineByBarcode`) and returns product + unit + that unit's price +
+on-hand as both a base number and a pack label. No HTTP route yet — 187's POS is the consumer.
+
+### §2 FEFO with optional expiry
+`FefoBatch.expiry` is now `string | null` with an optional `receivedAt`. `allocateFefo` changed in ORDER
+ONLY: dated lots soonest-first (unchanged), then undated lots FIFO by `receivedAt` (batch id as the final
+tie-break, a known receipt time before an unknown one). Splitting + the shortfall remainder are untouched.
+All shared expiry classifiers now accept `MaybeExpiry` (`string | Date | null | undefined`) and read null as
+"nothing to warn about" — `daysUntil` NaN, `expiryBand` OK, `isNearExpiry`/`isExpired`/`isWithinExpiryHorizon`
+false, `expiryBucket` null. That is exactly the spec's "excluded from near-expiry alerts and expiry-risk
+valuation, counted in full by stock", and it needed ZERO assertion changes because those helpers already
+treated an unparseable date the same way.
+183's `NEVER_EXPIRES_ISO` sentinel is DELETED. `expiryIso` now returns `string | null` and the batch row
+shapes carry it honestly: `PosBatchRow`, `MedicineBatchRow`, `BranchBatchRow`, `FullBatchRow`,
+`listBatchExpiries`, plus `pharmacy-inventory`'s `BatchRow`/`BatchView` and `ExpiryFact.expiry`. Two latent
+crashes on the nullable column were fixed while there: `online-pharmacy.repositories.ts` FEFO mapping
+(`b.expiry.toISOString()` behind an `any`, now null-safe + `receivedAt`) and `pharmacy-inventory`'s
+hand-declared `PrismaBatch.expiry: Date`. `listBatchesForFefo` orders `[{expiry:'asc'},{createdAt:'asc'}]`
+(Postgres NULLS LAST == the 184 §2 order); the pure allocator re-applies it anyway.
+`inventoryList` now takes the first DATED expiry per medicine as its nearest (a product holding only
+undated stock has none, instead of showing 31-Dec-9999). `nearExpiry` filters undated out through a type
+predicate, so `NearExpiryItem.expiry` stays a non-null `string`.
+
+### §3 Writers record the entered unit
+`SaleItem` + `PurchaseItem` writes now carry `productUnitId`/`unitQty` (row shapes, selects, mappers, fake).
+`PosSaleLineInput` and `PurchaseLineInput` gained optional `productUnitId`/`unitQty` (new DTO parser
+`optionalPositiveInt` — "0 boxes"/"1.5 boxes" is a 400). `commitPosSale` and `createPurchase` resolve the
+entered unit to a BASE quantity ONCE via `resolveEnteredQty`, and everything downstream (FEFO, the guard,
+the decrement, the movement, the money) keeps working on base quantities.
+DECISION (money): pricing is unchanged in 184 — a line is priced per BASE unit × the base quantity, the
+frozen 102 math. `unitSalePrice` (typed pack price wins, else derived) exists and is used by `scanBarcode`,
+but wiring a pack's own price into a cart total is a POS-screen decision (187); no client sends a unit yet,
+so there is no behaviour to change and the frozen path is extended, not restructured.
+DECISION (purchase cost): `costPrice` stays per BASE unit here. Spec §3 explicitly puts per-pack cost
+capture in 185 ("converted to base cost at entry"), so 184 only converts the quantity.
+DECISION (undated lots are not yet creatable): `PurchaseItem.expiry` is NOT NULL and 184 adds no schema, so
+the only batch writer still requires a date. FEFO/alerts/valuation handle undated lots fully; relaxing the
+entry belongs to 185, which owns purchases. Flagged rather than silently adding a column.
+
+### §4 Realtime stock events
+`stock.updated` rides the EXISTING spec-112 bus as its own SCOPE — exactly the 146 platform-scope
+precedent, no second realtime system. `RealtimeBus` gained `publishStock`/`subscribeStock` (default no-op /
+EMPTY so any pre-184 adapter still satisfies the seam); `InMemoryRealtimeBus` adds a `stock$` subject keyed
+by the SAME `tenantChannel(tenantId)`, so cross-tenant isolation stays structural.
+Shared: `STOCK_UPDATED`, `StockUpdatedEvent { type, branchId, medicineId, baseQty, at }`,
+`coalesceStockUpdates` (one event per branch+medicine, first-touched order, LAST quantity). `branchId` is
+carried beyond the spec's literal payload because stock is per branch — one counter must not speak for another.
+New `apps/api/src/pharmacy/pharmacy.stock-events.ts`: `StockEventPublisher` abstract + `BusStockEventPublisher`
++ `stockUpdatedEvent`. Writers COLLECT the new on-hand returned by each compensating write and hand the batch
+over once at commit — POS sale, cart finalize, sale return, purchase stock-in. Publishing sits INSIDE the
+idempotency seam, so a replay (which decrements nothing) announces nothing.
+Wiring: `STOCK_EVENT_PUBLISHER` token, `PharmacyModule` imports `NotificationsModule` (which has exported
+`REALTIME_BUS` since 146) and binds the publisher. The service dep is `@Optional()` — deliberately, so the
+eight specs that construct `PharmacyService` positionally needed NO edit (frozen-logic rule).
+
+### §5 Tests — all green, no assertion weakened
+New `src/pharmacy/unit-conversion.spec.ts` (34 cases): 3/2/1-level chain math, integer truncation, unknown
+level → 0, any-order chains; greedy formatting (mixed, exact packs, sub-pack, zero, base-only, negative, no
+chain); derived vs typed pack price; barcode precedence incl. a unit label beating a clashing medicine
+label; the coalescer (per-medicine, per-branch, empty).
+New `src/pharmacy/unit-aware-core.spec.ts` (11 cases): "1 strip" → `unitQty=1` + strip id + base 10 +
+stock 100→90 + batch 100→90 and the total still 100; a 2-box line converting through the whole chain; a
+no-unit line byte-identical to pre-184; a foreign unit id rejected with nothing moved; a 3-box purchase
+receiving 300 base units with `lineTotal` on the frozen math; dated-before-undated FEFO on the real service
+path; exactly two events for a two-medicine multi-batch sale; the base on-hand after a unit line; a replay
+announcing nothing; and a commit with no publisher bound.
+Extended `src/pharmacy/pharmacy-inventory-helpers.spec.ts` with `FEFO with optional expiry` (5 cases,
+including a far-future dated lot still beating an undated one) and `undated lots and the expiry classifiers`
+(2 cases, incl. `expiryReport` value-at-risk excluding undated while `valuation` counts it).
+Fake repo: `productUnits` + `listProductUnits` + `findProductUnitByBarcode` + a `seedUnitChain` helper,
+nullable batch expiry with a NULLS-LAST comparator mirroring Postgres, `receivedAt` on received batches,
+and the new sale/purchase item columns.
+
+### Gates
+`pnpm typecheck` — clean (29/29 tasks). `pnpm lint` — 0 errors (1 pre-existing warning in
+`doctor-portal.repositories.ts`, untouched). Targeted jest over the changed areas (`src/pharmacy`,
+`src/pharmacy-inventory`, `src/online-pharmacy`, `src/notifications`, `src/vendor`): **445/445 pass, 38/38
+suites**, including `pharmacy.e2e.spec.ts` (real AppModule graph — the NotificationsModule import into
+PharmacyModule introduces no DI cycle). Every Phase-12 suite passes with no assertion changed. Vendor
+untouched apart from its own suites confirming the extended bus.
+Web: only `PosClient.tsx` needed a touch — the near-expiry amber and the expiry line are null-guarded, so an
+undated lot shows its batch with no date and no false warning. No visual change (no undated lots in demo data).
