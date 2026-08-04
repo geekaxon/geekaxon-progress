@@ -6950,3 +6950,110 @@ CHANGED: packages/shared/src/index.ts, apps/web/components/shell/AppShell.tsx,
 apps/web/components/shell/NotificationBell.tsx, apps/web/app/(app)/pharmacy/pos/PosClient.tsx,
 apps/web/app/globals.css, packages/i18n/src/messages/en.json + ur.json (pharmacyPos.v4 block + notifBellUnread,
 EN↔UR parity kept).
+
+---
+
+## 190 — pos-held-sales-and-search — DONE (2026-08-04)
+
+**Work type:** FEATURE · branch `feature/190-pos-held-sales-and-search` (stacked on the unmerged `feature/189-pos-mobile-to-mockup`).
+**Spec:** `/specs/190-pos-held-sales-and-search.md`. No CODEREF companion exists for this range (the newest is 113-121).
+
+### §1 — held sales get a short human number
+
+- Schema (additive): `HeldSale.number Int` with `@@unique([tenantId, number])`, plus a new
+  `HeldSaleNumberSequence` (tenant_id PK, next_seq) — the pharmacy twin of the platform's
+  `InvoiceNumberSequence` (61). Migration `20260804000000_held_sale_numbers`.
+- Migration shape: create the counter table → add the column NULLABLE → backfill existing parked
+  carts per tenant, oldest first (`row_number() OVER (PARTITION BY tenant_id ORDER BY held_at, id)`)
+  → seed each tenant's counter to `MAX(number)+1` → `SET NOT NULL` → unique index →
+  `apply_tenant_rls('held_sale_number_sequences')`. The one DML statement runs inside a
+  `NO FORCE ROW LEVEL SECURITY` window on `held_sales` (the 61/90/183 bypass path), restored in the
+  same transaction. Every statement is guarded, so a re-apply is a strict no-op.
+- The number is claimed INSIDE the same transaction as the insert, under
+  `pg_advisory_xact_lock(1900001, hashtext(tenant_id))` — two counters parking simultaneously
+  serialise rather than colliding on the unique index, and a rolled-back insert takes its number
+  with it. DECISION: a per-tenant sequence (not global) keeps numbers short enough to say aloud.
+- Idempotency: only an INSERT consumes a number, and `holdSale` resolves a replayed
+  `clientActionId` to the existing row BEFORE reaching the insert — so re-syncing an offline park
+  never burns a second number. Proved in the unit suite.
+- The number is threaded end to end: `HeldSaleRow` → `HeldSaleView` → the `heldSale.updated`
+  realtime envelope (`HeldSaleEvent.number`) → the commit path's `heldSale` chain →
+  `pharmacy.pos.sale.fromHeld` audit summary (`heldSaleNumber`) → the rail pill, the resume
+  message, the cart header badge and the discard confirmation. `formatHeldSaleNumber()` in
+  `@mp/shared` is the ONE formatter ("#4188", "#—" for an absent number).
+
+### §2 — discarding held sales
+
+- `discardHeldSale(tenantId, userId, id, canDiscardOthers)`. Own = `heldBy === user` OR
+  `resumedBy === user` (taking a hold over makes it yours to finish or drop). Otherwise the new
+  refusal code `NOT_OWNER` comes back with the parker's name — a plain sentence, not a bare 403.
+- DECISION (spec said "the manage-level permission the role editor already exposes", 179 §3
+  pattern): reused `pharmacy.settings.manage` rather than minting a new permission key nobody has
+  ticked on a role yet. Exported as `PHARMACY_SETTINGS_MANAGE`; the endpoint resolves it through
+  `PermissionService.can` and passes the boolean down — the SERVICE owns the ownership decision,
+  UI gating is never the gate.
+- The discard endpoint's blanket `@Audited` was replaced with ONE explicit compact audit row
+  (actor, number, customer, lineCount, total, heldBy, ownHold) written only when a hold actually
+  went away — the spec asks for "who, when, which number, line count and value", and two rows per
+  act would be noise. A refusal changed nothing, so it writes nothing.
+- The row is NOT destroyed: it moves to DISCARDED, drops off every rail via the 112 bus event, and
+  can never re-open. No stock was ever moved by a hold, so nothing is reversed.
+
+### §3/§4 — instant search + feedback
+
+- New shared module `packages/shared/src/pos-search.ts`: `POS_SEARCH_DEBOUNCE_MS = 250`,
+  `POS_SEARCH_MIN_CHARS = 2`, `posSearchAutoFires()`. Config-free and stated in exactly one place;
+  the old local `SEARCH_DEBOUNCE_MS = 1000` is gone. The tenant global search (177) is untouched.
+- Superseding is a real CANCEL: each run owns an `AbortController` and aborts the previous one, so
+  a slow answer for "pan" is off the wire rather than merely ignored. The sequence number stays as
+  the second guard. Clearing the field aborts and drops the spinner.
+- Explicit triggers bypass both the debounce and the two-character floor and disarm the pending
+  timer: Enter, F2, a scan, and — new — the phone field's leading search glyph, now a real button
+  (`.mpos-search__go`). NOTE: neither mockup depicts a separate search button, so the explicit
+  trigger is the field's own control rather than invented chrome.
+- Feedback to the file's exact anatomy: the `spinner spinner--sm` inside `.mpos-search .kb` while
+  searching, and the `pos-results__busy` card reading "Searching 4,182 items…" — wrapped in a flush
+  `.mcard` on the phone, as `pos-mobile.html` draws it. The count comes from a new
+  `GET /pharmacy/pos/catalog-size` (`countActiveMedicines`, a cheap tenant-scoped `count()`) read
+  ONCE at bootstrap. No results → the kit empty state; an error → a retry control, not silence.
+
+### §5 — progress on every server-touching action
+
+- Resume: the tapped pill carries the kit Spinner, every hold control disables, and the cart region
+  renders `SkeletonCard` while it repopulates. Park: Spinner on the park pill / hold buttons.
+  Discard: the confirm button disables while in flight. Payment: Spinner on the confirm button
+  (belt and braces alongside the idempotency key), and Proceed disables while `payBusy`.
+
+### UI / design
+
+- The pill meta line now reads the file's exact copy — `#4188 · 3 lines` — and the relative age
+  moved to the pill's `title` (the mockup shows no age there).
+- New minimal anatomy: `.heldpill__wrap` + `.heldpill__x`, the same hairline `×` a cart row uses,
+  tucked flush against the pill so the rail's rhythm is unchanged. The mockups never depict discard
+  at all, so this is the least the kit could add; a button may not nest, hence the wrapper.
+- Fixed a 189 gap found while adding the in-field spinner: the phone's scan/search row is portalled
+  into the shell's chrome host, which sits OUTSIDE `.mp-pos2`, so its `.mp-pos2`-scoped styling never
+  applied there. The same values are now repeated under `.mp-mobile .mchrome--pos`.
+- Discard uses the kit's centred destructive `ConfirmDialog` (173/132), naming the sale by number
+  and customer with the line count and value in the body.
+- i18n: new `pharmacyPos.v5` group, EN + UR parity (14 keys).
+
+### Files
+
+- `packages/shared/src/pos-search.ts` (new), `pharmacy-held-sales.ts` (+`formatHeldSaleNumber`,
+  +`NOT_OWNER`, +`HeldSaleEvent.number`), `index.ts`.
+- `packages/db/prisma/schema.prisma`, `prisma/migrations/20260804000000_held_sale_numbers/`,
+  `src/held-sale-numbers-isolation.spec.ts` (new).
+- `apps/api/src/pharmacy/`: `pharmacy.repositories.ts`, `pharmacy.service.ts`,
+  `pharmacy.controller.ts`, `pharmacy.constants.ts`, `pharmacy.pos-realtime.ts`, `__fakes__.ts`,
+  `pos-held-and-search.spec.ts` (new).
+- `apps/web/app/(app)/pharmacy/pos/PosClient.tsx`, `PaymentPanel.tsx`, `apps/web/app/globals.css`,
+  `packages/i18n/src/messages/{en,ur}.json`.
+
+### Gates
+
+`pnpm prisma generate`, `pnpm lint` and `pnpm typecheck` run once at the end — clean (the only
+remaining warning is the pre-existing unused eslint-disable in `doctor-portal.repositories.ts`,
+untouched here). The targeted new suites were run to prove the migration and the numbering
+behaviour against real Postgres (pglite): 9 db tests + 14 API tests pass, and the 187 suite still
+passes unchanged. The full gates are the controller's.

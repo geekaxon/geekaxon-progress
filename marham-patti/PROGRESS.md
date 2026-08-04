@@ -6,15 +6,15 @@
 
 ## Current Status
 - **Project:** Marham Patti — multi-tenant white-label healthcare platform.
-- **Phase:** **PHASE 20** — owner-test round 1 on the POS (188→191): the crash, session and the phone sale screen are done; next held-sale numbers and instant search, then the sheet family and mobile gestures. Tenant only; Phase-12 logic frozen.
-- **Last completed:** **189 — pos-mobile-to-mockup** (sale header, sticky search, camera scanning).
-- **Next:** **190 — pos-held-sales-and-search** — /specs/190-pos-held-sales-and-search.md
+- **Phase:** **PHASE 20** — owner-test round 1 on the POS (188→191): the crash, session, phone sale screen, held-sale numbers and instant search are done; next the sheet family and mobile gestures. Tenant only; Phase-12 logic frozen.
+- **Last completed:** **190 — pos-held-sales-and-search** (numbered holds, discard, 250ms search).
+- **Next:** **191 — pos-sheets-and-mobile-gestures** — /specs/191-pos-sheets-and-mobile-gestures.md
 - **Branches:** through 188 on staging. 189 on feature/; 190 feature/; 191 fix/.
 - **Parked:** print/Bluetooth screen; per-page menu permissions. Realtime stock + held sync built, not yet tested.
 
 ### Recent steps
+- **190 — pos-held-sales-and-search** — DONE (2026-08-04) — numbered held sales, audited discard, instant search with progress.
 - **189 — pos-mobile-to-mockup** — DONE (2026-08-04) — sale-owned header, collapsing search, camera scanning, typed quantity.
 - **188 — pos-crash-and-session-fixes** — DONE (2026-08-04) — guarded unit reads, base-unit repair, centred dialogs, sliding session.
-- **187 — pos-screen-v2** — DONE (2026-08-04) — unit selling, realtime stock, shared held sales.
 
 > Older steps in PROGRESS-HISTORY.md
