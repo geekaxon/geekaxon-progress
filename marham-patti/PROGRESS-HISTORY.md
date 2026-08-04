@@ -6695,3 +6695,130 @@ logic behind each is covered by the suite above.
 ### Owner note, carried forward
 Real-tenant feedback after practical use is expected to drive further changes; those are new
 specs, not scope creep resisted here.
+
+---
+
+## 188 — pos-crash-and-session-fixes — DONE (2026-08-04)
+
+**Work type:** FIX. **Branch:** `fix/188-pos-crash-and-session-fixes`. **Spec:** /specs/188-pos-crash-and-session-fixes.md. No CODEREF in range.
+**Schema:** none (188 carries no migration — see §4's family-id decision).
+
+### §1.1 — the desktop POS crash, root-caused
+
+The spec listed three unguarded `.find` calls. Reading the live file found the ACTUAL trigger the spec
+suspected but did not name: `PosClient` restores the working cart with
+`setLines(loadJson<PosLine[]>(CART_KEY, []))` — i.e. it trusts whatever an EARLIER BUILD wrote to local
+storage. A cart parked before 187 has no `units` field at all, so `lineUnit()`'s `l.units.find(...)` threw
+inside the totals `useMemo`. That matches the reported symptom exactly: a `useMemo` over `Array.map`, and
+NO failing network request, because nothing was fetched at all.
+
+Fixes:
+- Three shared guards added to `@mp/shared/retail-units`: `sellableUnitsOf`, `pickSellableUnit`,
+  `preferredSellableUnit`. Every unit dereference in `PosClient` now routes through them — lines 248
+  (`lineUnit`), 556 (`addRow`), 810 (held-sale rehydrate), 1770/1775 (`defaultUnitPrice`/`defaultUnitName`)
+  and 1841 (`UnitSelect`). `addRow` also coerces a missing `defaultUnitId` to `null`.
+- New `restoreLines()` normalises the locally-parked cart back to the current `PosLine` shape before it can
+  reach a render (units, unitId, qty, type, batches all defensively typed; the line key is recomputed).
+- Degrade path: no units → the product sells at its base price and the unit select renders disabled with a
+  single option. A counter never white-screens over one odd product.
+
+**Test placement decision:** the spec asked for a *rendering* test. `apps/web` has NO test runner (no `test`
+script, no jest devDeps; the runners are `packages/ui`, `packages/db` and `apps/api`), and adding one would
+need a `pnpm install` on top of a FIX step. Instead the unit logic was moved OUT of the component into the
+three pure shared guards, and those are tested in `apps/api/src/pharmacy/pos-helpers.spec.ts` with the exact
+two fixtures the spec names — `sellableUnits: undefined` and `sellableUnits: []` — plus junk entries and a
+non-array payload. PosClient now owns no unit logic to render-test.
+
+### §1.2 — backfill repair
+
+Root cause of the ongoing misses found: `PharmacyService.createMedicine` only wrote a chain when the caller
+submitted one (`if (units && units.length > 0)`), so EVERY product created through the app after the 183
+migration had no level-0 unit. The 183 migration's backfill was itself correct.
+
+- `PrismaPharmacyRepo.createMedicine` now creates the level-0 unit in the same transaction as the medicine —
+  the single choke point, so every create path is covered. `FakePharmacyRepo` mirrors it.
+- New `packages/db/src/base-unit-repair.ts`: `repairMissingBaseUnits()` / `countMissingBaseUnits()` plus the
+  exported statement list. The INSERT is byte-for-byte the 183 §3 backfill (deterministic `pu0_<mid>` id,
+  `NOT EXISTS` guard, `ON CONFLICT DO NOTHING`), wrapped in the same RLS-bypass shape (`NO FORCE` → INSERT →
+  `FORCE`, one transaction, so a failure rolls the lift back).
+- Wired into `packages/db/prisma/seed.ts`, which deploy.sh runs on every deploy. It logs
+  `Base-unit repair: created N level-0 product unit(s); M product(s) still missing one.` and THROWS if M > 0.
+- Guard test `packages/db/src/base-unit-repair.spec.ts` (pglite, real migrations, 7 cases): zero missing after
+  repair across both tenants; the bare INSERT under an app session repairs nothing (the 61/90 trap, asserted
+  as a real failure mode); repaired row indistinguishable from a backfilled one; NULL price stays NULL; a
+  hand-authored chain untouched; a second run writes 0; FORCE restored on both tables. Caveat recorded in the
+  file: pglite's session is a superuser and bypasses RLS by definition, so what the happy path proves is the
+  statement SHAPE and its restoration, not owner-level bypass.
+
+### §1.3 — staging demo data
+
+`seedUnitDemoProducts()` added to the staging-gated demo seed (unchanged gate: `APP_ENV=staging` +
+`SEED_DEMO=1`, never in a normal deploy). Deliberately kept OUT of `buildDemoPlan` so it cannot perturb the
+plan's invariants (trial balance, stock == Σ movements). Stable `d_*` ids, upserted, idempotent:
+- 3-level medicine — Ciproxin 500mg, tab → strip ×10 → box ×10, pack levels `priceIsDerived`, 1000 tabs;
+- 1-level loose product — Disprin (loose), sold by the tab;
+- general item — Johnson's Baby Soap, category "Baby care" (resolved on the REAL unique `(tenantId, name)`,
+  not by id, so an existing category cannot trip P2002), no batches, no expiry;
+- an UNDATED lot (`expiry: null`) on the 3-level medicine beside a dated one, so FEFO ordering is visible.
+
+### §2 — dialog centring
+
+Confirmed the mechanism rather than guessing: `DialogContent` centred with
+`left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2` while `animate-scale-in`'s keyframe sets
+`transform: scale(0.96)`. A keyframe REPLACES the transform, so for the whole entry animation the centring
+translate did not exist and the box painted with its top-left corner at the viewport centre — visibly
+below-right — then snapped. Centring moved to a `fixed inset-0 flex items-center justify-center p-4` layer;
+the box keeps only `animate-scale-in`. The layer is `pointer-events-none` / the box `pointer-events-auto`, so
+outside-click dismissal is unchanged. `max-h-[calc(100dvh-2rem)]` → `max-h-full` (the layer's padding IS the
+old gutter). Benefits every dialog in the app (shared kit, 173). New `packages/ui/src/components/dialog.spec.tsx`
+pins the structure that makes the bug impossible.
+
+### §3 — auth margin (mobile only)
+
+182 §3 recorded as SUPERSEDED. The whole `@media (min-width: 641px)` `--offset` block is DELETED, not
+re-tuned: `.mp-kit .authpage` is already `align-items: center`, so removing the override IS plain desktop
+centring. The mobile rule now carries the owner's expression verbatim —
+`min(12dvh, max(24px, 100dvh - 455px))` — replacing 179 §1's 38dvh. Login and reset both (both mount
+`mp-authroot--app mp-authroot--offset`). `AuthShell`'s prop renamed `desktopOffset` → `aboveCentre` (it has
+no desktop meaning any more); the patient door and vendor console are untouched. `shell-polish-round.spec.ts`
+§3 rewritten to assert the 188 policy, including a regex that the offset can never leak back to desktop.
+
+### §4 — PWA session: sliding 30 days, 90-day cap
+
+Root cause: `TokenService.rotate()` re-minted every successor with NO ttlDays, so only the FIRST token of a
+PWA/remember-me family was long-lived and the first silent refresh dropped the session to
+`REFRESH_TOKEN_TTL_DAYS`. The login side (`rememberMe = pwa || remember`) was already correct.
+
+- Persistence is marked ON THE FAMILY ID with the prefix `p.` (`PERSISTENT_FAMILY_PREFIX`). Decision: the
+  spec says schema: none, and the family id is the only thing that survives rotation; `.` cannot occur in a
+  base64url token, so the mark is unambiguous. Families minted before 188 have no prefix and keep their old
+  behaviour until the user's next login — flagged rather than migrated.
+- `persistentExpiry(now, familyStartedAt)` = `min(now + REMEMBER_ME_TTL_DAYS, familyStartedAt + PERSISTENT_SESSION_MAX_DAYS)`.
+- `RefreshRepo.familyStartedAt(familyId)` added (oldest row's `createdAt`) — the anchor for the cap;
+  `RefreshCreate.createdAt` is now stamped explicitly from the service clock so it is deterministic under
+  test. `RefreshRow.createdAt` added; `PrismaRefreshRepo` selects it; `FakeRefreshRepo` implements both.
+- Config: `PERSISTENT_SESSION_MAX_DAYS` (default 90, max 730) added; `REMEMBER_ME_TTL_DAYS` (30) documented
+  as the SLIDING window. Both documented in `.env.example` under a new persistent-sessions block.
+- Unchanged and asserted: PIN gate untouched, revoke-from-sessions still terminates immediately, reuse
+  detection still burns the family, ordinary (non-remember-me) sessions byte-identical.
+- 7 new cases in `auth.service.spec.ts`: long life survives rotation (the regression itself); 40 days of daily
+  use never logs out; an untouched device expires at 31 days; the cap binds day-by-day past day 60 and kills
+  the session at 91; ordinary session unchanged and unmarked; revoke; reuse.
+
+### Gates
+
+`pnpm lint` and `pnpm typecheck` clean (one pre-existing unused-eslint-disable warning in
+`doctor-portal.repositories.ts`, untouched by this step). Targeted suites run rather than the full gate:
+`apps/api src/pharmacy` 318 ✓, `apps/api src/auth src/privacy` 66 ✓, `packages/ui` 447 ✓, `packages/db` 342 ✓.
+`shell-polish-round.spec.ts` had to be updated (it pinned the 182 §3 desktop offset that §3 removes).
+
+### Files
+
+`packages/shared/src/retail-units.ts`; `apps/web/app/(app)/pharmacy/pos/PosClient.tsx`;
+`apps/api/src/pharmacy/{pharmacy.repositories.ts,__fakes__.ts,pos-helpers.spec.ts}`;
+`packages/db/src/{base-unit-repair.ts,base-unit-repair.spec.ts,index.ts}`;
+`packages/db/prisma/{seed.ts,seed-demo.ts}`;
+`packages/ui/src/components/{dialog.tsx,dialog.spec.tsx}`; `packages/ui/src/lib/shell-polish-round.spec.ts`;
+`apps/web/app/globals.css`; `apps/web/app/(auth)/login/{AuthShell.tsx,patient/page.tsx,reset/ResetForm.tsx}`;
+`apps/api/src/auth/{token.service.ts,auth.repositories.ts,auth.types.ts,__fakes__.ts,auth.service.spec.ts}`;
+`packages/config/src/index.ts`; `.env.example`.
