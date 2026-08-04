@@ -7193,3 +7193,157 @@ No new test file: `apps/web` has no test runner (only `packages/ui` (jest) and `
 
 ### Files
 `apps/web/lib/use-dismiss.ts` (new) · `apps/web/lib/counter.ts` · `apps/web/lib/nav.ts` · `apps/web/components/shell/AppShell.tsx` · `apps/web/app/(app)/pharmacy/pos/PosClient.tsx` · `apps/web/app/(app)/pharmacy/pos/PaymentPanel.tsx` · `apps/web/app/(app)/pharmacy/pos/ShortcutsHelp.tsx` · `apps/web/app/globals.css` · `packages/i18n/src/messages/en.json` + `ur.json` (`pharmacyPos.v8.*`, `navPharmacyPos`, `navSub.pharmacyPos`).
+
+---
+
+## 194 — pos-mobile-r2 — DONE (2026-08-04)
+
+**Branch:** `fix/194-pos-mobile-r2` (WORK TYPE: FIX). Spec: `/specs/194-pos-mobile-r2.md`.
+Presentation + interaction only. No schema, no RLS, no migration, no settlement logic changed.
+
+Owner-test round 2 on the phone. Round 1 had already ported `pos-mobile.html`, so the
+interesting part of this step was not "write the CSS" — it was finding out why four
+already-written rules were not reaching the screen. Three of the five sections turned out
+to be CASCADE and CONTAINING-BLOCK defects, not missing code.
+
+### §1 Header row — alignment, avatar → account, bell → notifications
+
+* **Alignment.** The bell's wrapper element carries the class `.mp-notif`, which the ADMIN
+  NOTIFICATIONS PAGE also owns (`display:grid; gap:1.75rem; margin-top:1.5rem;
+  max-width:52rem`, globals.css ~1245). The 189 POS override restated `position/display/
+  flex` but never `margin`, so the stray `margin-top:1.5rem` pushed the bell 24px down
+  inside a 44px row that is `overflow:hidden` for the collapse — the "icons riding high"
+  in the owner's screenshot. Fixed by stating the file's values for the chrome's own copy
+  (`margin:0; padding:0; max-width:none; gap:0; align-self:center`). The admin page rule is
+  untouched; renaming the shared class was deliberately NOT done in a presentation step.
+* **Avatar → ACCOUNT sheet.** `MobileChromeSlotValue.openAccount` used to call
+  `setMoreOpen(true)` — the navigation drawer. It now opens a new account sheet: the SAME
+  `<MobileMoreSheet>` with `groups={[]}`, i.e. the `.macct` family alone (identity mark,
+  name/role, account rows, appearance segment, sign-out). Rendering the same component
+  rather than forking a second sheet means the two can never drift. It is mounted OUTSIDE
+  the dock block, because a page that owns its chrome has an avatar whatever the dock
+  resolves to. New key `shellAccount` (EN + UR).
+* **Bell → NOTIFICATIONS sheet.** The bell was not "dead": it opened `.mp-notif-panel`, an
+  absolutely-positioned dropdown, INSIDE the header row that the scroll collapse clips with
+  `overflow:hidden`. The panel was being drawn and immediately clipped out of existence.
+  `variant="mic"` now renders the centre as a `<MobileSheet>` — the desktop `notifmenu`'s
+  own `.notifrow` rows, severity icon tiles and `.notifmenu__empty` state, in the sheet
+  composition. It is PORTALLED TO THE BODY: the header applies `transform: scale()` during
+  the collapse, and a transformed ancestor becomes the containing block for `position:fixed`
+  descendants, so a sheet rendered in place would have been positioned inside the header and
+  clipped exactly like the dropdown. The dropdown's outside-click closer is disabled for this
+  variant (every tap inside a portalled sheet reads as "outside"); dismissal comes from the
+  191 family — scrim, close button, Escape, drag-to-close.
+
+### §2 Scan button + scroll transition
+
+* **`.mscan`.** The shell owns a `.mp-mobile .mscan` — a WIDE 48px scan FIELD with
+  `padding:0 8px 0 14px` and `margin:0 20px 14px`. The POS's `.mscan` is the file's 38px
+  square button inside `.mpos-search`. The 189 override restyled box/radius/tint/icon at
+  higher specificity but never cleared the inherited `padding`/`margin`, so the button sat
+  inset with a 14px skirt under it. The file's `.mscan` has neither; now stated. Also added
+  the file's `:active` press tint (both themes) and its 44px `::after` hit pad — the
+  `.mp-pos2 .mscan::after` pad never applied because the chrome is portalled OUT of
+  `.mp-pos2` into the shell's slot.
+* **Collapse.** It was already scroll-linked (`--mp-chrome-c`, 0 → 1 over 84px, no CSS
+  transition), but the body's `padding-top` shrank by the same value — so 84px of finger
+  moved the content 142px. The sale raced the thumb and the header read as a snap. The
+  chrome is `position:fixed` glass, so nothing needs giving back: the padding is now
+  CONSTANT and the content scrolls under a shortening header one pixel per pixel, smooth in
+  both directions. The driver also now falls back to `document.scrollingElement.scrollTop`
+  and listens in the capture phase, so an inner scroller cannot silently pin progress at 0.
+  `prefers-reduced-motion` still switches (`chromeCollapse` returns 0 or 1), unchanged.
+
+### §3 Search results — tap the row
+
+Trailing `.mline__add` removed; the row IS the button (`<button className="mline mline--tap">`,
+`role="option"`, `aria-selected`, `min-height:44px`, disabled when out of stock). Feedback is
+both: an accent-soft `is-added` flash for one motion beat on the row the thumb is still on
+(the batch read is a round-trip, so the list is briefly still there) plus a kit success toast,
+which survives the list collapsing over the cart. The toast and flash are MOBILE-ONLY — the
+desktop counter shows the new line beside the results and needs neither. New key
+`pharmacyPos.v9.added` (EN + UR). With the button gone, `.mline__price` takes the row's
+trailing auto margin, as the file gives it to whichever element ends the row.
+
+### §4 Cart line close — top-right, actually (and why 189 missed)
+
+**The component was right; the cascade was wrong.** There is exactly one mobile cart-line
+component (`PosClient.tsx`, the `posMobile` branch) and it has rendered
+`<button className="mline__rm mline__rm--tr">` after `.mline__v` since 189 — the source
+review that 189 did was correct, which is precisely why re-reading the source twice found
+nothing. The defect was in globals.css:
+
+    9372:  .mp-pos2 .mline__rm--tr { position:absolute; top:10px; inset-inline-end:12px; … }
+    9414:  .mp-pos2 .mscan, .mp-pos2 .mline__rm, … { position:relative; }   ← LATER, SAME SPECIFICITY
+
+Both selectors are (0,2,0) and both match the element. Line 9414 (the compact-control 44px
+hit-pad rule, which predates 189) wins on source order and handed `position:relative` back
+to the corner button, dropping it into the flex flow beside the price — exactly what the
+owner screenshotted twice. 189 added the correct rule and never saw it lose. Fixed by
+excluding the variant from the hit-pad rule (`.mline__rm:not(.mline__rm--tr)`) — an absolute
+box is a positioned ancestor too, so the pad still works — and giving `--tr` the file's own
+`::after` 44px pad. Lesson recorded: for a "the fix didn't land" report, diff the CASCADE for
+the rendered class, not just the JSX.
+
+**Honesty note on verification:** the spec asked for confirmation on the deployed page. This
+session cannot deploy (the controller owns deploys) and no browser was driven here, so the
+finding is a source-and-cascade proof, not a screenshot. It is deterministic — two equal-
+specificity rules, later wins — and the fix removes the conflict outright rather than
+out-specifying it.
+
+### §5 Mobile payment sheet — no keypad, Split as a fourth method
+
+* **Keypad removed** from `layout="sheet"` (owner override of the file's `mkeypad`, recorded
+  in the spec and in the component docblock). The tender field is the entry point and carries
+  the file's own `inputMode="numeric"`, so the phone's keyboard is the keypad. The DESKTOP
+  dialog keeps its `.keypad` and `inputMode="decimal"` — it has a real keyboard and the space.
+* **Split is the fourth pill** — `Cash · Card · Online · Split` (plus Credit where the tenant
+  has it on), one `.paymeth` row, digit hints included and bound. Choosing it opens one
+  `.paytender` amount box per method at zero; the cashier types what each tender took and the
+  foot reads back the remainder until the sum settles the bill.
+* **The split math is frozen.** It is still 102's `splitPaymentSummary` / `paymentPolicyError`.
+  The one new rule is that an UNFILLED box is not a tender: zero-amount legs are filtered out
+  before the summary, the credit-policy check and the commit. That is required, not cosmetic —
+  the server rejects a zero leg outright ("Every payment must be a positive amount") and an
+  untouched CREDIT box would otherwise demand a registered customer on a walk-in cash sale.
+  New keys `pharmacyPos.v9.split` / `.splitHint` (EN + UR).
+
+### Tests written (controller runs them)
+
+* `apps/api/src/pharmacy/pos-mobile-split.spec.ts` — the exact tender arrays the sheet builds,
+  against the REAL shared functions: an untouched board settles nothing; per-method amounts
+  that add up settle and break down correctly; a part-filled board reports the exact
+  remainder; the settled board passes the server policy; the raw board with zero placeholders
+  is rejected and the filtered one is not; an untouched CREDIT box never turns a walk-in cash
+  sale into a credit sale while a FILLED one still needs a customer; over-applying is still
+  refused; a plain method collapses to one leg; cash change still reads back with no keypad.
+* `packages/ui/src/components/mobile-account-sheet.spec.tsx` — the account-only composition:
+  identity + rows + appearance (live value marked) + sign-out present, zero module rows, a
+  labelled dialog on the shared sheet family, appearance acts in place without closing, and
+  nothing rendered while closed.
+
+`apps/web` has no test runner (no jest/playwright config in the repo), so both suites live in
+packages that do. Noted as a real gap, not worked around silently: there is still no e2e that
+renders the POS over HTTP.
+
+### Gates
+
+`pnpm lint` and `pnpm typecheck` run once at the end, both clean (the one `@mp/api` warning
+about an unused eslint-disable in `doctor-portal.repositories.ts` is pre-existing and
+untouched). `pnpm test:unit` / `pnpm build` / `pnpm test:e2e` deliberately NOT run here — the
+controller runs them. Vendor console untouched. No schema, so no `prisma generate`.
+
+### Files
+
+* `apps/web/app/globals.css` — §1–§5 rules, new BUILD-STEP 194 block at the end + the 9414
+  hit-pad exclusion in place.
+* `apps/web/components/shell/AppShell.tsx` — account sheet, `openAccount` retargeted, the
+  three sheet blocks hoisted so both sheets share one definition.
+* `apps/web/components/shell/NotificationBell.tsx` — `mic` variant renders a body-portalled
+  `MobileSheet` with the notifmenu rows/empty state.
+* `apps/web/app/(app)/pharmacy/pos/PosMobileChrome.tsx` — hardened collapse driver + docblock.
+* `apps/web/app/(app)/pharmacy/pos/PosClient.tsx` — tap-to-add rows, added flash + toast.
+* `apps/web/app/(app)/pharmacy/pos/PaymentPanel.tsx` — sheet keypad removed, Split method,
+  zero-leg filter, sheet-only `inputMode="numeric"`.
+* `packages/i18n/src/messages/{en,ur}.json` — `shellAccount`, `pharmacyPos.v9.*`.
+* `apps/api/src/pharmacy/pos-mobile-split.spec.ts`, `packages/ui/src/components/mobile-account-sheet.spec.tsx` — new.

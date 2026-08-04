@@ -7,14 +7,14 @@
 ## Current Status
 - **Project:** Marham Patti — multi-tenant white-label healthcare platform.
 - **Phase:** **PHASE 20** — owner-test round 2 (192→197): the park fix and toasts, desktop POS to the mockup, mobile POS to the mockup, sheet physics and Android back, the date picker, full-keyboard shortcuts. Tenant only.
-- **Last completed:** **193 — pos-desktop-to-mockup-r2**.
-- **Next:** **194 — pos-mobile-r2** — /specs/194-pos-mobile-r2.md
+- **Last completed:** **194 — pos-mobile-r2**.
+- **Next:** **195 — mobile-platform-polish** — /specs/195-mobile-platform-polish.md
 - **Branches:** through 192 on staging. 196 feature/; rest fix/.
 - **NOTE:** the LATEST component-reference.html (with the Date picker section) is committed to specs/mockups/pharmacy/; 196 needs it.
 
 ### Recent steps
+- **194 — pos-mobile-r2** — DONE (2026-08-04) — account and notification sheets, tap to add, close in the corner, no keypad.
 - **193 — pos-desktop-to-mockup-r2** — DONE (2026-08-04) — counter title, sticky search, %/Rs, keypad, expiry chips.
 - **192 — park-fix-and-pos-corrections** — DONE (2026-08-04) — park works, proven on a real DB; error toasts; no zero-price sale.
-- **191 — pos-sheets-and-mobile-gestures** — DONE (2026-08-04).
 
 > Older steps in PROGRESS-HISTORY.md
