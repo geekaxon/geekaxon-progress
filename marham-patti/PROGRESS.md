@@ -6,15 +6,14 @@
 
 ## Current Status
 - **Project:** Marham Patti — multi-tenant white-label healthcare platform.
-- **Phase:** **PHASE 20** — owner-test round 1 on the POS (188→191): the crash, session, phone sale screen, held-sale numbers and instant search are done; next the sheet family and mobile gestures. Tenant only; Phase-12 logic frozen.
-- **Last completed:** **190 — pos-held-sales-and-search** (numbered holds, discard, 250ms search).
-- **Next:** **191 — pos-sheets-and-mobile-gestures** — /specs/191-pos-sheets-and-mobile-gestures.md
-- **Branches:** through 188 on staging. 189 on feature/; 190 feature/; 191 fix/.
-- **Parked:** print/Bluetooth screen; per-page menu permissions. Realtime stock + held sync built, not yet tested.
+- **Phase:** **PHASE 20** — owner-test round 2 (192→197): park 500 fix, toasts, zero-price guard, auth redirects; desktop POS r2 (heading, sticky search, customer select, %/Rs, keypad, expiry badges); mobile r2 (account/notif sheets, scroll collapse, tap-to-add, Split, no keypad); sheet physics, no mobile scrollbars, Android back = one layer; the date picker from the recommitted reference; full-keyboard shortcuts. Tenant only.
+- **Last completed:** **192 — park-fix-and-pos-corrections**.
+- **Next:** **193 — pos-desktop-to-mockup-r2** — /specs/193-pos-desktop-to-mockup-r2.md
+- **Branches:** through 192 on staging. 196 feature/; rest fix/.
+- **NOTE:** the LATEST component-reference.html (with the Date picker section) must be committed to specs/mockups/pharmacy/ before 193 runs; 196 hard-stops without it.
 
 ### Recent steps
-- **190 — pos-held-sales-and-search** — DONE (2026-08-04) — numbered held sales, audited discard, instant search with progress.
-- **189 — pos-mobile-to-mockup** — DONE (2026-08-04) — sale-owned header, collapsing search, camera scanning, typed quantity.
-- **188 — pos-crash-and-session-fixes** — DONE (2026-08-04) — guarded unit reads, base-unit repair, centred dialogs, sliding session.
+- **192 — park-fix-and-pos-corrections** — DONE (2026-08-04) — park works, proven on a real DB; error toasts; no zero-price sale.
+- **191 — pos-sheets-and-mobile-gestures** — DONE (2026-08-04).
 
 > Older steps in PROGRESS-HISTORY.md

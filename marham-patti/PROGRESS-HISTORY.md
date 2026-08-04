@@ -7057,3 +7057,94 @@ remaining warning is the pre-existing unused eslint-disable in `doctor-portal.re
 untouched here). The targeted new suites were run to prove the migration and the numbering
 behaviour against real Postgres (pglite): 9 db tests + 14 API tests pass, and the 187 suite still
 passes unchanged. The full gates are the controller's.
+
+## 191 — pos-sheets-and-mobile-gestures — DONE (2026-08-04)
+
+**Branch:** `fix/191-pos-sheets-and-mobile-gestures` (WORK TYPE: FIX). Spec: `/specs/191-pos-sheets-and-mobile-gestures.md`. No CODEREF companion. Schema/RLS untouched; payment, credit, prescription, FEFO, decrement and idempotency logic byte-identical.
+
+### What was built
+
+**§4 first, because everything else composes on it — `<MobileSheet>` (`packages/ui/src/components/mobile-sheet.tsx`, new).**
+The spec makes slide + drag universal across the tenant mobile surface, so rather than bolt the gestures onto each sheet they now live in ONE shared shell that owns the 162/163 anatomy (`.sheet__scrim`, `.sheet`, `.sheet__grip`, `.sheet__hd` with an optional `.sheet__hdic` medallion, title + subtitle, `.mic` close). The caller supplies `.sheet__body` / `.sheet__foot` verbatim as children, which is why the More sheet could move onto it without changing a line of its content.
+
+- *Slide.* The sheet stays mounted for one `--dur-base` beat past `open: false` (`data-state="open" | "closing"`) so the exit is seen instead of skipped; CSS keyframes `mp-sheet-in/out` + `mp-scrim-in/out` do the motion, all inside `@media (prefers-reduced-motion: no-preference)`. Under reduced motion the unmount delay is 0 and no keyframe is declared — instant, per §4.
+- *Drag.* Extracted as `useSheetDrag(panelRef, scrimRef, { onClose, handle, scroller })` so the POS's full-screen `.mpick` customer picker (named in §4 but drawn full-screen by the mockup, not as a sheet) gets the identical gesture without a second implementation. Pointer events, not touch: the panel follows the finger via an inline `translateY`, the scrim fades with it, and the drag engages ONLY from the handle selector or from the scroller *while `scrollTop <= 0`*, with a 6px slop before it takes over — that is the "must not fight an internally scrolled body" clause. Presses that originate on a control (`button,a,input,select,textarea,[role=button],[role=option]`) are never hijacked.
+- *Release verdict* is the pure, exported `sheetDragOutcome(dy, elapsedMs, sheetHeight)`: past a third of the sheet height → close; short of that, ≥0.5 px/ms with ≥40px travel (a flick) → close; otherwise spring back. Upward or zero drag never closes. A drag that ran to dismissal sets `data-drag="closing"`, which suppresses the CSS exit keyframe so the inline transform is not snapped back to rest first.
+- *Focus/scroll unchanged from 163:* opener captured and refocused on close, body scroll locked, Tab trapped, Escape dismisses.
+
+**`MobileMoreSheet` refactored onto it.** Its bespoke focus trap, scroll lock, keydown handler and the old crude `onTouchStart/onTouchEnd` grip swipe (a bare 40px threshold, no finger tracking) are deleted; it now renders `<MobileSheet wrapperClassName="msheet" className="msheet__sheet" headClassName="msheet__hd">` around its existing body/foot. Props and DOM classes are unchanged, so `apps/web/components/shell/AppShell.tsx` and the existing spec needed no edit.
+
+**§1 Customer picker.** `.mpick__new` — the dashed inline row at the end of the list — is replaced by a `.mpick__foot` carrying a full-width `.btn.btn--primary.btn--lg` "Add customer" at the bottom of the picker, in the `.sheet__foot` position the owner's screenshot asks for. It still pre-fills from the typed text (`Add "moiz" as new customer`) and still routes through `onAddNew(q.trim())`. Walk-in remains the empty default (134). The `.mpick__new` CSS is deliberately left in place — it is a mockup selector and the per-selector diff gate compares against the file.
+
+**§2 Add customer is now a bottom sheet.** `addCustomerSheet` in `PosClient.tsx` renders the same form on `<MobileSheet>` — kit field anatomy (171: `.field`, `.field__label`, `.input`, `.field__err`, `.field__help`, `.opt`) in the body, the Save & select action alone in `.sheet__foot`. Validation is on blur/submit per 94: a new `addTouched` state marks a field once the cashier leaves it, the money button is no longer disabled-by-emptiness (which would have made submit-validation unreachable) but `trySubmitAddCustomer` marks both fields touched and returns without posting when either is empty — so an invalid POST is still impossible, exactly as before. `submitAddCustomer` itself is untouched: same endpoint, same body, same "prepend to list + select" result. The desktop `addCustomerDialog` is unchanged and still used on the desktop branch.
+
+**§3 Payment sheet to the mockup.** `PaymentPanel` gained a `layout?: 'dialog' | 'sheet'` prop and nothing else. In `sheet` layout it renders `.sheet__body` + `.sheet__foot` composed from pos-mobile.html's own atoms — `.paylabel`, the `.paymeth` method grid, the tall `.paytender` money row, `.paychips` quick tenders (`Exact`, 500, 1,000, 5,000), the `.mkeypad`, and a foot carrying `.paychange` (or `.paychange--short` when the bill is not yet covered) above the primary Confirm button. Every control is wired to the SAME `setLeg` / `addSplit` / `removeLeg` / `pay` handlers and the SAME `splitPaymentSummary` / `checkCreditLimit` derivations as the dialog; the keypad presses go through the shared, already-tested `applyKeypadKey` reducer into the same `setLeg(cashLegIndex, { tendered })` the dialog's `<Keypad>` uses. Split legs, the credit-needs-a-customer note, the over-limit warning, the busy spinner and the `canPay` gate all survive into the sheet. The rx-confirm block was hoisted into one `rxBlock` node shared by both layouts, so the two cannot drift.
+
+*Decision recorded:* the file draws digit hints (`1`…`4`) on the method tiles. Rendering a keyboard hint that does nothing would be a lie, so the sheet layout binds a window `keydown` for `1..methods.length` that picks the first leg's method — the same thing tapping the tile does, ignored while a field has focus, and never bound in the dialog layout. This is the "keyboard-fast behaviour from 134/187" §3 asks for; it touches no settlement logic.
+
+**§5 Pull-to-refresh.** `overscroll-behavior-y: contain` on `html, body` (the app root) plus the scrolling containers — `.mp-shell-main`, `.mp-mobile .sheet__body`, `.mp-pos2 .mpick__list`. Containment stops vertical overscroll reaching the browser without disabling any scrolling: lists, sheets and the POS body still scroll and bounce normally. The pre-existing `@media (display-mode: standalone)` rule is now redundant but harmless and was left alone.
+
+### Files
+
+- `packages/ui/src/components/mobile-sheet.tsx` (new), `mobile-sheet.spec.tsx` (new)
+- `packages/ui/src/components/mobile-more-sheet.tsx` (refactored onto the shared shell), `packages/ui/src/index.ts` (exports)
+- `apps/web/app/(app)/pharmacy/pos/PosClient.tsx` (picker foot, add-customer sheet, pay sheet, picker drag)
+- `apps/web/app/(app)/pharmacy/pos/PaymentPanel.tsx` (`layout="sheet"`)
+- `apps/web/app/globals.css` (191 section: sheet motion + drag affordances, generic live-sheet pinning, `.mp-mobile` btn/field atoms, the payment atoms and `.mkeypad` ported verbatim from the mockup, `.mpick__foot`, overscroll containment)
+- `packages/i18n/src/messages/{en,ur}.json` (`pharmacyPos.v6`: close, paySubtitle, rs, splitLeg, nameRequired, phoneRequired — EN+UR parity, Urdu translated)
+
+### Tests
+
+`mobile-sheet.spec.tsx` covers the pure drag verdict (upward drag, the height-third threshold either side, a fast flick that never reaches the distance, a tap-sized twitch that must not dismiss however fast, and the height-unknown fallback) and the shell (nothing rendered when closed; the kit anatomy, title and subtitle when open; close button / scrim / Escape all dismissing; and the `data-state="closing"` marker that keeps the sheet mounted for the exit slide). The existing `mobile-more-sheet.spec.tsx` passes unchanged, which is the regression proof for the refactor. `apps/web` has no test harness in this repo, so no Playwright test was added — there is no `playwright.config` and `pnpm test:e2e` is not wired here.
+
+### Gates
+
+`pnpm lint` and `pnpm typecheck` run once at the end, both clean (the one `@mp/api` warning about an unused eslint-disable directive is pre-existing and untouched by this step). `pnpm test:unit` / `pnpm build` deliberately not run — controller-owned. `design-drift-check.mjs` passes as part of web lint. Vendor untouched.
+
+### Notes
+
+- The live-sheet pinning rule was generalised from `.mp-mobile.mp-mobile--live .sheet.msheet__sheet` to `.mp-mobile.mp-mobile--live .sheet`, so every current and future live sheet pins identically instead of the More sheet owning the rule privately. The device-frame gallery (`.mp-mobile` without `--live`) is unaffected.
+- `.mp-mobile` had no base `.btn`/`.field`/`.input` declarations — the gallery scopes them to `.mp-kit` — so the identical declarations were restated under `.mp-mobile`. A live sheet mounted outside `.mp-pos2` would otherwise have rendered unstyled buttons.
+- End of the 188→191 block. Still parked by owner decision and NOT built here: the print/receipt screen with its Bluetooth and wired printing paths, and the per-page menu visibility rules by permission.
+
+## 192 — park-fix-and-pos-corrections — DONE (2026-08-04)
+
+**Work type:** FIX. **Branch:** `fix/192-park-fix-and-pos-corrections`. Tenant only; Phase-12 logic frozen; vendor untouched. No schema change, no migration, RLS unchanged.
+
+### §1 — Park died with 500: the advisory-lock overload
+Root cause confirmed exactly as the trace read. 190 serialised the per-tenant held-sale counter with a Prisma tagged template, `pg_advisory_xact_lock(${ns}, hashtext(${tenantId}))`. Prisma binds a JS integer as `int8` and `hashtext` returns `int4`, so Postgres was asked for `pg_advisory_xact_lock(bigint, integer)` — an overload that does not exist (Postgres ships `(bigint)` and `(int4, int4)`). Every park died with 42883 before a number was claimed.
+
+- New `packages/db/src/advisory-locks.ts` holds both lock namespaces and the two statements as plain parameterised strings with EXPLICIT `::int4` casts. Exported from `@mp/db`.
+- `pharmacy.repositories.ts createHeldSale` now runs `$executeRawUnsafe(TENANT_ADVISORY_XACT_LOCK_SQL, ns, tenantId)`.
+- **Same defect, second site:** `platform-billing.repository.ts claimInvoiceNumber` passed two JS integers, i.e. `(bigint, bigint)` — also not a real overload, so gapless invoice numbering would have 500'd the first time it ran. Fixed with the same shared statement. Decision: in scope, because it is literally the same latent 500 and a one-line change; noted here rather than deferred.
+- **Real-database proof:** `packages/db/src/held-sale-lock.spec.ts` runs the real migrations inside pglite (in-process Postgres) and executes the SAME exported statement the repository executes — no retyped SQL, so the two cannot drift. It asserts (a) the server has `(int4,int4)` and `(int8)` and NEITHER `(int8,int4)` NOR `(int8,int8)`, (b) 190's uncast call still raises 42883 so a revert cannot pass, (c) the shipped statement acquires the lock with a bigint-typed key, (d) the lock releases at transaction end, (e) parks claim sequential non-duplicate numbers, a second tenant starts at 1, and the `(tenant, number)` unique index still refuses a duplicate.
+- **Stated limitation:** pglite is a single in-process session, so two genuinely parallel backends cannot exist in it. The parks are issued without awaiting each other (pglite serialises transactions exclusively) and the invariant is asserted over a burst; real cross-backend contention is what the lock provides, and (a)–(c) are what make that lock acquirable at all. This is documented in the suite's own docblock.
+- The deployed-page check (park succeeds, pill shows `#N`) is for the controller's staging run; the code path is proven here.
+
+### §2 — Errors are toasts, not banners
+The POS carried ONE `mp-msg` banner slot used for both successes and failures; the 500 rendered in it as a full-width info-blue block that pushed the counter down the page. The slot is GONE from both tiers. Every message it carried now raises the kit toast (top-right, 173): `toast.error` for a park failure, a resume/discard refusal and a blocked commit; `toast.success` for parked / continuing / discarded; `toast.warning` for the over-sell clamp. The staff app already mounts `ToastProvider` in `app/(app)/layout.tsx`, so no host was needed. Field-level validation (add-customer name/phone) and the payment panel's own in-context error stay inline per 94 — they are not banners and not page-level.
+
+### §3 — The dead cart line (unit "—", Rs 0.00)
+Two real sources, both fixed:
+1. **Resume re-hydration looked products up by a text search on the id.** `resumeHeld` called `/pos/search?q=<medicineId>`, but `searchMedicines` matches brand name, generic name and barcode — never the id. The lookup therefore ALWAYS missed: every resumed line came back with no sellable units (select renders "—") and fell back to whatever price was parked. New `posRowsByIds` service method + `GET /pharmacy/pos/medicines?ids=a,b,c`; the POS resumes through it in ONE request instead of N.
+2. **A cart restored from an older build's localStorage** defaulted an unrecognised price to 0. `restoreLines` now also accepts the pre-187 `unitPrice` field before falling back.
+
+Guard hardening: `isSellablePrice` in `@mp/shared/retail-units` is the single rule — a finite, positive number or the line cannot be sold. A line failing it renders an explicit error state (danger wash + "Unit unavailable — remove and re-add", `role="alert"`) at BOTH tiers, and BLOCKS the commit: the proceed button disables on desktop and mobile, and `openPay` refuses with an error toast (so the `pos.takePayment` shortcut is covered too). New i18n `pharmacyPos.v7.*` in en + ur.
+
+### §4 — Seed: the majority of medicines now carry real chains
+The ~200-row demo catalog built by `demo/plan.ts` created NO `ProductUnit` rows at all, so the unit selector was disabled almost everywhere and untestable. New `packages/db/src/demo/unit-chains.ts` maps dosage form → chain (tablet/chewable: tab→strip 10→box 10; capsule: cap→strip→box; syrup/suspension/solution/drops: bottle→carton 24; sachet/powder/granules: sachet→box 50; GENERAL: piece→pack 6; creams/injections/inhalers stay single-level, which is the correct shelf and keeps the "nothing to choose" case represented). `seedCatalogUnitChains` in `seed-demo.ts` walks the catalog, derives pack prices from the base (`priceIsDerived: true`) and hangs per-unit barcodes off the product's own code. Idempotent and non-destructive: keyed on the real `(medicineId, level)` unique so it coexists with 188 §1.2's base-unit repair, and any product that already has a pack level (every 188 §1.3 demo product, anything hand-edited) is skipped. `SEED_DEMO=1` gated like the rest of the file.
+
+### §5 — Authenticated users never see auth pages
+Mirrors the vendor model of 151 §1.1 exactly. New `TENANT_SESSION_COOKIE` (`mp_tenant_auth`) is a presence-and-ROLE mirror written by `storeBundle`/`clearBundle` — no token, no authority, only the routing decision. `resolveTenantAuthRedirect` (pure, in `@mp/ui/surface-routing`) sends a signed-in visitor from any tenant auth route to `tenantRoleHome(role)`; the middleware applies it on every non-vendor surface, before paint. `roleHome` in the web app now delegates to `tenantRoleHome`, so the edge and the client cannot disagree.
+
+Deliberate carve-outs, all tested: `/login/vendor` and `/login/platform` are untouched (separate audiences, separate sessions); the staging screenshot preview stays exempt (122 §3.4); logged-out behaviour is byte-identical. **Decision beyond the literal spec:** a reset URL carrying `?token=` is the CONFIRM step of a password reset, not an auth screen — bouncing a signed-in user off it would silently swallow a real flow, so a tokened reset URL is served. A stray `?token=` on a login URL exempts nothing. `AppShell` and `RouteGuard` call `syncTenantSessionCookie()` before their own redirect, which is what prevents an auth-route ↔ role-home bounce when a cookie outlives its bundle.
+
+### §6 — Desktop remember-me: verified, and now proven
+Verified end to end and found ALREADY CORRECT: `StaffLoginForm` sends `rememberMe` on `/auth/staff/login` and passes it to `TwoFactorPanel`, which sends it again on the MFA leg; `staffLogin` and `staffMfa` both forward it to `issueBundle`, which mints the persistent family 188 §4 introduced — so the desktop checkbox already inherits the rotation fix. No production code changed here. It was untested, which is why the owner had to ask, so five cases now pin it (`auth.service.spec.ts`, "192 §6"): a checked login survives 26 idle hours where an unchecked one provably does not, the long life survives rotation across a week of daily use, the family carries the `p.` persistent mark, and the 2FA leg carries the checkbox through in BOTH directions (checked stays persistent, unchecked stays ordinary — the roles with mandatory 2FA were the ones most at risk of a silent drop).
+
+### Gates
+`pnpm lint` and `pnpm typecheck` both clean (one pre-existing unused-eslint-disable warning in `doctor-portal.repositories.ts`, untouched). Per AGENT.md the unit/e2e/build gates are the controller's.
+
+### Files
+New: `packages/db/src/advisory-locks.ts`, `packages/db/src/held-sale-lock.spec.ts`, `packages/db/src/demo/unit-chains.ts`, `packages/db/src/demo/unit-chains.spec.ts`.
+Changed: `apps/api/src/pharmacy/{pharmacy.repositories,pharmacy.service,pharmacy.controller,pos-screen-v2.spec}.ts`, `apps/api/src/platform-billing/platform-billing.repository.ts`, `apps/api/src/auth/auth.service.spec.ts`, `apps/web/app/(app)/pharmacy/pos/PosClient.tsx`, `apps/web/app/globals.css`, `apps/web/middleware.ts`, `apps/web/lib/{session,surface-routing}.ts`, `apps/web/components/shell/{AppShell,RouteGuard}.tsx`, `packages/ui/src/lib/surface-routing.{ts,spec.ts}`, `packages/shared/src/retail-units.ts`, `packages/db/src/index.ts`, `packages/db/prisma/seed-demo.ts`, `packages/i18n/src/messages/{en,ur}.json`.
