@@ -6822,3 +6822,131 @@ PWA/remember-me family was long-lived and the first silent refresh dropped the s
 `apps/web/app/globals.css`; `apps/web/app/(auth)/login/{AuthShell.tsx,patient/page.tsx,reset/ResetForm.tsx}`;
 `apps/api/src/auth/{token.service.ts,auth.repositories.ts,auth.types.ts,__fakes__.ts,auth.service.spec.ts}`;
 `packages/config/src/index.ts`; `.env.example`.
+
+---
+
+## 189 — pos-mobile-to-mockup — DONE (2026-08-04)
+
+**Spec:** /specs/189-pos-mobile-to-mockup.md (owner-test round 1, phase 20). **Branch:** `feature/189-pos-mobile-to-mockup`.
+**Mockup:** `specs/mockups/pharmacy/pos-mobile.html` (authoritative). **Schema:** none. **RLS:** unchanged.
+**Frozen and untouched:** payment, credit, FEFO, stock decrement, sale idempotency, the 184 unit math, the whole desktop tier.
+
+### §1 Header — the sale owns the mobile chrome
+
+The deployed header was the shell's generic one ("Ganatra Clinics / POS", hamburger · bell · theme · logout) with
+the search sitting in the body. The file draws a SALE header instead. Rather than fork the shell or teach it POS
+vocabulary, the shell now publishes a **mobile chrome slot**:
+
+- NEW `apps/web/components/shell/mobile-chrome-slot.tsx` — a context carrying `{ host, claim, openAccount }`.
+- `AppShell` renders a `display:contents` host inside the live-shell scope (`.mp-mobile.mp-mobile--live`), keeps
+  `chromeHost`/`chromePage` state, exposes the claim as `data-page-chrome` on `.mp-shell`, and renders its OWN
+  `<MobileChrome>` only while nothing is claiming. `openAccount` opens the existing More sheet (163) — so the
+  avatar reaches the account block, sign-out included, without the header carrying a logout button.
+- NEW `apps/web/app/(app)/pharmacy/pos/PosMobileChrome.tsx` — the file's header, portalled into the host:
+  `.mhdr__h` "New sale" 19px + `.mhdr__sub` `Counter · customer`, then EXACTLY two `.mic` buttons — notifications
+  with its `.dot` count and `.mic--avatar` initials. Hamburger and logout are ABSENT, per the file; navigation and
+  sign-out already live on the dock + More sheet at this tier, so nothing is lost.
+- `NotificationBell` gained a `variant="mic"` prop (same centre, same SSE, different trigger) so the bell is the
+  file's round `.mic` with `.dot` rather than `.mp-notif-btn`. New key `notifBellUnread` (EN+UR).
+- The tenant name is gone from the header (identity lives in the account sheet), per the file.
+- Avatar content is `initialsOf(session name)` — the 140/151 identity FALLBACK; a user with no uploaded photo
+  reads as initials, never as a blank circle.
+
+### §2 Search inside the chrome, sticky on scroll
+
+The `.mpos-search` row moved out of the body into `.mchrome__srch`, so it stays stuck while the title row goes.
+Collapse maths is pure and unit-tested: NEW `packages/shared/src/mobile-chrome.ts` → `chromeCollapse(scrollTop,
+range, reducedMotion)` with the file's own `CHROME_COLLAPSE_RANGE = 84`. `PosMobileChrome` writes the progress to
+`--mp-chrome-c` on the document element every frame (rAF-throttled, `passive` scroll listener) and flips
+`is-collapsed` at the file's 0.02 threshold; `prefers-reduced-motion` turns the slide into a switch (c snaps 0/1).
+
+**Geometry decision (recorded per §2's "use the file's own geometry"):** the live shell has no `.mstatus` bar (the
+safe-area inset takes its place) and no `.mscroll` — the window scrolls `.mp-shell-main`. The file's `--mchrome` /
+`--mgap` tokens were therefore re-homed onto `.mp-shell[data-page-chrome='pos'] .mp-shell-main`:
+`--mchrome:117px` (title row 58 + scan row 58 + hairline) and `--mgap:14px`, with the padding shrinking by **58px**
+— the title row's REAL height — rather than the file's 84px. The file's 84px is its scroll RANGE; subtracting it
+from the padding would have pulled content 26px under the collapsed chrome, and §2's stated purpose is that "the
+scroll padding matches the collapsed and expanded chrome heights". A `min-height:calc(100dvh + 96px)` on main
+guarantees the collapse range is always scrollable, so the browser can never clamp the scroll and fight the
+shrinking padding (the one way a scroll-linked padding can oscillate).
+
+### §3 Scan button
+
+`.mscan` already carried the file's box/radius/tint/icon (38×38, radius 12, brand-teal + inset ring, 20px icon at
+stroke 2.4); the missing declaration was `:active { background: var(--accent-press) }`, now added.
+
+### §4 Camera scanning (new capability)
+
+NEW `apps/web/app/(app)/pharmacy/pos/BarcodeScanner.tsx` + NEW `packages/shared/src/barcode-scan.ts`.
+
+- `.mscan` now opens the camera (`getUserMedia`, `facingMode: environment`). It no longer re-runs the text search —
+  Enter still does that, and the field still takes typed and USB-wedge input unchanged.
+- **Two decoders, one surface.** `BarcodeDetector` where the platform ships it (Android/Chromium); otherwise the
+  frame is drawn to a canvas and read by the BUNDLED scanline decoder — which is the path every iOS PWA takes.
+  No dependency was added: the decoder is ~350 lines of pure TypeScript covering **EAN-13, UPC-A, EAN-8 and
+  Code 128** (retail pack codes plus the tenant-generated unit labels of 184), width-ratio based so it reads near
+  or far, retrying 11 rows out from the centre band because one scanline through a tilted label often misses.
+- **Permission is a state, not a crash:** denied / no camera / unsupported browser / other error each render an
+  explained surface with "Back to search"; the counter keeps selling. Torch is offered only when the track reports
+  the capability; Escape and the `.mic` close.
+- A hit goes through the SAME path a wedge scan takes — `runSearch` → `/pharmacy/pos/scan` → 184's `resolveBarcode`
+  (unit barcode adds that unit, legacy medicine barcode adds one base unit) — then the scanner closes and the line
+  is added. Cart and commit logic untouched. The mockup depicts no scanner, so the surface is composed from kit
+  parts (`.mic` controls, viewfinder band matching the decoder's own read band).
+
+### §5 Cart line anatomy
+
+- Close (×) already sat top-right (`.mline__rm--tr`) — verified against the file (32×32, radius 10, top 10, end 12).
+- Quantity is now DIRECTLY TYPEABLE on mobile: the `<b>` became an `<input type="number" inputMode="numeric">`
+  carrying `data-qtyline` (so Alt-Q reaches it), with the ± controls kept. The 132/134 calculator behaviour is
+  unchanged — `setQty`/`blurQty` are the same functions the desktop line uses, so clearing to zero still keeps the
+  line until blur and the over-sell cap still applies in the selected unit. Deviation recorded: the field is 34px
+  wide, not the file's 26px, because the file's `<b>` never had to hold a typed four-figure quantity.
+
+### §6/§7 Full-body per-selector diff against `pos-mobile.html`
+
+Fixed (live → file): `.mp-pos2--mobile` padding-bottom 150px → **80px** (96px shell + 80px = the file's 176px, so
+the floating bar clears content by the file's own margin and the 126 no-overlap rule holds); `.mlabel` padding
+`4px 4px 0` → **`2px 4px`**, letter-spacing token → **.08em**; `.mline__v` 13.5px → **14px**; `.mbar` gap 10 →
+**12**, padding `0 10px 0 14px` → **`0 12px 0 18px`**; `.mbar__t b` 18px → **20px**; `.mline .unitsel` 40px/90px/
+radius 12 → **44px/96px/`--radius-md`** and `.unitsel__v b` 12px → **12.5px** (the file has no mobile override
+here); ADDED `.heldrail` mobile bleed `margin:0 -3px 2px; padding:0 3px`; ADDED the file's `.mscroll .disc*` phone
+overrides (card radius 18 / padding `14px 14px 16px` / gap 11, seg button 46×40, `.disc__in` 44, `.disc__chip`
+44×`0 14px`); ADDED `.mscan:active`; ADDED `.mic .dot` and `.mic--avatar`. Body ORDER brought to the file:
+held rail → search results → sale-context row → "IN THIS SALE" → cart → discount (results previously sat below the
+context row). Verified already-matching: `.mpos-search` (46px, radius 15, `0 6px 0 14px`, 18px icon, 15px input),
+`.heldrail__lbl`/`.heldpill` phone sizes, `.msalectx`/`.msalectx__btn`, `.mfeed`, `.mline`/`.mline__t`/`.mline__q`/
+`.mline__rm`, `.mline__price`/`.mline__add`, `.mbar__ico`/`.mbar__go`, `.mdock` (shell-owned), `.mpick`.
+
+**Two deliberate departures, both rule-driven, not drift:**
+1. The file's `.mtotal` ("Total payable") inside `.mfeed` is NOT rendered — the file shows a grand total there AND
+   in `.mbar`, and the 113/122 rule is exactly ONE grand total per width. `.mbar__t b` remains that node; the feed
+   keeps the `.msum` subtotal/discount/tax breakdown, which is not a grand total.
+2. `.mchrome` keeps the live shell's `--glass-bg` + backdrop blur rather than the file's flat
+   `color-mix(surface-card 92%)` — the file itself notes that flat fill is a static-spec compositor workaround
+   (`.specpage` guard), and the real app is the glass case.
+3. `.msalectx` collapses to one column when the user lacks `pharmacy.backdateSale` (the file always shows both).
+
+### Tests written (controller runs them)
+
+NEW `apps/api/src/pharmacy/pos-barcode-scan.spec.ts` — a tiny barcode PRINTER in the spec renders real symbols into
+luminance rows, and the decoder reads them back: EAN-13, UPC-A (returned as the 12 digits actually printed),
+EAN-8, Code 128 set B, an upside-down label, a soft/low-contrast camera image, a whole frame where the exact middle
+row is blank, RGBA→luminance, plus check-digit vectors (5901234123457 / 036000291452 / 96385074) and a noise row
+that must decode to NULL rather than invent a code. `chromeCollapse` covered for range, over-scroll bounce, the
+collapsed threshold and reduced motion.
+
+### Gates (agent-run)
+
+`pnpm lint` PASS (only the pre-existing unused-disable warning in doctor-portal.repositories.ts).
+`pnpm typecheck` PASS. Unit/build/e2e left to the controller per AGENT.md §4A.
+
+### Files
+
+NEW: packages/shared/src/barcode-scan.ts, packages/shared/src/mobile-chrome.ts,
+apps/web/components/shell/mobile-chrome-slot.tsx, apps/web/app/(app)/pharmacy/pos/PosMobileChrome.tsx,
+apps/web/app/(app)/pharmacy/pos/BarcodeScanner.tsx, apps/api/src/pharmacy/pos-barcode-scan.spec.ts.
+CHANGED: packages/shared/src/index.ts, apps/web/components/shell/AppShell.tsx,
+apps/web/components/shell/NotificationBell.tsx, apps/web/app/(app)/pharmacy/pos/PosClient.tsx,
+apps/web/app/globals.css, packages/i18n/src/messages/en.json + ur.json (pharmacyPos.v4 block + notifBellUnread,
+EN↔UR parity kept).
