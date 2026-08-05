@@ -7618,3 +7618,116 @@ The phone's sheet already renders keypad-free with Cash · Card · Online · Spl
 
 ### Note for 202
 §6 demands "every item verified on a real device/PWA, not only responsive DevTools". That is a human/device verification the agent cannot perform in code; it belongs to the 202 verification pass.
+
+---
+
+## 201 — pos-keyboard-map — DONE (2026-08-05)
+
+**WORK TYPE:** FEATURE — branch `feature/201-pos-keyboard-map`. Spec: `/specs/201-pos-keyboard-map.md`.
+No CODEREF companion exists for 201 (the range files stop at 113–121).
+
+**Problem.** The owner wants the counter operated entirely by keyboard, on the conventions retail
+staff already know. 111 shipped a rebindable map and 197 completed it enough to ring a sale, but the
+two disagreed with the owner's list on almost every key: park was `F6`, payment `F8`, print `F9`,
+attach-customer `F10`, new sale `F1`. There was no lock, no held-sales surface a keyboard could
+drive, no line discount for `D` to open, and the shortcuts dialog documented three sections out of
+eight.
+
+**Schema/RLS/auth/permissions/flags:** none, none, none, none, none. Per-user overrides (111) are
+unchanged and still win over these defaults. No new endpoint; the lock reuses `/auth/pin/*` (178).
+
+### The map (§1) — what changed and why
+
+`packages/shared/src/pharmacy-shortcuts.ts` is the single source of truth and was re-cut to the
+owner's list. Adopted: `F2` search · `F3` customer · `F4` sale discount · `F8` park ·
+`Shift+F8` held sales · `F9` quantity of the last line · `F10` **or** `Ctrl+Enter` payment ·
+`Alt+N` new sale · `Ctrl+Shift+L` lock · `?` help. Navigation (`Alt+I/P/R/D`) and the sale date
+(`Alt+T`, 197) are untouched — 201 supersedes nothing there, and dropping the sale date would have
+removed the only keyboard route to a shipped control.
+
+SUPERSEDED / RETIRED, recorded here as the spec asks:
+* `pos.newSale` F1 → `Alt+N`; `pos.selectCustomer` F10 → `F3`; `pos.holdSale` F6 → `F8`;
+  `pos.resumeSale` F7 → `Shift+F8` (and it now OPENS the held list rather than resuming the newest
+  hold blind); `pos.focusQtyLast` `Alt+Q` → `F9`; `pos.takePayment` F8 → `F10`.
+* `pos.addToCart` (F3) RETIRED — `Enter` on the highlighted result is what the owner's Navigation
+  group means by "select the focused option", and F3 was needed for the customer.
+* `pos.incrementQty` / `pos.decrementQty` (Ctrl+Arrows) RETIRED — superseded by `+`/`-` on the
+  focused cart line, which acts on the line the cashier is looking at rather than on `lines[0]`.
+* `pos.printReceipt` (F9) RETIRED — printing is parked by owner decision and §3 defers every print
+  binding; F9 was needed for the quantity.
+
+**Judgement call — a second combo.** "F10 or Ctrl+Enter" needed one action to answer two keys, so
+`ShortcutActionMeta` gained an optional `alsoCombo`: a shipped ALIAS, not a rebindable slot. A
+personal override replaces the primary and leaves the alias alone, and `matchShortcut` tries every
+bound combo before any alias, so a user who rebinds something onto `Ctrl+Enter` is never shadowed.
+
+**The typing rule.** `use-shortcuts` widened its "fires even inside a text field" exception from
+function keys + `Escape` to those plus any `Ctrl`/`Alt`/`Meta` leader (§1's own rule) — otherwise
+`Ctrl+Enter` and `Alt+N` are unreachable from the scan field, which is where a cashier lives. The
+map also stands DOWN entirely while a dialog is open, so `F3` means the held window's customer
+search, not the sale's customer picker behind it. The POS's capture-phase `/` handler now ignores
+events from inside a dialog for the same reason.
+
+### The surfaces the map needed
+
+* **Held-sales window (`Shift+F8`)** — new `HeldSalesDialog` in `PosClient.tsx`. The rail can only
+  show what fits and cannot be walked; the window searches by reference (`/`) or customer (`F3`),
+  moves with `↑`/`↓`/`Home`/`End`, restores with `Enter`, cancels with `Del` (through the existing
+  centred confirmation), closes with `Esc`. It restores through the SAME `resumeHeld` the rail
+  calls. A rail pill opens it for the pointer.
+* **Line discount (`D`)** — §1 binds `D` to "apply a line discount" and does not defer it. The
+  money layer has carried `lineDiscountPct` since 102 (server re-totals with it, the park payload
+  stores it, `computePosLine` clamps it); only the ENTRY was missing. `PosLine` gained
+  `discountPct`, wired into the totals, the checkout body, the park payload, the resume and the
+  local-cart rehydration (a pre-201 cart reads as none), with a small dialog for entry and a chip
+  on the row at both tiers so a lower total is never silent.
+* **Sale discount (`P`/`R`/`0`)** — `F4` now focuses the discount CARD, not its number field:
+  focusing a text input first would make the three letters unreachable under the spec's own rule.
+  `Enter` hands over to the field.
+* **Payment digits** — the tile row is now Cash · Card · Online · Split · Credit so the printed
+  digit hints match `1`–`5`; `=` presses `Exact`. `Backspace` needs no binding (it is the tender
+  field's own key, which is why the digits stand down inside that field).
+* **Confirmations (`Y`/`N`)** — added to the ONE kit `ConfirmDialog`, inert inside fields, and only
+  for a controlled dialog (an uncontrolled one cannot say whether it is on screen).
+* Cart line also gained `Home`/`End`, `Shift+Del` (clear the whole sale, confirmed) and `Esc` back
+  to search; the search field gained `Ctrl+Backspace` and `↓`-into-cart. Focus rings were added for
+  the cart row and the discount card — a keyboard-only sale has to show where it is.
+
+### §2 — the lock
+
+`Ctrl+Shift+L` raises the EXISTING PIN gate (178/179) over the sale: `requestPinLock()` clears the
+"confirmed this app-open" flag and fires a window event; `PinGate` renders the same `PinScreen`
+over the still-mounted app. **Judgement call:** the on-demand lock keeps the page MOUNTED (the idle
+gate keeps replacing it) so unlocking returns to the exact cart — customer, discount, resumed hold
+and all — instead of the reduced cart local storage would rebuild. It is a full-screen opaque
+surface with focus pulled back in on `focusin` and body scroll locked, over a screen this same user
+was looking at a second earlier, so nothing is revealed. "Switch user" is the gate's own full
+sign-out. Two more calls: the gate applies whenever the server says this user's PIN is required and
+enrolled (not only in an installed PWA — a lock that did nothing in a desktop browser would be
+useless at the counter), and where no PIN applies the shortcut offers a confirmed SIGN-OUT instead,
+per §2's "a lock anyone can dismiss is theatre". The PIN itself is now typeable — reaching a lock
+by shortcut and then needing the mouse to leave it would defeat the point.
+
+### §3 / §4
+
+Deferred bindings are recorded in code as `DEFERRED_SHORTCUTS` (with reasons) and asserted ABSENT
+from the live map, so a later reading of the spec finds the decision instead of re-litigating it.
+The shortcuts dialog now renders all eight groups in the spec's order from
+`SHORTCUT_PANEL_ORDER` + `FIXED_SHORTCUTS`, shows an action's alias beside its key, and the
+settings screen does the same. Inline `.btn__kbd` hints added to Park (`F8`) and Proceed (`F10`).
+
+**Files:** `packages/shared/src/pharmacy-shortcuts.ts`; `packages/ui/src/components/confirm-dialog.tsx`
+(+ spec); `apps/web/lib/{use-shortcuts.tsx,pin.ts}`; `apps/web/components/shell/PinGate.tsx`;
+`apps/web/app/(app)/pharmacy/pos/{PosClient.tsx,PaymentPanel.tsx,ShortcutsHelp.tsx}`;
+`apps/web/app/(app)/pharmacy/shortcuts/KeyboardShortcutsClient.tsx`; `apps/web/app/globals.css`;
+`packages/i18n/src/messages/{en,ur}.json` (EN+UR parity verified by flattening both trees);
+`apps/api/src/pharmacy-shortcuts/pharmacy-shortcuts.service.spec.ts`.
+
+**Tests written:** the 197 §3 suite was replaced by a 201 §1 suite — every adopted key, the retired
+actions' absence, alias matching, override-beats-alias, an alias-inclusive conflict-free assertion,
+the eight documented groups, the deferred list's absence from the live map, and a whole-sale
+walkthrough asserting every step of §5's sequence is bound. Kit tests cover `Y`/`N`.
+
+**Gates:** `pnpm lint` and `pnpm typecheck` run once at the end — both clean (the single API
+warning is a pre-existing unused eslint-disable in `doctor-portal.repositories.ts`, untouched here).
+Vendor surfaces untouched. Unit/build/e2e left to the controller per AGENT.md §4A.
