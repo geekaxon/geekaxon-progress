@@ -6,15 +6,15 @@
 
 ## Current Status
 - **Project:** Marham Patti — multi-tenant white-label healthcare platform.
-- **Phase:** **PHASE 20** — owner-test round 4 (203→207): the mobile-nav race, customer credit limits, the danger sign-out, POS search rows, and a verification pass for what two rounds of blockage made untestable.
-- **Last completed:** **206 — pos-mobile-search-rows**.
-- **Next:** **207 — round-4-verification** — /specs/207-round-4-verification.md
-- **Branches:** through 202 on staging (c350bd6). 203–207 each on fix/<N>.
-- **Parked:** printing (Bluetooth/wired); per-page menu permissions.
+- **Phase:** **PHASE 20** — POS owner-test rounds complete through 209.
+- **Last completed:** **209 — customer-credit-render-and-sheet-fixes**.
+- **Next:** none — awaiting next spec block
+- **Branches:** through 208 on staging. 209 on fix/209-customer-credit-render-and-sheet-fixes.
+- **After 209:** POS sign-off expected, then the Inventory test round (186 built, never tested), then Purchases + Suppliers.
+- **Parked:** printing (needs ESC/POS — Bluetooth + wired); per-page menu permissions; mobile scroll-animation smoothness.
 
 ### Recent steps
-- **206 — pos-mobile-search-rows** — DONE (2026-08-05) — a search result on the phone reads in full and says how its expiry stands.
-- **205 — mobile-account-sheet-logout** — DONE (2026-08-05) — signing out now looks like the serious thing it is, not one more row in the list.
-- **204 — customer-credit-visibility** — DONE (2026-08-05) — a customer's limit, what they owe and what is left now show wherever they are chosen.
+- **209 — customer-credit-render-and-sheet-fixes** — DONE (2026-08-05) — a customer's credit standing survives a credit-off tenant; dialogs stand above sheets.
+- **208 — pos-final-fixes** — DONE (2026-08-05).
 
 > Older steps in PROGRESS-HISTORY.md

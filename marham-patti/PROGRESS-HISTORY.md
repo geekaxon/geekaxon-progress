@@ -7987,3 +7987,323 @@ all is grey but still sellable, and one product's stock never colours another's.
 
 **Gates.** `pnpm lint` clean (one pre-existing unrelated warning in doctor-portal). `pnpm typecheck`
 clean. `pnpm test:unit` / `test:e2e` / `build` deliberately not run (controller runs the full gates).
+
+## 207 — round-4-verification (2026-08-05) — WORK TYPE: FIX (branch fix/207-round-4-verification)
+
+Spec: /specs/207-round-4-verification.md. Block-final for Phase 20. No CODEREF in range.
+
+### What this step is
+202 was written to verify the same items and could not: 198's nav fix did not work, so the
+mobile surface stayed unreachable. 203 fixed it for real, so this is the FIRST genuine
+verification of behaviours shipped in 187 and 195. Each item below is recorded pass / fixed /
+unverified. Nothing needing a device or two live logins is recorded as passed (the 148 rule).
+
+### §1 — the mobile behaviours
+
+- **§1.1 sheet drag physics — FIXED (two defects), then PASS by measurement.** The owner had
+  called this "not smooth" twice without ever being able to reach a sheet, so the deployed
+  behaviour was treated as unknown and read line by line rather than assumed good. Two real
+  defects were found in `packages/ui/src/components/mobile-sheet.tsx`:
+  1. `onPointerCancel` was wired literally to `onPointerUp`, so a gesture the PLATFORM took
+     back — a system edge swipe, a second finger, the compositor claiming the touch, the app
+     being backgrounded mid-pull — was scored through `sheetDragOutcome`. A `pointercancel`
+     carries wherever the finger last was, so a long pull the owner never completed dismissed
+     the sheet under them. There is now a dedicated `onPointerCancel` that always springs
+     back and never calls `onClose`.
+  2. `will-change: transform` was cleared in the same statement block that STARTED the spring
+     back, destroying the compositor layer on the first frame of the one animation a thumb
+     watches most closely. The spring is now factored into `springBack()`, which keeps the
+     promotion for the motion's duration and releases it after `SHEET_MOTION_MS` — and only
+     if no fresh gesture has taken the panel over meanwhile.
+  Everything else §1.1 lists was verified as already correct and already pinned: 1:1 tracking
+  and the detached entry keyframe, scrim opacity tracking the drag, the velocity window and
+  flick rule, spring-back below the threshold, the single layout read per gesture, the
+  grip/header engage and the body-scrolled-to-top engage. The POS customer picker drives the
+  same hook through its own `.mpick__hd` / `.mpick__list` selectors and had NO test of its
+  own — that override is now covered, engage and release.
+  Residual UNVERIFIED: how it feels under an actual thumb on the installed PWA. Physics and
+  frame discipline are asserted; "smooth" is a device judgement.
+- **§1.2 no scrollbars on tenant mobile — PASS by inspection.** One block owns it, scoped to
+  `html:has(.mp-shell[data-surface='tenant'])` and every descendant (sheets, dialogs and
+  drawers portal to `<body>`, so scoping to the shell element would miss the layers that
+  actually scroll), inside the shell's own 767.98px breakpoint, and it touches no `overflow`
+  — scrolling itself is untouched. UNVERIFIED: a real Android PWA scrolled by hand.
+- **§1.3 device back steps one layer — PASS.** Already proven interleaved with dock/sheet
+  navigation in `round-3-verification.spec` and in `layer-history.spec`; re-read against the
+  live helper here and unchanged. Added a sweep asserting every in-layer navigation trigger
+  still DECLARES itself (AppShell, MobileMoreSheet, NotificationBell, GlobalSearch,
+  PosClient) with the pathname effect behind them as the safety net — miss one call site and
+  that surface goes back to bouncing the owner to where they started.
+- **§1.4 themed desktop scrollbars — PASS by inspection.** Both themes take their own ramp
+  (dark is not the light greys inverted), the whole block is `:where()`-wrapped so it is a
+  DEFAULT and every deliberate per-element rule still wins, and the scope is the tenant
+  SURFACE, never the `.mp-shell` class the vendor console also renders. UNVERIFIED: how the
+  pill reads on a real desktop browser in both themes.
+
+### §2 — realtime
+
+Server truth was already proven end to end in `apps/api/src/pharmacy/pos-screen-v2.spec.ts`:
+A holds → B resumes under B's own login → B completes → the hold carries
+heldBy-A / resumedBy-B / completedBy-B, exactly one sale and one decrement exist, and A's
+second attempt is refused with "already completed by Ayesha R.". Held-sale numbering is
+covered in `pos-held-and-search.spec.ts`. **PASS.**
+What had never been covered is the WIRING between server and counter, so that is asserted
+now: one SSE stream merging both scopes with each frame named by its own event; the client
+applying `stock.updated` to BOTH the open search results and the cart lines (not one or the
+other); `heldSale.updated` redrawing the rail from the event itself and carrying the
+attribution names; the refusal sentence naming who finished it, in EN and UR; and the feed
+reconnecting with bounded backoff over `apiFetch` (native EventSource cannot carry the
+Bearer token). **PASS.**
+**UNVERIFIED:** two live sessions on the same tenant and branch under different logins,
+which is what the spec actually asks for. It needs two devices and two accounts; it cannot
+be produced from inside the repo, and it is NOT recorded as passed.
+
+### §3 — round-4 regression sweep
+
+Source sweep added over 203 (every in-layer nav trigger declares), 204 (limit, outstanding
+and headroom on the customer detail, the limit still stated on a settled row in the list, the
+POS credit standing, and a cash-only customer refused a credit leg at the panel as on the
+server — EN+UR), 205 (sign-out is `.btn.btn--destructive.macct__logout` in the sheet foot
+with no row anatomy left on it, while the rows above keep theirs; the destructive variant
+exists outside `.mp-kit`, which is where the live shell mounts the sheet), 206 (four expiry
+dot states including "not tracked", the expiry stated in WORDS beside the dot so colour is
+never the only signal, per-unit line and full description — EN+UR). Plus round 3 still
+holding: no keypad on any POS surface, nav "POS" vs heading "New sale", the System theme
+icon, the one status block rendered under both payment layouts, and the keyboard-only sale
+bindings. Also pinned: the drag-dismissed sheet and picker do not restart their exit keyframe
+from rest, the handles take `touch-action: none`, and overscroll stays contained.
+
+### Files
+
+- `packages/ui/src/components/mobile-sheet.tsx` — the two drag fixes (`springBack()`, a real
+  `onPointerCancel`), plus the header note.
+- `packages/ui/src/lib/round-4-verification.spec.tsx` — new; §1.1 behaviour, §1.2/§1.4 CSS,
+  §2 wiring, §3 sweep.
+- `PROGRESS.md`, `PROGRESS-HISTORY.md`.
+
+### Decisions
+
+- The verification pass follows 202's shape: assert what a suite can hold forever, and record
+  everything that needs a device or a second login as UNVERIFIED rather than dress it up as a
+  pass. Two rounds were lost to exactly that dressing-up.
+- The two drag defects were fixed here rather than deferred: §4 says failures are fixed within
+  this step, and both are one-function changes in the shared hook, so every sheet, the picker
+  and every future layer inherit them.
+- No schema, no RLS, no vendor surface touched.
+
+### Gates
+
+`pnpm lint` and `pnpm typecheck` run once at the end, clean. Unit/e2e/build left to the
+controller per the standing rules.
+
+### End of block
+
+207 is the last authored step. PROGRESS.md `Next` is set to `none — awaiting next spec
+block`. Parked and unchanged: the print/receipt screen (Bluetooth and wired); per-page menu
+visibility by permission; the deferred shortcut bindings listed in 201 §3. Expected next
+after owner sign-off: the Inventory screen test round against `inventory-desktop.html` /
+`inventory-mobile.html`.
+
+---
+
+## 208 — pos-final-fixes — DONE (2026-08-05)
+
+**Branch:** `fix/208-pos-final-fixes` (WORK TYPE: FIX). Spec: `/specs/208-pos-final-fixes.md`.
+Phase 20, owner-test round 5 — the expected final POS fix round.
+
+### Mockup gate (spec §Mockup) — PASSED before any code
+Both recommitted files were checked first, as the spec demands:
+- `pos-desktop.html` + `pos-mobile.html`: the `.mdot` family (`--ok/--soon/--exp/--none`) present in both.
+- Customer-credit row states present in both, including "Over limit" and "No credit account".
+- `pos-mobile.html`: the `heldsheet` block present (`.heldsheet`, `.heldrow*`, `.heldsum`, `.heldempty*`).
+Nothing was composed from prose.
+
+### Per-selector declaration diff (the recommitted files vs the app)
+- `pos-desktop.html` draws the desktop search-row dot as its OWN anatomy — `.pos-res__dot`
+  (`position:absolute; top:50%; inset-inline-start:8px; 6px; ringed via box-shadow`), NOT the
+  phone's `.mdot` (which the file also carries, unused, in the shared block). The row itself
+  gains `position:relative` and `padding-inline-start:20px` to reserve the space. Adopted
+  verbatim; the app's `.pos-res` had neither and had no `.is-out` treatment at all.
+- Customer option: new `.pos-opt__due` / `--zero`, `.pos-opt--over` (a MODIFIER — the app had
+  `.is-over`), `.pos-opt__flag` (a solid danger chip with a glyph — the app had the soft
+  `.pos-opt__over` pill), and `.pos-opt__t small .sep`. Phone mirrors: `.mpick__due` / `--zero`,
+  `.mpick__row--over`, `.mpick__flag`. All adopted; the retired names are gone from both source
+  and stylesheet, so a stale class cannot silently style nothing.
+- `heldsheet` family adopted verbatim under `.mp-mobile`.
+
+### §1 Desktop expiry dot
+Desktop search rows now carry the four-state dot from the SAME `expiryDot()` in `@mp/shared`
+the phone uses (206) — no second implementation, no new threshold (104's near-expiry window).
+Out-of-stock rows get NO dot, per the desktop mockup's own `is-out` rows and the 206 owner
+decision, so the dot means exactly one thing; the row instead gains the `is-out` dim + the
+`pos-res__stk--out` text signal, which the app had never rendered on desktop at all.
+
+### §2 Customer credit limit and balance — FOURTH report: WHICH LINK WAS BROKEN
+The spec asked for the response body before any UI work. **No database or deployment is
+reachable from the build host** — the repo `.env` carries only placeholders (`USER:PASSWORD`)
+and nothing runs locally — so the empirical step of §2.1/§2.3 could not be performed here and
+is recorded as NOT DONE by the agent; it remains an owner/deploy-side check. The chain was
+instead traced end to end in source, and 204's own suite
+(`apps/api/src/pharmacy/customer-credit-visibility.spec.ts`) already proves the server half.
+
+Verdict — **the defect was never server-side**, which is why three render attempts failed to
+fix it and why a fourth data change would have been wasted:
+- Persist path CLEAN: form → `parseCreateCustomer`/`parseUpdateCustomer` → `createCustomer`/
+  `updateCustomer` → Prisma `CUSTOMER_SELECT`. All three credit columns written and read back.
+- Projections CLEAN: `listCustomers` returns `CustomerOptionView` = base record + `outstanding`,
+  rolled in ONE `customerBooks()` read for the whole tenant (no per-row round trips);
+  `listCustomerSummaries` and `customerLedger` carry limit + outstanding + `overLimit`.
+- POS mapping CLEAN: `outstanding → currentBalance`, `allowCredit` defaulted true.
+
+The breaks were all in the last two links, and there were three of them:
+1. **The label said the currency twice.** `creditStanding` was `"Limit Rs {limit} · Due Rs {due}"`
+   fed `rs()` output, which already prefixes — so the subtitle rendered
+   "Limit Rs Rs 50,000.00 · Due Rs Rs 0.00". Exactly the §5 defect, in the very string the owner
+   was looking for. Replaced by `creditLimitPart`/`creditDuePart` = "Limit {amount}" / "Due
+   {amount}"; the shared money formatter is the only thing that names the currency.
+2. **The phone number vanished the moment a customer had a limit**, so a credit row and a cash
+   row had different shapes and neither matched the mockup's `phone · Limit … · Due …`.
+3. **Two of the four mockup states did not exist.** A customer with no limit set fell through to
+   a bare phone subtitle — indistinguishable from "no data" — instead of the mockup's
+   "No credit account". Now all four states render: normal · outstanding due · over limit ·
+   no credit.
+
+Plus one genuine DATA-LOSS defect found while tracing the persist path:
+`CustomersClient` posted `creditLimit: 0, openingBalance: 0, allowCredit: false` whenever the
+tenant credit setting (99) was off — and the edit DTO writes every field it is given. Saving a
+customer's phone number on a credit-off tenant therefore WIPED their limit, opening balance and
+credit permission. The credit keys are now omitted entirely when credit is off, so the stored
+values stand. (This is a plausible historical cause of "the limit I entered is not there".)
+
+Rule extraction: `customerCreditState()` moved into `@mp/shared/pharmacy-customers`, beside
+`isOverCreditLimit` which it reuses — one resolution for the desktop select, the phone picker
+and the customers screen, unit-tested across all four states plus the NaN payload. The two
+pickers now share ONE subtitle renderer (`<CustomerStanding block="pos-opt"|"mpick">`), so a
+future tier cannot drift again. Gated on the tenant credit setting; walk-in unchanged.
+Customer list + detail already rendered limit/outstanding correctly (204) — left untouched.
+
+### §3 "All held" as a bottom sheet (mobile)
+Rebuilt as `HeldSalesSheet` on `<MobileSheet>`: header + scrollable `.heldsheet` rows
+(customer, **#number**, line count, total, time held), tap-to-restore, per-row discard through
+the unchanged 190 §2 permission + confirmation path, a `.heldsum` footer, and the `.heldempty`
+empty state. Restore and discard are the SAME two callbacks the rail and the desktop window
+call — one `heldProps` object feeds both shapes, so there is no second way to take over a hold.
+Inherits the sheet family wholesale: slide, drag-to-close from grip/header, scrim, Escape, and
+`useLayerHistory` (203) — the device back button closes the sheet, not the POS. Desktop keeps
+its centred window.
+
+### §4 One grip anatomy — the audit, and what actually diverged
+Swept every sheet implementation. `<MobileSheet>` is the single owner of
+`<span className="sheet__grip" aria-hidden>` and of `handle: '.sheet__grip,.sheet__hd'`, and it
+is what the More sheet, the account sheet, notifications, the date picker, payment, add-customer
+and unit-select all render through — so **the More sheet's grip element and header are already
+identical to the avatar menu's**; the two differ only in `.msheet__hd`'s translucent background,
+which is the reference's own inline style and stays. Divergences found and recorded:
+- `HeldSalesDialog` on the phone — a centred dialog with no grip at all. Fixed by §3.
+- `apps/web/app/ui/StaffKit.tsx` — the kit's static preview hand-rolled `<div class="sheet__grip">`
+  where the component renders a `<span … aria-hidden>`. Brought onto the shared element so the
+  picture cannot drift from the thing it pictures.
+- `.mpick` (mobile customer picker) — deliberately NOT a bottom sheet: `pos-mobile.html` draws it
+  as a full-screen panel (`position:absolute; inset:0`) with no grip, dragged by `.mpick__hd`.
+  Left as-is; it is not an outlier, it is a different component in the file.
+A test now asserts no tenant sheet source contains its own grip markup.
+
+### §5 Duplicated currency prefix
+`discountMaxRs` was `"Max Rs {amount}"` around an `rs()`-formatted amount → "Max Rs Rs 378.00".
+Now `"Max {amount}"` (UR likewise dropped its trailing روپے). Percent mode unchanged. Swept for
+the same pattern elsewhere: the only other instance was `creditStanding` (§2 above); both fixed.
+
+### Files
+- `apps/web/app/(app)/pharmacy/pos/PosClient.tsx` — desktop dot + `is-out` row; `creditStateOf`
+  onto the shared rule; `CustomerStanding` + `OverLimitFlag` renderers; `HeldSalesSheet`;
+  `heldProps` shared by both shapes.
+- `apps/web/app/(app)/pharmacy/customers/CustomersClient.tsx` — credit fields omitted, not zeroed.
+- `apps/web/app/ui/StaffKit.tsx` — shared grip element.
+- `apps/web/app/globals.css` — `.pos-res__dot` family + `is-out`; `.pos-opt__due/--zero/--over/__flag`
+  + `.sep`; `.mpick__due/--zero/__row--over/__flag`; the `heldsheet` family.
+- `packages/shared/src/pharmacy-customers.ts` — `customerCreditState()` + `CustomerCreditState`.
+- `packages/i18n/src/messages/{en,ur}.json` — EN+UR parity for every new key; two duplicated
+  currency prefixes removed.
+- `apps/api/src/pharmacy/pos-final-fixes.spec.ts` — the credit rule, four states + NaN; dot states.
+- `packages/ui/src/lib/pos-final-fixes.spec.tsx` — the source + stylesheet sweep for §1–§5.
+
+### Gates
+`pnpm lint` and `pnpm typecheck` run once at the end: clean. (One pre-existing unused
+eslint-disable warning in `doctor-portal.repositories.ts`, untouched by this step.) Unit/e2e/build
+left to the controller per AGENT.md §4A. Payment, credit, split, FEFO, decrement and idempotency
+byte-identical; vendor untouched; no schema change, no migration.
+
+### Checkpoint note
+The spec's §7 ends the block with `[HUMAN_REQUIRED]`. That marker is reserved for a missing spec
+or infra the agent cannot do in code (CLAUDE.md rule 8 / AGENT.md §2) and is explicitly banned for
+anything approval- or block-end-related, so this step ends with `[CHECKPOINT]` and PROGRESS.md's
+`Next:` carries the spec's own wording: `none — awaiting next spec block`.
+
+---
+
+## 209 — customer-credit-render-and-sheet-fixes — DONE (2026-08-05)
+
+**Branch:** `fix/209-customer-credit-render-and-sheet-fixes` · **Spec:** `/specs/209-customer-credit-render-and-sheet-fixes.md` · WORK TYPE: FIX (presentation only).
+
+### §1 — the sixth report, and the line nobody looked at
+
+**No backend file was touched.** `pharmacy.repositories.ts`, `pharmacy.service.ts`, `pharmacy.dto.ts`, `CUSTOMER_SELECT`, the Prisma schema and every migration are unmodified — confirmed by the diff.
+
+**The responsible component was not a component.** The spec's §1.1 boundary sent me to the customer option/row renderers. They were already correct: `CustomerSelect` (PosClient ~3550) and the phone's `mpick` rows (~3990) both compose `<CustomerStanding>`, which draws the recommitted mockups' exact anatomy — `phone · Limit … · Due …`, `.pos-opt__due` / `.mpick__due`, `--zero`, `--over`, `__flag` — and the CSS for all of it is in `globals.css`. The customers list and detail render limit, outstanding, over-limit and headroom too. Every i18n key exists in both languages.
+
+The defect was one line of shared resolution, `customerCreditState` in `packages/shared/src/pharmacy-customers.ts`:
+
+    if (!input.creditEnabled) return { kind: 'off', … };
+
+`creditEnabled` is the tenant setting (99), and `PHARMACY_SETTINGS_DEFAULTS.creditEnabled` is **false** — so every tenant that has never opened the pharmacy settings page had an unconditional, silent veto on every credit surface: both POS pickers, the customers list columns/filters/stats, the detail gauge, and the credit-limit FIELD in the customers form. Meanwhile the POS's own **Add customer** dialog (PosClient ~2032) offers a Credit limit field with **no such gate**. So the owner typed 300 at the counter, it persisted, every payload carried it (their captured response is proof), and every screen was under orders never to mention it.
+
+That is why five rounds passed while the screen stayed blank, and why the suites stayed green: every existing test constructs its case with `creditEnabled: true`. `__fakes__.ts` was never the problem; the setting axis simply had no coverage at all.
+
+**Fix.** New shared predicate `customerHasCreditStanding({allowCredit, creditLimit, outstanding})` — credit allowed AND (a limit set OR money owed). `customerCreditState` now returns `off` only when the customer carries no standing of their own; when they do, it returns `standing` whatever the setting says. The setting keeps its real job (who may tender on credit, whose columns/filters/stats appear), and a tenant with no credit data anywhere still hears nothing. Consequences:
+
+- **POS desktop select + phone picker** — fixed for free, both already route through the shared rule.
+- **`customerStandingParts`** — a standing without a limit is now reachable (owes money, no ceiling). "Limit Rs 0" would be a lie, so the limit part is dropped and the due stands alone; `CustomerStanding` renders limit and due as independent chunks instead of one block gated on the limit.
+- **`CustomersClient`** — `credit` is no longer the raw setting. It is `creditSetting || rows.some(customerHasCreditStanding)`, one derived boolean feeding every existing gate, so the table columns, the phone cards, `OweCell`, the ledger gauge and the form move together.
+
+Money still goes through the shared formatter (one prefix — the 208 §5 lesson); walk-in unchanged.
+
+**Not verified on the deployed page.** §1.3 asks for a browser check against a real customer on the deployed POS; this agent has no browser or deploy access. The diagnosis rests on the owner's captured payload plus the source, which together are decisive. The owner's re-test is the acceptance.
+
+### §2 — the confirmation behind the held-sales sheet
+
+The spec's stated cause does not survive contact: the dialog was **already** portalled to the document root (Radix `Portal` mounts on `document.body`), so it was never inside the sheet's drag transform. It was a plain z-index loss. The kit's live sheet is `z-index: 61` (scrim 60); the shared dialog overlay and its centring layer were Tailwind `z-50`. Both sit in the root stacking context, and 50 < 61.
+
+Fixed on the shared component, so every dialog opened from any sheet is correct: `OVERLAY_LAYER = 'z-[70]'` exported from `dialog.tsx` and read by `DialogOverlay`, the dialog's centring layer and `DrawerContent` (which shares that scrim and had to move with it). Above the sheet family (60/61), below the toast rail (100) and the POS PIN lock (200) — a toast reports what the dialog just did, and the PIN gate is a lock, not a layer.
+
+One real hazard found while checking the focus contract: React events travel the **React** tree regardless of the portal, so a dialog rendered as a React descendant of a sheet delivered its `Escape` to the sheet's own handler (dismissing the sheet out from under the dialog) and its `Tab` to the sheet's focus trap. `MobileSheet.onKeyDown` now ignores any event whose target is outside the sheet's DOM. Layer history is untouched and already correct — dialog pushes after sheet, so back closes dialog then sheet (203 contract intact); Radix returns focus to the trigger inside the sheet on close.
+
+### §3 — the grip audit (all sheets)
+
+Grepped every sheet implementation. **There is no bespoke grip markup anywhere**, and the More sheet's premise is false: `MobileMoreSheet` composes `MobileSheet`, and the More sheet and the account sheet are literally the same component rendered twice from `AppShell.tsx` (~659 and ~680) with different props, inside identical `.mp-mobile.mp-mobile--live` wrappers. They cannot have different grips. `.msheet__sheet` has no CSS at all; `.msheet__hd` adds only a translucent background. Full audit:
+
+| Sheet | Anatomy |
+| --- | --- |
+| `MobileSheet` (`packages/ui`) | **owns** `<span className="sheet__grip">` + `.sheet__hd` |
+| More sheet / account sheet (`MobileMoreSheet` ×2) | composes `MobileSheet` |
+| POS held-sales sheet | composes `MobileSheet` |
+| POS unit picker (`variant='sheet'`) | composes `MobileSheet` |
+| POS add-customer / payment sheets | compose `MobileSheet` |
+| `DatePicker` (`mode='sheet'`) | composes `MobileSheet` |
+| POS customer picker `.mpick` | **no grip — correct**: `pos-mobile.html` draws it `inset:0` full-screen with a back button, not as a bottom sheet |
+| `StaffKit.tsx` gallery | repeats `.sheet__grip` deliberately — a picture of the component, matching it exactly |
+
+208 §4 swept a **hand-maintained file list**, which is precisely how a report comes back twice: a sheet added off the list is never looked at. The new suite walks `apps/web/app`, `apps/web/components` and `packages/ui/src` and asserts `className="sheet__grip"` appears in exactly two files. Nothing to replace — the anatomy was already one; what changed is that it can no longer silently stop being one.
+
+### Tests
+
+- **New** `packages/ui/src/lib/credit-render-and-sheet-fixes.spec.tsx` — §1 the credit-off axis that five rounds never covered (limit stated, debt stated, silence kept for customers with no standing, refusal never a standing, NaN payload), the four surfaces reading one rule, the list deriving its flag from the rows; §2 the overlay layer vs sheet/toast/PIN, portal, sheet ignoring portalled keystrokes, back order; §3 the tree-wide grip audit.
+- **Updated** `apps/api/src/pharmacy/pos-final-fixes.spec.ts` — the 208 case asserting `creditEnabled: false → 'off'` with a real limit is superseded; it now pins what the setting still buys (silence for a customer with no standing).
+- **Fixed, pre-existing** `packages/ui/src/lib/round-4-verification.spec.tsx` — still asserted `t('pharmacyPos.v8.creditStanding')`, a key 208 split into `creditLimitPart`/`creditDuePart`. Stale since 208; now asserts both current keys.
+
+### Gates
+
+`pnpm lint` — clean (one pre-existing unrelated warning: an unused eslint-disable in `doctor-portal.repositories.ts`). `pnpm typecheck` — clean, 29/29. No schema change, so no `prisma generate`. Design self-check by inspection: no markup or CSS selector changed on any credit row; the new limitless-due state reuses the existing `__due` element, so both themes and the mockup diff are unaffected. Vendor untouched; Phase-12 logic frozen.
+
+### The standing lesson, extended
+
+The spec's own lesson — capture the API response before writing a spec — was right and was what cracked this. The half it did not have: **a green suite proves nothing about a screen when every test fixes the flag that hides it.** The payload was correct, the renderer was correct, and the product was still broken, because no test ever asked what happens with the setting at its default. When a value does not appear, check the payload AND the defaults of every flag between the payload and the pixel.
