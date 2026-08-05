@@ -7571,3 +7571,50 @@ Both earlier attempts fixed the POS counter's own overlay — 193 §5 rebuilt `p
 `doctor-portal.repositories.ts`, untouched); `pnpm typecheck` clean. Design self-check by inspection:
 header (title · 44px close · hairline) over the Amount-due hero, `.paymeth` tiles, `.paytender`,
 `.paychips`, the read-back block, `.payfoot` with Esc/⏎ hints. Vendor untouched.
+
+---
+
+## 200 — pos-mobile-r3 — DONE (2026-08-05)
+
+**Spec:** `/specs/200-pos-mobile-r3.md`. **Work type:** FIX (presentation + interaction). **Branch:** `fix/200-pos-mobile-r3`. No CODEREF for this range. **Schema:** none. **RLS:** unchanged.
+
+The owner's first real-device pass over the mobile POS, now that 198 §1 made the surface reachable at all.
+
+### §1 Header spacing
+New root token `--mchrome-top: 14px` (globals.css, the v2-kit token block beside `--mchrome`/`--mgap`). It is declared at the root, not on the chrome, because the fixed glass and the body that reserves room under it are SIBLINGS in the live shell — one number, so they cannot disagree.
+
+- `.mp-mobile.mp-mobile--live .mchrome` — `padding-top: env(safe-area-inset-top)` → `calc(var(--mchrome-top) + env(safe-area-inset-top))`. Additive to the inset, never a replacement: on a notchless Android (inset 0) the title used to sit flush against the viewport top.
+- `.mp-shell[data-mobile-chrome='true'] .mp-shell-main` — `padding-top: calc(84px + var(--mchrome-top) + env(...))`.
+- `.mp-shell[data-page-chrome='pos'] .mp-shell-main` — `padding-top: calc(var(--mchrome) + var(--mgap) + var(--mchrome-top) + env(...))`.
+
+Collapse maths re-checked against 194 §2: the padding stays CONSTANT through the collapse, and both sides moved by exactly `--mchrome-top`, so the header still travels one pixel of content per pixel of finger. At rest the POS chrome is `14 + inset + 58 + 58 + 1 = 131 + inset` against a `145 + inset` reservation — the file's 14px gap, preserved.
+
+### §2 Avatar (account) menu sheet
+- `AppShell.tsx` — the `shortcuts` account row is GONE, with it the `shortcutsOpen` state, the mobile `<ShortcutsModal>` mount and the now-unused `Keyboard` / `ShortcutsModal` imports. Both sheets that render this block (More + Account) are mobile-only, so one deletion covers both; the desktop top bar keeps its own entry to the same modal.
+- `.mp-mobile .msheet__appearance` — `flex-direction: row / justify-content: space-between` → `column`, `gap: 8px`, `padding: 8px 12px 4px`. New `.mp-mobile .msheet__appearance .segctl { display:flex; width:100% }` and `… .segctl button { flex:1; justify-content:center; height:40px }`. Three targets sharing ~180px on a 360 phone had shrunk under their own icons and "System" clipped; stacked, each choice is a third of the sheet width.
+- Sign-out was ALREADY the `.sheet__foot` full-width `.macct__logout macctrow--danger` button (163/194) — verified, not rebuilt, and now pinned by a test.
+
+### §3 Search result rows
+`PosClient.tsx` mobile result row: the trailing `<small>/ unit</small>` under the price is gone; the row is now a name line plus one `.mline__meta` line — `unit · stock signal · code/generic/shelf` at the leading edge (truncating), `.mline__price` at the trailing edge where the Add button used to sit. The phone gains the stock signal the desktop row has carried since 189 (`.mline__stk`, `--low` in `--warning`), which it had never had: a nearly-empty shelf looked exactly like a full one until the add failed. A product with no unit chain renders no unit clause rather than a dangling slash.
+
+Selectors added under `.mp-pos2 .mline--tap`: `display:flex; flex-direction:column; gap:3px; padding:10px 12px`; `.mline__t { flex:none; padding-inline-end:0 }` (dropping the cart row's 34px corner-button inset); `.mline__meta`; `.mline__meta > small`; `.mline__unit`; `.mline__stk--low`; `.mline__price`. Row lands at ~58px — the ≥44px target and the `is-added` flash are untouched.
+
+### §4 Cart line unit select → bottom sheet
+`UnitSelect` gains `variant?: 'menu' | 'sheet'` (default `menu`, so the desktop is byte-identical). The mobile cart line passes `variant="sheet"`. The sheet is a `<MobileSheet>` — 191/195 slide + drag-to-close, 198 §1 layer history for the device back button — rendered as a SIBLING of `.unitsel-wrap` inside a fragment, so its `<div>` never nests inside the trigger's `<span>`. One `.munitopt` row per sellable unit: name, pack clause, its own per-unit price, the check on the live one. Picking calls the SAME `onPick` → `setLineUnit`, so 184's re-pricing/merge maths never learn which surface chose the unit. The popover's outside-click watcher is disabled in sheet mode (the sheet owns its dismissal). `aria-haspopup` switches `listbox` → `dialog`.
+
+New CSS block "BUILD-STEP 200": `.mp-mobile .munits`, `.munitopt` (+ `:active`, `:focus-visible`, `.is-selected`), `.munitopt .unitopt`, `.munitopt__pr`, `.munitopt .check` (always in layout, so choosing never re-flows the list).
+
+**The clipping.** Root cause: the phone's POS body is scrolled by the DOCUMENT, and nothing told the document that its top ~131px are behind fixed glass — so every programmatic scroll (the arrow-key result walk's `scrollIntoView`, the browser's scroll-to-focus when a quantity field or the unit control takes focus, an anchor jump) parked its target flush with the viewport top, i.e. under the header. That is the owner's half-swallowed "In this sale" and its first line. Fixed with `scroll-padding-top` on `html` (the scrolling element), the same expression as the body's padding so the two cannot drift: `html:has(.mp-shell[data-mobile-chrome='true'])` generic, `html:has(.mp-shell[data-page-chrome='pos'])` for the POS, ordered exactly like their `.mp-shell-main` counterparts because a POS page carries BOTH attributes. `html:has()` is the established scope pattern here (195 §2).
+
+### §5 Payment sheet — re-verified, no code change needed
+The phone's sheet already renders keypad-free with Cash · Card · Online · Split and both dues: 199 §1/§2 did that work in the SHARED `PaymentPanel` (`methodRow`, `splitBoard`, `statusBlock`), which the sheet layout composes verbatim. Re-read and confirmed against §5 rather than reimplemented. One cleanup: the dead `.mp-mobile .mkeypad` styles were DELETED, not left unused — a styled `.mkeypad` invites a later mockup diff to "restore" the element it dresses, which the 199 §1 owner override forbids on both surfaces.
+
+### Tests
+- `apps/api/src/pharmacy/pos-mobile-r3.spec.ts` (new, 8 cases) — the unit sheet's data contract through the frozen `@mp/shared` helpers: every sellable unit listed in chain order, the current one marked, base-unit fallback so a row is always checked, per-unit prices, pack clauses, a pick re-pricing through `pickSellableUnit`, the single-unit case, and the 188 §1.1 no-units guard.
+- `packages/ui/src/components/mobile-account-sheet.spec.tsx` — fixture updated to the shell's real phone rows (no shortcuts); three cases added: the sheet renders exactly the rows it is given and invents no shortcuts row, the appearance segment is a SIBLING of its label in reading order (not nested — that was the one-line bug), and sign-out is the full-width danger button in the foot.
+
+### Gates
+`pnpm lint` clean (one pre-existing unrelated `no-explicit-any` disable warning in doctor-portal). `pnpm typecheck` clean. `pnpm test:unit` / `test:e2e` / `build` deliberately not run per CLAUDE.md §6 — the controller runs the full gates. Vendor console untouched (every selector is `.mp-mobile` / `.mp-pos2` scoped, and `AppShell`'s change is inside the `isMobile` tenant sheets). Design self-check by inspection against `pos-mobile.html` + `component-reference.html`; per-selector diffs recorded above.
+
+### Note for 202
+§6 demands "every item verified on a real device/PWA, not only responsive DevTools". That is a human/device verification the agent cannot perform in code; it belongs to the 202 verification pass.
