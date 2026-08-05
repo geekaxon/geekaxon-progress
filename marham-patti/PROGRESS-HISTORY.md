@@ -7731,3 +7731,56 @@ walkthrough asserting every step of §5's sequence is bound. Kit tests cover `Y`
 **Gates:** `pnpm lint` and `pnpm typecheck` run once at the end — both clean (the single API
 warning is a pre-existing unused eslint-disable in `doctor-portal.repositories.ts`, untouched here).
 Vendor surfaces untouched. Unit/build/e2e left to the controller per AGENT.md §4A.
+
+---
+
+## 202 — round-3-verification — DONE (2026-08-05) — branch `fix/202-round-3-verification`
+
+**Spec:** /specs/202-round-3-verification.md (block-final verification pass; fixes only where verification fails). No schema, no RLS change, no migration.
+
+### What this step is
+195 shipped four mobile behaviours the owner could not test at all, because mobile navigation was broken (198 §1). They were recorded built-but-unverified, as were the two realtime behaviours from 187. This step re-checks them now that navigation works, fixes what fails, and records each verdict honestly.
+
+**The 148 rule is respected literally: an item an agent cannot exercise is recorded UNVERIFIED, never "pass".** A build agent has no phone, no installed PWA, no touchscreen and no second login. Where the acceptance is a physical sensation (finger tracking, jank, a real scrollbar, two browsers side by side) the verdict below says so and names what is left for the owner. Where the acceptance is a rule that lives in code, it was audited against the live sources and — where it had no test — pinned with one.
+
+### §1 verdicts
+
+1. **Sheet drag-to-close physics (195 §1) — PARTLY VERIFIED (code) / UNVERIFIED (feel).**
+   Audited `packages/ui/src/components/mobile-sheet.tsx` end to end. Confirmed in code: the entry keyframe is detached inline on take-over (without it the `both`-filled `translateY(0)` outranks the drag and the sheet sits still), the panel is measured ONCE per gesture, the transform is written 1:1, the scrim opacity tracks the drag, release velocity is measured over the last 120ms rather than the whole drag, and the exit duration scales to the distance left with a 90ms floor. The pure decisions already have tests (`mobile-sheet.spec.tsx`).
+   **Gap found and closed:** the ENGAGE rule — "from the grip/header, or from the body only while it is scrolled to top" — had no test at all, and it is the clause that decides whether the gesture fights an internally scrolled list. Four tests added (below). No defect found; nothing to fix.
+   **Left for the owner:** whether it FEELS 1:1 and jank-free under a thumb on the real device. Not assertable here.
+
+2. **No scrollbars on the tenant mobile PWA (195 §2) — VERIFIED BY INSPECTION / UNVERIFIED (device).**
+   The policy is scoped `html:has(.mp-shell[data-surface='tenant'])` plus its descendants, at the shell's own 767.98px breakpoint, on both scrollbar APIs, and touches no `overflow` — so scrolling itself is unaffected. Re-confirmed that `AppShell.tsx` puts `mp-shell` and `data-surface="tenant"` on the SAME element (the selector needs both) and that `VendorChrome` carries no `data-surface`, so vendor is untouched. Every mobile scroller in the file (`.mscroll`, `.sheet__body`, `.mheld`, `.heldrail`, `.minv-filters`, `.mkpis`, `.mchips`) additionally hides its own bar. Already covered by `mobile-platform-polish.spec.ts`.
+   **Left for the owner:** that no bar is actually painted on their device/skin. Android WebView skins are not simulable here.
+
+3. **Android back steps back one layer (195 §3), re-verified against 198 §1 — VERIFIED (behaviour) / UNVERIFIED (device).**
+   This is the item the spec asks to re-check hardest, because 198 §1's blocker fix touches the same helper. Audited `layer-history.ts`: a layer entry is tagged with its layer id; a self-close consumes an entry only while `history.state` still carries that tag; a route change is an implicit close that consumes nothing; `popstate` with layers open closes only the topmost, and with nothing open does nothing at all.
+   **Gap found and closed:** each fix was tested alone, never INTERLEAVED. Added the owner's actual session as one test — back closes the picker, then a nav tap navigates with the sheet closing behind it, then back closes the NEXT sheet, then back with nothing open is ordinary navigation — plus nested unwinding after a navigation, and the tap-dismiss/nav-close asymmetry. All pass; no defect found.
+   **Known and accepted (198 §1, unchanged here):** a layer left open at the moment of a route change leaves one same-URL history entry behind, so that one route can need a second back press. Consuming it is impossible without popping the router's own push — the bug 198 fixed. Cost: one extra press in a rare case. Not re-litigated.
+
+4. **Themed desktop scrollbars (195 §4) — VERIFIED BY INSPECTION / UNVERIFIED (visual).**
+   Light and dark ramps are separate tokens (dark takes the dark greys, not the light ones inverted), applied app-wide from `<html>` at >=768px, every selector wrapped in `:where()` so it stays a zero-specificity DEFAULT and the 162/182 collapsed-rail exception still wins. Covered by `mobile-platform-polish.spec.ts`.
+
+### §2 realtime — UNVERIFIED (needs two live logins), NO DEFECT FOUND IN CODE
+Cannot be exercised by an agent: it needs two authenticated browsers on a running stack. Audited the whole path instead, and it is sound:
+- **Stock:** `commitPosSale` publishes coalesced `stock.updated` events; the POS consumes ONE SSE stream via `apiFetch` (so the Bearer token rides along) with bounded-backoff reconnect, and applies the new on-hand to both the open search results and any cart line for that medicine — no refresh needed.
+- **Held sales:** park/resume/complete/discard all stamp their chip through the one `heldSaleEvent` builder, so the rail cannot drift between transitions; a completed or discarded hold drops off every rail from the event alone.
+- **Handoff attribution:** `resumeHeldSale` records only `resumedBy`; the money is attributed to whoever COMPLETES the sale. The completion CLAIMS the hold in one conditional transition BEFORE `createSale`, so two salesmen cannot both win and the loser never creates a sale. The refusal names the owner of the terminal state, and the POS turns it into "already completed by <name>" and drops the dead chip. Held-sale numbers are server-assigned and gapless (190 §1).
+- **Noted, not fixed (latent):** realtime events carry a `branchId` the POS client does not filter on. Unreachable today — no web surface sends a branchId, so every pharmacy session resolves to the tenant's primary branch — but it becomes a real defect the day a branch picker ships. Fixing it now would mean making the POS client branch-aware, which is out of this step's scope; recorded here as the trigger condition rather than guessed at.
+**Left for the owner:** the two-login run itself — A sells, B's stock moves; A parks, B resumes and completes, the sale lands on B, A's second attempt is refused.
+
+### §3 regression sweep — CLEAN (audited in source, and now pinned)
+Mobile nav closes its layers on the route change and only there; nav label `navPharmacyPos` = "POS" with heading `ptopTitlePharmacyPos` = "New sale" (EN+UR); the theme control offers System and renders its own glyph when System is running; a credit customer's option reads "Limit Rs {limit} · Due Rs {due}" from the CURRENT balance; the shortcuts dialog wears the reference header with its own bordered close; the keypad exists nowhere on either POS surface outside the comments that record its deliberate absence; the split board renders the SAME status block as every other method, so balance-due and change-due are stated once; the 201 §5 keyboard-only sale is bound end to end and every global binding is suppressed behind an open dialog.
+
+### Files
+- **Added** `packages/ui/src/lib/round-3-verification.spec.tsx` — 15 tests: §1.3 back/navigation interleaved in one session (3), §1.1 the drag's body-scroll engage rule (4), §3 the regression sweep as source assertions (8).
+- **Changed** `PROGRESS.md`, `PROGRESS-HISTORY.md`. No production code changed: nothing verified in code failed.
+
+### Gates
+`pnpm lint` and `pnpm typecheck` clean. The new spec file was run alone (15/15 pass) rather than the full suite, per the token rules; the controller runs the full gates.
+
+### §5 end of block
+Parked, unchanged by owner decision: the print/receipt screen (Bluetooth + wired), and per-page menu visibility by permission. Deferred shortcut bindings stay listed in 201 §3 and arrive with their features. The next tenant work is the Inventory screen test round against `inventory-desktop.html` / `inventory-mobile.html` — no spec authored yet, so `Next:` is `none — awaiting next spec block`.
+
+**WORK TYPE: FIX (branch fix/202-round-3-verification)**
