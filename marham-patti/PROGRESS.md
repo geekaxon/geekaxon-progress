@@ -6,14 +6,15 @@
 
 ## Current Status
 - **Project:** Marham Patti — multi-tenant white-label healthcare platform.
-- **Phase:** **PHASE 20** — owner-test round 2 (192→197): the park fix and toasts, desktop POS to the mockup, mobile POS to the mockup, sheet physics and Android back, the date picker, full-keyboard shortcuts. Tenant only.
-- **Last completed:** **196 — date-picker-component**.
-- **Next:** **197 — shortcuts-and-topbar-completions** — /specs/197-shortcuts-and-topbar-completions.md
-- **Branches:** through 192 on staging. 196 feature/; rest fix/.
+- **Phase:** **PHASE 20** — owner-test round 3 (198→202): the mobile-nav blocker first, then desktop payment and quantity, mobile polish, the keyboard map, and a verification pass.
+- **Last completed:** **198 — mobile-nav-unblock-and-topbar-fixes**.
+- **Next:** **199 — pos-desktop-payment-and-qty** — /specs/199-pos-desktop-payment-and-qty.md
+- **Branches:** through 197 on staging. 198/199/200/202 fix/; 201 feature/.
+- **Parked:** printing (Bluetooth/wired); per-page menu permissions.
 
 ### Recent steps
-- **196 — date-picker-component** — DONE (2026-08-04) — one date picker everywhere: popover on desktop, sheet on a phone, no browser chrome.
-- **195 — mobile-platform-polish** — DONE (2026-08-04) — sheets track the finger, back closes the top layer, themed scrollbars.
-- **194 — pos-mobile-r2** — DONE (2026-08-04) — account and notification sheets, tap to add, close in the corner, no keypad.
+- **198 — mobile-nav-unblock-and-topbar-fixes** — DONE (2026-08-05) — mobile nav works again, plus four topbar and dialog fixes.
+- **197 — shortcuts-and-topbar-completions** — DONE (2026-08-04).
+- **196 — date-picker-component** — DONE (2026-08-04).
 
 > Older steps in PROGRESS-HISTORY.md

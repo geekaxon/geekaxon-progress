@@ -7394,3 +7394,119 @@ Branch: `fix/195-mobile-platform-polish`. Spec: /specs/195-mobile-platform-polis
 **Decisions logged (no human gate).** (1) Adoption covers the whole tenant `(app)` group, not only the POS — §3 says no native date input may render on any tenant surface, and purchases/reports simply inherit the shared component now rather than waiting for their own specs. (2) The trigger became a `<button>` rather than the reference's `<div>` so the picker is reachable by keyboard; the reference's visual declarations are unchanged. (3) The sheet confirms, the popover commits on the tap — that is what the reference draws (a full-width "Set 22 Jul 2026" in the sheet foot, no such control on desktop).
 
 **Gates.** `pnpm lint` clean (one pre-existing unrelated warning in @mp/api); `pnpm typecheck` clean, 29/29 tasks. Unit/build/e2e left to the controller.
+
+## 197 — shortcuts-and-topbar-completions — DONE (2026-08-04)
+
+**Branch:** `fix/197-shortcuts-and-topbar-completions` · **WORK TYPE:** FIX · Phase 20, block-final.
+**Schema/RLS/auth/permissions/flags:** none — presentation + client-side keyboard only. No endpoints, no
+migrations. The POS surface still rides `pharmacy.pos`; shortcut overrides stay `(tenantId, userId)`-scoped.
+
+### §1 Notification dropdown — the designed empty state
+The deployed dropdown showed a bare glyph over one sentence. It now renders the reference's `.emptystate`
+anatomy at the dropdown's compact size — 52px sunken icon tile (`bell-off`), a real 14px title, a 12.5px
+supporting line — in `TopbarActions` (desktop `notifmenu`), in `NotificationBell`'s 194 mobile sheet, and
+also in `NotificationBell`'s legacy `mp-notif-panel` dropdown. **Judgement call:** the spec names two
+surfaces, but that third dropdown is the bell the generic mobile chrome mounts on every page that does not
+own its own header — leaving it bare would have put the owner's complaint back on screen one route away, so
+it got the same anatomy. `.notifmenu__empty` in globals.css carries the anatomy self-contained (tokens only,
+light/dark, no hex) so all three surfaces are one definition. New keys `notifEmptyTitle` / `notifEmptyBody`
+(EN+UR); the old `notifEmpty` stays for the vendor console, which this step does not touch.
+
+### §2 Theme-toggle icon reflects the current theme
+`TopbarActions` drew a static `sun-moon`, so the toggle never acknowledged the switch it had just made. It
+now renders from `useTheme().resolved` — sun in light, moon in dark. `resolved` is seeded from the
+server-resolved `mp_theme` cookie (142/179), so the FIRST paint is already correct and there is no
+wrong-icon flash before hydration. **Judgement call:** the reference's topbar draws `sun-moon` in both its
+light and dark panes, but those panes are static markup and a fixed glyph is exactly the bug being fixed;
+the spec's own normative sentence ("mirrors the CURRENT resolved theme — sun in light, moon in dark") wins.
+The `Appearance` label inside the user menu keeps `sun-moon` (it labels a three-way control, not a state).
+Mobile: the More/account sheet's appearance row icon was a hardcoded `Sun` — now resolved-aware; the
+IdentityMark beside it was keyed off `mode` (so `system` on a dark OS drew the light mark) and now uses
+`resolved` too. The shared `ThemeToggle` was already truthful and is untouched.
+
+### §3 POS keyboard shortcuts — complete keyboard control
+**Collisions, resolved in favour of the existing 111 map (the spec's own rule), and what each proposal
+became:** `F2` new sale → F2 is 111's focus-search; new sale stays `F1`. `F4` customer → F4 is discount;
+attach-customer takes **`F10`** (the only free function key — F5/F11/F12 are browser-reserved). `F6` sale
+date → F6 is hold; sale date takes **`Alt+T`** (Alt+D is 111's Day close). `F7` discount → already `F4`.
+`F8` hold → already `F6`. `F9` held list → resume is already `F7`. `F10`/`Ctrl+Enter` take payment →
+already `F8`. `/` and `Esc` already existed. So the rebindable catalog grew by exactly two actions
+(`pos.selectCustomer`, `pos.saleDate`); every 111 default is byte-identical, so no cashier's muscle memory
+and no stored personal override changes meaning. The settings screen and the override API are untouched —
+they simply list two more rows.
+
+**Two shortcut classes, one dialog.** The cart and payment keys the spec asks for (↑/↓, +/−, bare digits,
+`U`, `Delete`, `1`–`4`, `Enter`) are bare keys that `isAllowedShortcutCombo` deliberately refuses as global
+combos — such a key would swallow ordinary typing the moment focus left an input — so they cannot join the
+rebindable catalog without breaking 111's grammar. They are catalogued instead as `FIXED_SHORTCUTS` in
+`@mp/shared` (groups `global` / `cart` / `payment`). `ShortcutsHelp` now reads in the spec's three sections
+— **Global** (the effective per-user map, then `/` and `Esc`), **Cart**, **Payment** — and is the single
+source of truth for both classes.
+
+**Runtime.** `usePharmacyShortcuts` used to swallow every shortcut while a text field had focus, which made
+a keyboard-only sale impossible: the cashier lives in the scan field, and `F8` has to settle from inside it
+like on any retail till. It now lets **function keys** (and `Escape`, already handled) through from a
+focused field, and nothing else — a function key can never be part of ordinary typing. On the POS, `/`
+focuses the SCAN field: the page claims the key in the capture phase and stops it reaching the shell's
+tenant-search overlay, because on the counter the only search a cashier means is the one they are about to
+scan into. Attach-customer and sale-date shortcuts PRESS the real trigger (`[data-poscustomer]`,
+`[data-possaledate] button`) rather than duplicating open state, so the keyboard route and the pointer route
+cannot diverge. The desktop cart row is now a focus stop (`tabIndex=0`, `data-cartrow`) with an accent
+focus-visible rail: ↑/↓ walk lines, `+`/`−` step quantity, digits type a quantity (consecutive digits build
+one number within 900ms, so a box of 24 is typable; a lone `0` is treated as a keystroke on the way to `05`,
+never an instruction to empty the line), `U` opens that line's unit select, `Delete` removes the line and
+moves focus to its neighbour. In the payment dialog `1`–`4` already picked the method (191/193); `Enter` now
+commits, honoured from the tender field too (never from a textarea) and gated by the same `canPay`
+settlement rule the money button uses — which is what the `.btn__kbd ⏎` hint has promised since 193 §7.
+Hints render through the existing `.btn__kbd`, `.ptop__hint` and `.pos-search__kbd` atoms; no new hint
+chrome was invented.
+
+### Tests written (controller runs them)
+`apps/api/src/pharmacy-shortcuts/pharmacy-shortcuts.service.spec.ts` gains a 197 block: the two new defaults
+are `F10` / `Alt+T`; every 111 default still means what it meant; the extended map is conflict-free and
+every default is assignable; `F10` and `Alt+T` resolve from a real keystroke; the fixed catalog covers the
+three dialog groups, has unique ids and non-empty caps, and none of its bare keys is (or could be) a
+rebindable action.
+
+### Gates
+`pnpm lint` and `pnpm typecheck` run once at the end — both clean (one pre-existing unrelated warning in
+`doctor-portal.repositories.ts`). Design self-check by inspection: tokens only, no hex literal outside
+globals.css, light/dark both covered, RTL-safe (the cart focus ring is an outline, not a side rail),
+touch targets unchanged, EN+UR parity for every new key. Vendor console untouched.
+
+### Notes
+Parked, unchanged by owner decision: the print/receipt screen + Bluetooth/wired printing; per-page menu
+visibility by permission. Realtime stock + held-sale sync remain built-but-untested — to be tested after
+this block deploys; defects arrive as new specs.
+
+## 198 — mobile-nav-unblock-and-topbar-fixes — DONE (2026-08-05)
+
+**Type:** FIX. **Branch:** `fix/198-mobile-nav-unblock-and-topbar-fixes`. Spec: /specs/198-mobile-nav-unblock-and-topbar-fixes.md. Schema/RLS unchanged.
+
+### §1 — the blocker: `useLayerHistory` ate the router's push
+Root cause exactly as diagnosed live: 195 §3 made *every* close consume a history entry. On a nav tap the router pushed the new route, the sheet then closed, and `closeLayer()` called `history.back()` — which popped the ROUTE the router had just pushed, not the sheet's own entry. URL never moved, no error, and the desktop sidebar (not a layer) was unaffected — the asymmetry that proved it.
+
+Fixed in the SHARED helper (`packages/ui/src/lib/layer-history.ts`), so nav sheet, More sheet, account sheet, dialogs (`LayerDialogRoot`), mobile sheets, the POS customer picker and the scanner all inherit it:
+- every layer entry already carried a `__mpLayer` marker; it now carries the LAYER ID, and `closeLayer()` calls `back()` only while `history.state.__mpLayer` is still that id (`ownsTopEntry`). A router push sitting on top makes the close a no-op for history.
+- new `closeLayersForRouteChange()` — an implicit close for every open layer that consumes nothing; `AppShell`'s pathname effect calls it before its own `setNavOpen(false)` etc., so a layer whose host outlives the navigation can never leave a stale entry.
+- Residual, accepted: the layer's own same-URL entry stays buried in history after a nav, so returning to the previous page can cost one extra back press. Removing a buried entry is not possible in the History API; the alternative (consuming the router's entry) is the bug itself.
+- Tests: `layer-history.spec.tsx` spies now model a real entry stack and drive `history.state` through `replaceState` (the bare no-op spies could not exercise the new guard). Added: route push on top → no `back()`, URL survives; `closeLayersForRouteChange` closes all, touches nothing; self-close still consumes its own entry; and the hook-level reproduction of the owner's tap.
+
+### §2 — nav "POS" vs heading "New sale"
+193 renamed the one field that was doing both jobs. `NavItem` now has an optional `titleKey` (the PAGE HEADING) alongside `labelKey` (the NAV label); only `/pharmacy/pos` sets it. `navPharmacyPos` restored to "POS" / "پی او ایس" (its pre-193 value), new key `ptopTitlePharmacyPos` = "New sale" / "نئی فروخت". `AppShell` reads `titleKey ?? labelKey` for the desktop topbar title and the mobile chrome title; sidebar and dock keep reading `labelKey`. Every other route's labels are byte-identical (no `titleKey`).
+
+### §3 — theme control shows SYSTEM
+197 §2 made the icon mirror `resolved`, which cannot express System at all. Both controls now key on the user's SELECTION: `TopbarActions` renders `Monitor` when `mode === 'system'`, else moon/sun from `resolved`; `AppShell`'s mobile appearance row renders `MonitorSmartphone` likewise. `mode` comes from the server-resolved cookie on the first render (142/179), so it is right at first paint. `components/ThemeToggle.tsx` already did this and was left alone.
+
+### §4 — customer options: credit limit + due (second report). WHY 193 MISSED IT
+Two independent reasons, both found by grepping every customer-option renderer as 149/150 requires:
+1. **The wrong renderer.** 193 §4 put the standing on the DESKTOP `CustomerSelect` only. `MobileCustomerPicker` (the `.mpick` full-screen chooser, same file) still rendered a bare `({phone})` — so on a phone the change looked like it had never shipped. Both pickers now share one subtitle rule and one over-limit signal.
+2. **A dead guard and a wrong number.** `customerStanding` bailed on `c.creditLimit == null`, but the API never sends null (the column defaults to 0) — so the test did nothing and a cash customer would have been quoted "Limit Rs 0 · Due Rs 0"; the real gate is now `creditLimit > 0`. And "Due" was reading `openingBalance`, because `GET /pharmacy/customers` projected `CustomerView`, which has no outstanding at all — stale from the customer's first credit sale onwards (the 158/160 lesson).
+
+API: new `CustomerOptionView extends CustomerView { outstanding }`; `listCustomers` now rolls opening + credit sales (102) − payments. Extracted `customerBooks()` and moved `listCustomerSummaries` onto it, so the picker and the list can never disagree about what someone owes (one read, same math). Over-limit is unmistakable per the 118 rule: `.is-over` turns the standing danger-toned and an "Over credit limit" chip states it, on both pickers. Still gated on the tenant credit setting (99); walk-in untouched. Tests in `customer-ledger.spec.ts` pin outstanding against the ledger and against the list rows.
+
+### §5 — shortcuts dialog header (third report). WHY 190 AND 193 MISSED IT
+Both earlier attempts fixed the POS counter's own overlay — 193 §5 rebuilt `pos/ShortcutsHelp.tsx` on the Add-customer header and it has been correct since. But the dialog the owner opens is the one behind the TOP BAR's keyboard button (and the mobile More sheet's "Keyboard shortcuts" row): `components/shell/ShortcutsModal.tsx`, a different component that still used the kit's plain `DialogHeader` — no icon, the floating borderless ×, no hairline. It now composes the same `.cxdialog` header: accent icon tile · 15/650 title over a 12px subtitle · bordered `iconbtn--44` close on the same row · hairline under it. The `.cxdialog` CSS block was already unscoped; its comment now says so explicitly, and `.cxdialog--nofoot` gives the body the bottom padding a missing foot would have supplied.
+
+### Gates
+`pnpm lint` clean (one pre-existing unrelated warning in doctor-portal). `pnpm typecheck` clean, all 29 tasks. Unit/e2e/build left to the controller per CLAUDE.md §6. Vendor surfaces untouched; Phase-12 POS logic untouched (presentation + projection only).
