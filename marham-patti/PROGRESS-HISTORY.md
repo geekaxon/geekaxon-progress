@@ -7784,3 +7784,61 @@ Mobile nav closes its layers on the route change and only there; nav label `navP
 Parked, unchanged by owner decision: the print/receipt screen (Bluetooth + wired), and per-page menu visibility by permission. Deferred shortcut bindings stay listed in 201 §3 and arrive with their features. The next tenant work is the Inventory screen test round against `inventory-desktop.html` / `inventory-mobile.html` — no spec authored yet, so `Next:` is `none — awaiting next spec block`.
 
 **WORK TYPE: FIX (branch fix/202-round-3-verification)**
+
+## 203 — mobile-nav-race-fix — DONE (2026-08-05) — WORK TYPE: FIX (branch fix/203-mobile-nav-race-fix)
+
+**The defect, third attempt.** Tapping any item in the mobile bottom-sheet menu did nothing: a
+progress bar flashed, the URL never changed, and with a `popstate` listener attached the tap logged
+`POPSTATE fired /dashboard`. Pasted URLs worked; the desktop sidebar worked. 195 introduced it, 198
+tried to fix it and did not.
+
+**Why 198 could not have worked.** Both earlier attempts tried to INFER, at the moment of the close,
+whether that close belonged to a navigation — 198 by tagging each layer entry with its layer id
+(`__mpLayer`) and calling `history.back()` only while `history.state` still carried the tag. Nothing
+of that shape can work, because `history.back()` is ASYNCHRONOUS. Verified against the installed
+Next 15.5.20: the app-router pushes its entry from a `useInsertionEffect` in `HistoryUpdater`
+(`next/dist/client/components/app-router.js:89-113`), and `navigate-reducer.js:161` sets
+`preserveCustomHistoryState = false`, so on a navigation it does not copy our key across either. The
+real order on a tap is therefore: the click handler closes the sheet while our entry is genuinely
+still on top (so the tag test PASSES and `back()` is queued) → the router's push lands → the queued
+pop then executes and takes the route with it. Every guard was reading a snapshot of a stack that no
+longer looked like that when the pop ran. 198's suite modelled the router push as SYNCHRONOUS
+(`routePush()` before `closeLayer()`), which is why it stayed green while the surface was dead.
+
+**The fix (spec §2) — declare intent at click time, never infer it.**
+- `packages/ui/src/lib/layer-history.ts`: new `closeLayersForNavigation()` — detaches every open
+  layer, runs its dismiss callback topmost-first, and touches history NOT AT ALL. Because it detaches
+  the layer before the host's `open` flag flips, the host's effect cleanup reaches `closeLayer()` and
+  finds the layer already gone, so the history-consuming path is never entered.
+- The `__mpLayer` tag and `ownsTopEntry()` are GONE: no marker, no `history.state` inspection, no
+  ordering assumption. `closeLayer()` is back to 195's plain contract — a USER close (tap-out, drag,
+  `Escape`) consumes its own entry. `closeLayersForRouteChange()` stays, now only as the safety net
+  for a redirect that started nowhere near an in-layer link.
+- Cost accepted and documented: a navigation leaves the layer's entry behind. It is a same-URL
+  no-op, so the worst case is one extra back press — the alternative is the defect.
+
+**In-layer navigation triggers rewired** (all call the declared path before the router moves):
+`packages/ui/src/components/mobile-more-sheet.tsx` (every row link, the plain-`<a>` fallback and the
+Sign-out footer, so every consumer of the shared sheet inherits it); `AppShell.tsx` —
+`sheetRenderLink`, the sidebar links (that sidebar IS the mobile drawer below 768) and `sheetSignOut`;
+`GlobalSearch.tsx` (hit → `router.push`); `NotificationBell.tsx` (notification → `router.push`);
+`PosClient.tsx` (`signOutNow`, whose confirm dialog is a layer and whose button leaves for `/login`).
+The `[pathname]` effect in the shell keeps its call, re-commented as the safety net. Vendor surfaces
+untouched, as the spec requires.
+
+**Tests.** `layer-history.spec.tsx` rewritten around an ASYNCHRONOUS `back()` spy: it queues pops and
+`routeTap()` replays the real browser order (click handler → router push → queued pop). Under that
+model the old marker approach fails, as it always did on a device. New cases: a navigation close
+leaves the router push standing; all layers close on a navigation, deepest first, with no history
+call; a link inside a live `useLayerHistory` host navigates and the URL survives; the user close still
+consumes its entry; nested layers still unwind one press at a time. `round-3-verification.spec.tsx`
+updated where it encoded 198's model (its nav beats now declare the navigation, then push).
+
+**Gates.** `pnpm lint` and `pnpm typecheck` both clean (16/16 and 29/29 tasks). Unit/e2e left to the
+controller per the build loop.
+
+**Verification note (spec §3).** The device pass — installed PWA and mobile Chrome, every nav entry
+twice, `popstate` silent on a nav tap, device back unwinding layers one at a time — is the owner's to
+run in round 4; it cannot be done from here, and responsive DevTools is explicitly not acceptance.
+What is established here is the mechanism and its evidence: the popstate log proved `back()` was
+firing on a nav tap, and that call site is now unreachable from any navigation close.

@@ -6,15 +6,15 @@
 
 ## Current Status
 - **Project:** Marham Patti — multi-tenant white-label healthcare platform.
-- **Phase:** **PHASE 20** — owner-test round 3 (198→202): the mobile-nav blocker first, then desktop payment and quantity, mobile polish, the keyboard map, and a verification pass.
-- **Last completed:** **202 — round-3-verification**.
-- **Next:** none — awaiting next spec block
-- **Branches:** through 197 on staging. 198/199/200/202 fix/; 201 feature/.
+- **Phase:** **PHASE 20** — owner-test round 4 (203→207): the mobile-nav race, customer credit limits, the danger sign-out, POS search rows, and a verification pass for what two rounds of blockage made untestable.
+- **Last completed:** **203 — mobile-nav-race-fix**.
+- **Next:** **204 — customer-credit-visibility** — /specs/204-customer-credit-visibility.md
+- **Branches:** through 202 on staging (c350bd6). 203–207 each on fix/<N>.
 - **Parked:** printing (Bluetooth/wired); per-page menu permissions.
 
 ### Recent steps
-- **202 — round-3-verification** — DONE (2026-08-05) — the round audited and pinned; the finger and two-login checks still need the owner's phone.
-- **201 — pos-keyboard-map** — DONE (2026-08-05) — the counter runs on the owner's keys, and locks itself.
-- **200 — pos-mobile-r3** — DONE (2026-08-05) — room above the header, a shorter result row, and units picked from a sheet.
+- **203 — mobile-nav-race-fix** — DONE (2026-08-05) — a tap that navigates says so up front, so nothing rewinds the route behind it.
+- **202 — round-3-verification** — DONE (2026-08-05).
+- **201 — pos-keyboard-map** — DONE (2026-08-05).
 
 > Older steps in PROGRESS-HISTORY.md
