@@ -7510,3 +7510,64 @@ Both earlier attempts fixed the POS counter's own overlay — 193 §5 rebuilt `p
 
 ### Gates
 `pnpm lint` clean (one pre-existing unrelated warning in doctor-portal). `pnpm typecheck` clean, all 29 tasks. Unit/e2e/build left to the controller per CLAUDE.md §6. Vendor surfaces untouched; Phase-12 POS logic untouched (presentation + projection only).
+
+## 199 — pos-desktop-payment-and-qty — DONE (2026-08-05)
+
+**Work type:** FIX (presentation; payment logic frozen). **Branch:** `fix/199-pos-desktop-payment-and-qty`.
+**Spec:** /specs/199-pos-desktop-payment-and-qty.md. No CODEREF covers 199. Schema/RLS untouched.
+
+### §1 — the keypad is gone, on both surfaces (owner override)
+- `PosClient.tsx`: BOTH quantity keypad panels removed — the desktop one that opened in `.pos__side`
+  beneath the discount card (the owner's screenshot) and the mobile twin under the phone's cart.
+  The state that existed only to feed them (`activeQtyLine` + its five setters, the two `onFocus`
+  handlers, the `activeLine` lookup) and the `Keypad` import went with them. Typed entry, the ±
+  buttons, `Alt Q` focus-last-quantity and the 132/134 calculator semantics (clear-to-zero survives
+  until blur, which `blurQty` still prunes) are unchanged.
+- `PaymentPanel.tsx`: the dialog's `.keypad` block (193 §7) and its `applyKeypadKey` reducer,
+  `pressKey`, `keypadRaw` and the `Delete` icon are removed. Tender is typed into `.paytender`.
+- **RECORDED SO A FUTURE DIFF DOES NOT RESTORE IT:** pos-desktop.html draws a `.keypad` under the
+  tender group and pos-mobile.html an `.mkeypad`. Both are DELIBERATELY NOT IMPLEMENTED per the
+  owner override in 199 §1. The note is carried in three places that a diff pass will read: the
+  `PosClient` and `PaymentPanel` file headers, and the comment that replaced the `.paymod .keypad`
+  rules in `globals.css`. The `@mp/ui` `Keypad` atom itself is left in the kit (still unit-tested)
+  — it simply has no consumer; only the PIN gate's own key grid remains, which is not a POS surface
+  and has no field to type into.
+
+### §2 — the payment dialog
+- **Split is the dialog's fourth method.** `pickSheetMethod` became `pickMethod` and now serves both
+  layouts: a plain method collapses to one leg for the whole bill, `SPLIT` opens one zero leg per
+  method. The dialog's old "+ Add split" chip, `addSplit`, `removeLeg` and the `.payleg` blocks are
+  gone (with their CSS). One method row, one split board, one set of handlers for both tiers; the
+  digit hints (1..n, Split last) now pick the same thing on both.
+- **Close control:** a real `DialogClose` (`iconbtn--44 paymod__x`, the Add-customer / shortcut-guide
+  anatomy per 198 §5) sits top-right where the `Esc` text chip was. Esc still closes; the chip moved
+  to the Cancel button as a `.btn__kbd` hint, mirroring Confirm's `⏎`. `.paymod__esc` retired.
+- **Balance due AND change due, in every method.** Two DISPLAY differences over the frozen summary:
+  `cashShort = Σ cash amount − Σ cash tendered` (the gap nothing reported — a cash leg keeps
+  `amount = grandTotal`, so a short tender left every `.paychange` blank) and
+  `overApplied = applied − grandTotal`. Rendered as `balanceDue = shortfall + cashShort`, over-applied,
+  change due, and a settled "Paid in full" state when the bill is met to the paisa with nothing to
+  return. Both layouts share the block.
+- **One behaviour change, and it is toward the server:** `canPay` now also requires
+  `overApplied <= 0.001`. `splitPaymentSummary.settled` is `applied >= total`, but the server refuses
+  `applied != total` ("The payments must add up to the total"), so an over-shot split used to enable
+  a button that could only 400. Decision recorded and taken without pause per the autonomy rule.
+- Not one line of `splitPaymentSummary` / `paymentPolicyError` / `checkCreditLimit` / FEFO /
+  decrement / idempotency changed; the panel still sends the same tender arrays.
+
+### Files
+- `apps/web/app/(app)/pharmacy/pos/PaymentPanel.tsx` — rewritten presentation, same state and handlers.
+- `apps/web/app/(app)/pharmacy/pos/PosClient.tsx` — keypad panels + their state removed.
+- `apps/web/app/globals.css` — `.paymod .keypad*`, `.paymod__esc`, `.paymod .payleg*` removed;
+  `.paymod .paysplit*`, `.paymod__x` and a secondary-button `.btn__kbd` added.
+- `packages/i18n/src/messages/{en,ur}.json` — `pharmacyPos.v10.settled` / `.overApplied` (both locales,
+  parity kept). `pharmacyPos.cart.qtyFor` and `pharmacyPos.keypad.*` are now unused but left in place.
+- `apps/api/src/pharmacy/pos-desktop-payment.spec.ts` — NEW, 11 cases: short/over/exact cash, card and
+  online under the bill, the split board empty → filled → over-shot, a split with an under-tendered
+  cash leg, zero-placeholder dropping, credit still needing a customer, and punched == typed money.
+
+### Gates
+`pnpm lint` clean (the single warning is the pre-existing unused eslint-disable in
+`doctor-portal.repositories.ts`, untouched); `pnpm typecheck` clean. Design self-check by inspection:
+header (title · 44px close · hairline) over the Amount-due hero, `.paymeth` tiles, `.paytender`,
+`.paychips`, the read-back block, `.payfoot` with Esc/⏎ hints. Vendor untouched.
