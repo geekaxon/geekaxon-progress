@@ -7923,3 +7923,67 @@ Both themes: `--danger`, `--focus-ring` and `--shadow-xs` are theme tokens; the 
 **Not done by the agent:** the spec's "verified on the deployed page". The account sheet is client-rendered behind auth, and the agent may neither build nor deploy; verification here is by source inspection + the per-selector diff above, and the deployed check belongs to the controller's deploy gate.
 
 **Next:** 206 — pos-mobile-search-rows.
+
+## 206 — pos-mobile-search-rows (2026-08-05) — DONE
+
+**Branch:** `fix/206-pos-mobile-search-rows` (WORK TYPE: FIX, presentation + the one field the presentation needed).
+**Spec:** `/specs/206-pos-mobile-search-rows.md`. No CODEREF in range. Schema/RLS unchanged.
+
+**GATE (spec §Mockup).** Verified in the recommitted `specs/mockups/pharmacy/pos-mobile.html` BEFORE
+building: `.mline--res` (2115), `.mline__nm` (2118), `.mline__desc` (2119), `.mline__foot` (2120),
+`.mline__unit` (2121), `.mline--res .mline__price` (2122), `.mdot`/`--ok`/`--soon`/`--exp`/`--none`
+(2124–2128), `.mline--res.is-out` + `.mline__oos` (2130–2133), and the five seeded rows at 2507–2536
+covering all four dot states plus the out-of-stock row. Gate PASSED — the row was composed from the
+file, not from prose.
+
+**What was wrong.** The phone's result row was 200 §3's two-line stack: `.mline__meta > small` was
+`white-space:nowrap; text-overflow:ellipsis`, so the composition line — the thing a pharmacist tells
+500mg from 650mg by — was the FIRST thing cut on a narrow screen. And the row carried no expiry at
+all: `PosSearchRow` has never had an expiry field, so a strip due to expire next month looked exactly
+like a fresh one until the cart line finally said so.
+
+**Row anatomy (§1).** `.mline--tap` is retired; the row is `mline mline--res` (+ `is-out`, +
+`is-added`). Three lines: `.mline__nm` (type tag + label + RX badge), `.mline__desc` rendered in FULL
+(`white-space:normal; overflow:visible; text-wrap:pretty` — it wraps, never truncates), and
+`.mline__foot` with the unit at the start and the price at the end where 194 §3's removed Add button
+sat. Out of stock puts the file's `.mline__oos` pill in the unit's slot. Still one tap target, still
+`role="option"` inside the results listbox, still ≥44px, still flashes `is-added` on add.
+
+**The dot.** `.mdot` pinned top-right, four states from ONE new pure helper `expiryDot()`
+(`packages/shared/src/pharmacy-inventory.ts`): `none` for undated/unreadable, otherwise `expiryBand`
+mapped to `exp`/`soon`/`ok` through the SAME `NEAR_EXPIRY_DAYS` window as 104, so the dot and the
+inventory screen's amber can never disagree. DECISION: `none` is its own state rather than folded
+into `ok` — a green dot on stock nobody dates is a claim the data cannot back. DECISION (owner, per
+spec): out of stock never tints the dot; the dot means expiry and nothing else.
+
+**The field behind it.** `PosSearchRow.nearestExpiry: string | null` — the nearest DATED in-stock lot
+at the branch, from the same `listBatchExpiries` source and same rule as the inventory list's
+nearest-expiry signal (qty > 0, soonest first, undated last, so the first dated one seen wins). One
+private `nearestExpiriesOf()` feeds all three builders (`posSearch`, `posRowsByIds`, `posScan`); no
+new repo method, no new query shape. An out-of-stock product therefore reports null — an empty lot is
+not what the counter would sell — which draws grey, not green.
+
+**Accessibility.** The dot is `aria-hidden` with a `title`, because the same four states are spelled
+out in words at the end of the description ("Exp 03/2028", "… — expiring soon", "… — expired", "No
+expiry tracked"): the state is never carried by colour alone. The 189/200 stock signal survives in
+the description with its amber low band; the desktop row and its `resultMeta` are untouched.
+
+**Also.** The 190 §4 busy card's spinner now renders at the file's 16px `spinner--sm` (the kit
+component draws a 22px page-loader circle inside a 13px row).
+
+**i18n.** `pharmacyPos.v12` (en + ur): `perUnitLabel` ("Per {unit}", the file's own wording),
+`expShort`, `expiringSoonNote`, `expiredNote`, `dotOk`, `dotSoon`, `dotExpired`, `dotNone`. Reused
+`pharmacyPos.stock.out` and `pharmacyPos.v3.inStock`.
+
+**Files.** `packages/shared/src/pharmacy-inventory.ts`, `apps/api/src/pharmacy/pharmacy.service.ts`,
+`apps/api/src/pharmacy/pos-mobile-search-rows.spec.ts` (new),
+`apps/web/app/(app)/pharmacy/pos/PosClient.tsx`, `apps/web/app/globals.css`,
+`packages/i18n/src/messages/{en,ur}.json`.
+
+**Tests.** New suite: the classifier across all four states, both window boundaries and the
+today-is-already-gone edge; then `posSearch` over seeded stock — soonest dated lot wins, dated
+outranks undated, an undated lot manufactures no date, run-out stock states no expiry, no batches at
+all is grey but still sellable, and one product's stock never colours another's.
+
+**Gates.** `pnpm lint` clean (one pre-existing unrelated warning in doctor-portal). `pnpm typecheck`
+clean. `pnpm test:unit` / `test:e2e` / `build` deliberately not run (controller runs the full gates).
