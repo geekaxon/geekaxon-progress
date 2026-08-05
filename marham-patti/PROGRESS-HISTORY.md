@@ -7875,3 +7875,51 @@ Traced the whole path, DB → screen, and the earlier two rounds had already fix
 ### Verification
 
 `pnpm lint` and `pnpm typecheck` run once at the end — clean (one pre-existing unrelated warning in `doctor-portal.repositories.ts`). Unit/e2e/build are the controller's gates. The spec's "verify on the deployed page" is the controller's staging deploy after this merge — this session verified by inspection and by the new service-level suite, not on a live page.
+
+## 205 — mobile-account-sheet-logout — DONE (2026-08-05)
+
+**Branch:** `fix/205-mobile-account-sheet-logout` · **Spec:** `/specs/205-mobile-account-sheet-logout.md` · WORK TYPE: FIX (presentation) · schema/RLS untouched · no CODEREF covers 205 (the family stops at 113–121).
+
+### The 149/150 grep — every logout control in the tenant app
+Grepped `sign.?out|logout` across `apps/**` + `packages/**` (excluding `dist`/`.next`), then narrowed on `macct__logout|MobileMoreSheet|macctrow--danger`. Four controls exist, and only one is the sheet's:
+
+1. `apps/web/components/shell/TopbarActions.tsx:373` — the DESKTOP user menu's Sign out (built by 176). Not the sheet; untouched.
+2. `packages/ui/src/components/mobile-more-sheet.tsx:~325` — the sheet foot's Sign out. **This is the one.** The account sheet has no component file of its own: 194 §1 made the shell render `<MobileMoreSheet>` twice — once with the registry overflow (the dock's More tab), once with `groups: []` (the avatar's account sheet) — so both sheets share this single button.
+3. `apps/web/app/(app)/pharmacy/pos/PosClient.tsx:~1905` — the POS keyboard-shortcut sign-out CONFIRM dialog. A different affordance; untouched.
+4. `apps/web/app/ui/StaffKit.tsx:1589` — the /ui gallery tile, which already rendered `btn btn--destructive macct__logout` correctly.
+Vendor/platform (`VendorAccountMenu`, `PlatformChrome`, `EntranceChrome`) are outside the tenant app; untouched.
+
+### Why the previous two attempts missed it — confirmed from git, not inferred
+`git log -- packages/ui/src/components/mobile-more-sheet.tsx` returns **163, 191, 203 only**. Neither 176 nor 200 ever opened the file that renders the button.
+
+* **176** built `TopbarActions.tsx` — it moved logout into the DESKTOP account menu and stopped there. Its diff touches `AppShell/InstallApp/TopbarActions/nav.ts/globals.css`; no sheet component.
+* **200** touched `AppShell.tsx` (dropped the keyboard-shortcuts row) and `mobile-account-sheet.spec.tsx` (+41 lines) — **the spec file, not the component**. Its new assertion read `expect(out).toHaveClass('macctrow--danger')`, i.e. it asserted the class the button ALREADY carried. The step that specified the button anatomy shipped a green test over the row anatomy it existed to replace. Searching for "account sheet" finds `mobile-account-sheet.spec.tsx` and nothing else — the second component nobody grepped for was hiding under a different filename, exactly the pattern this project keeps hitting.
+* **The stylesheet half nobody could have seen from the DOM.** The kit's button atoms are declared twice: `.mp-kit .btn--*` (the /ui gallery) and a restatement under `.mp-mobile` (a live sheet mounts outside the gallery). The restatement copied `--sm/--lg/--primary/--secondary/--ghost` and **dropped `--destructive`**. So even a correct class swap in 176 or 200 would have rendered a transparent, `--text-primary` button in the live shell while the gallery — which is what a design self-check looks at — showed a correct crimson one. Both halves had to land together.
+
+### Changes
+* `packages/ui/src/components/mobile-more-sheet.tsx` — foot control `macctrow macctrow--danger macct__logout` → `btn btn--destructive macct__logout`; the `<span class="macctrow__id">` label wrapper dropped (`flex:1` would drag the label off a centred flex button's axis). Click path unchanged: `leaveForNavigation()` (203 §2) then `signOut.onClick()` → AppShell's `logout()` = revoke + clear + redirect.
+* `apps/web/app/globals.css` — added `.mp-mobile .btn--destructive` (+`:hover`, `:active`, `>svg`), values identical to `.mp-kit .btn--destructive`. `.mp-kit`/`.mp-mobile` variant sets are now at parity (6 each).
+* `packages/ui/src/components/mobile-account-sheet.spec.tsx` — the 200 assertion replaced: the foot control must be a `BUTTON` with `btn btn--destructive`, must NOT carry `macctrow`/`macctrow--danger`, and no `.macctrow`/`.macctrow__id` may survive anywhere in `.sheet__foot`.
+* `packages/ui/src/lib/mobile-account-sheet-logout.spec.ts` — NEW. Stylesheet guard, written as a PARITY test rather than a spot check: every `.mp-kit .btn--*` must exist under `.mp-mobile`, so the next incompletely-restated atom fails here instead of on an owner's phone. Also pins the danger ground/`#fff` label and the `.macct__logout` / `.sheet__foot .btn` cascade.
+
+### Per-selector diff — mockup `component-reference.html` §H foot vs live sheet
+| property | mockup | before | after |
+|---|---|---|---|
+| element | `button.btn.btn--destructive` w:100% | `button.macctrow.macctrow--danger.macct__logout` | `button.btn.btn--destructive.macct__logout` |
+| ground | `var(--danger)` | transparent | `var(--danger)` |
+| label colour | `#fff` | `var(--danger)` | `#fff` |
+| height | 52px (`.sheet__foot .btn` outranks `.macct__logout`) | 52px (macctrow min-height) | 52px — same cascade the mockup resolves |
+| radius | `var(--radius-md)` | 14px | `var(--radius-md)` |
+| padding | `0 16px`, centred | `0 12px`, left-aligned | `0 16px`, centred |
+| icon | 16px, currentColor | 19px, `var(--danger)` | 16px, currentColor |
+| hover | `color-mix(--danger 88%, #000)` | `var(--surface-hover)` | `color-mix(--danger 88%, #000)` |
+| focus-visible | `var(--focus-ring)` | none | `var(--focus-ring)` |
+
+Both themes: `--danger`, `--focus-ring` and `--shadow-xs` are theme tokens; the `#fff` label rides a solid fill, so it is correct in light and dark alike (identical to the gallery, which renders both panes). The rest of the sheet is untouched — no keyboard-shortcuts row, appearance segment on its own line, `.macct` identity block, all as 200 §2 left it. `.macctrow--danger` stays in the stylesheet: StaffKit's "Clear held" is a legitimate danger LIST row.
+
+### Gates
+`pnpm lint` ✅ (incl. design-drift, token-integrity, tenant-english-only) · `pnpm typecheck` ✅ · no schema change so no `prisma generate` · per CLAUDE.md §6 `test:unit`/`test:e2e`/`build` are the controller's to run.
+
+**Not done by the agent:** the spec's "verified on the deployed page". The account sheet is client-rendered behind auth, and the agent may neither build nor deploy; verification here is by source inspection + the per-selector diff above, and the deployed check belongs to the controller's deploy gate.
+
+**Next:** 206 — pos-mobile-search-rows.
