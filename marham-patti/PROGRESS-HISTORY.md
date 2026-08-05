@@ -7842,3 +7842,36 @@ twice, `popstate` silent on a nav tap, device back unwinding layers one at a tim
 run in round 4; it cannot be done from here, and responsive DevTools is explicitly not acceptance.
 What is established here is the mechanism and its evidence: the popstate log proved `back()` was
 firing on a nav tap, and that call site is now unreachable from any navigation close.
+
+## 204 — customer-credit-visibility — DONE (2026-08-05)
+
+**Work type:** FIX. **Branch:** `fix/204-customer-credit-visibility` (off 203). **Spec:** `/specs/204-customer-credit-visibility.md`. No CODEREF covers 204. **Schema:** none (the fields already existed). **RLS:** unchanged.
+
+### Which link in the chain was broken (the answer the spec asked to record — third report: 193 §4, 198 §4)
+
+Traced the whole path, DB → screen, and the earlier two rounds had already fixed most of it. What was actually still broken:
+
+1. **Persistence — sound.** `Customer.creditLimit / openingBalance / allowCredit` are written by `createCustomer`/`updateCustomer`, the DTOs parse all three (`parseCreateCustomer`/`parseUpdateCustomer`), and `CUSTOMER_SELECT` selects them. Nothing to fix.
+2. **Projections — sound since 198.** `listCustomers` (picker) returns `CustomerOptionView` = base record + current `outstanding`; `listCustomerSummaries` returns limit + outstanding + `overLimit` per row; `customerLedger` returns the customer (with limit) + outstanding + `overLimit`. One tenant-wide read backs all three (`customerBooks`), so no per-row round trip.
+3. **BREAK A — the desk could not see a limit unless money was owed.** The customer list's outstanding cell rendered a bare "Settled" for anyone with a zero balance and the limit was quoted only as a suffix on a non-zero amount, so a customer registered *with* a limit and no purchases showed no limit anywhere on the list; the phone card had the same hole. The detail drawer drew the limit only inside the gauge's small labels, never as a stated figure, and never stated available credit as a number.
+4. **BREAK B — `allowCredit` reached the POS payload and was thrown away.** `/pharmacy/customers` has always sent the per-customer credit switch; `PosClient`'s picker mapping dropped it (its `Customer` type had no such field), so a customer explicitly set to *no credit* advertised a normal credit standing, was offered a CREDIT tender, and the sale went through. Exactly the 158→160 class the spec names, one level further down the same chain the two earlier rounds walked.
+5. **BREAK C — the credit decision was made on numbers the browser posted.** `commitPosSale` fed `input.customer.creditLimit / currentBalance` straight into `checkCreditLimit`. Those are assembled when the picker loads, so a limit edited since, a tab paid down at another counter, or a hand-edited request decided the over-limit flag. Nothing server-side consulted the customer row at all — including `allowCredit`, which was unenforced end-to-end.
+
+### Changes
+
+- `apps/api/src/pharmacy/pharmacy.service.ts` — `commitPosSale`: when a credit sale names a registered customer, resolve the credit position from that customer's own row + ledger (new private `customerOutstanding`, two reads, only on a credit sale) instead of the posted figures; a customer with `allowCredit === false` is refused a credit tender (`BadRequestException`). An unregistered/quick customer keeps the posted figures — the frozen 102 path is unchanged. Over-limit stays a warn, never a block (102/107 rule preserved).
+- `apps/web/app/(app)/pharmacy/customers/CustomersClient.tsx` — the detail drawer states **Credit limit / Outstanding / Available credit** as three labelled figures above the ledger (the gauge stays); the list's outstanding cell states the limit next to "Settled"; the phone card carries the limit in its meta row.
+- `apps/web/app/(app)/pharmacy/pos/PosClient.tsx` — `allowCredit` is carried on the picker wire type and the local `Customer` (defaulting to allowed when absent, so an older cached payload still parses), mapped on bootstrap and on inline add; `isCreditCustomer` requires it; a cash-only customer's option subtitle reads "(phone) · Cash only" instead of claiming a credit standing.
+- `apps/web/app/(app)/pharmacy/pos/PaymentPanel.tsx` — `CustomerCredit.allowCredit`; a CREDIT leg for a cash-only customer disables Confirm and states why, matching the server's refusal exactly (the panel's standing rule: never enable a button the server would 400).
+- `packages/i18n` — `pharmacyPos.v8.creditBlocked` and `pharmacyPos.payment.creditNotAllowed`, EN + UR parity. Everything else reuses existing `pcus*` keys (`pcusCreditLimit`, `pcusOutstandingCredit`, `pcusHeadroom` = "Available credit").
+- `apps/api/src/pharmacy/customer-credit-visibility.spec.ts` (new) — picker option carries limit + current outstanding + the switch; list row and ledger both carry limit + outstanding so available credit is derivable without a second call; over-limit flagged on both; checkout flags from the stored standing while the request posts a flattering one; a no-credit customer is refused (no sale written); an unregistered customer keeps the posted figures.
+
+### Decisions
+
+- **Refusing credit for `allowCredit === false` is a hard block, over-limit stays a warn.** The switch is an explicit desk decision about one customer; the limit is a threshold the owner wants to see crossed knowingly. Blocking the first and warning on the second keeps 102/107 behaviour intact.
+- **Available credit is computed on the page** (`max(0, limit − outstanding)`) rather than added to the wire — both numbers are already in the same payload, so a new field would only add a second place for them to disagree.
+- **Gating unchanged:** every credit surface stays behind the tenant credit setting (99) plus, now, per-customer `allowCredit`; walk-in is untouched; vendor/supplier code untouched; no schema change.
+
+### Verification
+
+`pnpm lint` and `pnpm typecheck` run once at the end — clean (one pre-existing unrelated warning in `doctor-portal.repositories.ts`). Unit/e2e/build are the controller's gates. The spec's "verify on the deployed page" is the controller's staging deploy after this merge — this session verified by inspection and by the new service-level suite, not on a live page.
