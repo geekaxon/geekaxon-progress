@@ -8307,3 +8307,261 @@ Grepped every sheet implementation. **There is no bespoke grip markup anywhere**
 ### The standing lesson, extended
 
 The spec's own lesson — capture the API response before writing a spec — was right and was what cracked this. The half it did not have: **a green suite proves nothing about a screen when every test fixes the flag that hides it.** The payload was correct, the renderer was correct, and the product was still broken, because no test ever asked what happens with the setting at its default. When a value does not appear, check the payload AND the defaults of every flag between the payload and the pixel.
+
+## 210 — pos-credit-and-customer-attribution — DONE (2026-08-05)
+
+**Branch:** `feature/210-pos-credit-and-customer-attribution` (WORK TYPE: FEATURE). Spec: `/specs/210-pos-credit-and-customer-attribution.md`. No schema change, no migration, RLS unchanged. Vendor console untouched.
+
+### What was wrong (from the spec's §0 — not re-derived)
+The owner's customers never showed an outstanding balance. Five rounds chased it as a render defect. The database showed `customer_id = NULL` and `credit_amount = 0.00` on **every** sale, including a Rs 24,150 sale to a named customer. `outstanding` over an empty set is correctly 0 — the ledger was never wrong. The cause: `creditEnabled` (99) defaults to FALSE and gated the Credit tile, so no sale had ever been made on credit; and a fully-paid sale stored no customer at all.
+
+### §1 — credit is a core capability, not a setting
+Removed from **resolution**, not just the screen (flipping the default would not work: a stored `false` on a tenant/branch row wins the resolve, and existing rows carry exactly that).
+Files that stopped consulting `settings.creditEnabled`:
+- `packages/shared/src/pharmacy-payment.ts` — `paymentPolicyError` lost the `creditAllowed` gate and the `'Credit is not enabled for this store.'` reason. The `hasCustomer` check on a CREDIT tender stays; it is the real constraint.
+- `packages/shared/src/pharmacy-settings.ts` — `allowedSaleMethods` DELETED (dead code, no consumer in the repo, and a second now-wrong source of truth). `creditEnabled` kept in `EffectivePharmacySettings` + the column as an orphaned field, documented as having no reader.
+- `apps/web/.../pos/PaymentPanel.tsx` — `methods` and `tiles` are constants; the `creditEnabled` prop is gone. Credit keeps digit `5` at the END of the row, so the 201 §1 key map is unchanged.
+- `apps/web/.../pos/PosClient.tsx` — `creditStateOf` / `customerStandingParts` / `CustomerStanding` / `isOverCreditLimit` / `CustomerSelect` / `MobileCustomerPicker` all lost the parameter; the shared rule is called with `creditEnabled: true`.
+- `apps/web/.../customers/CustomersClient.tsx` — no settings read at all; `const credit = true` replaces 209's derive-from-the-rows workaround.
+- `apps/web/.../returns/ReturnsClient.tsx` — `canCredit = !!sale?.customerId`; the settings read keeps only `restockingFeePct`.
+- `apps/web/.../settings/PharmacySettingsClient.tsx` — the credit toggle card is removed. The stored value still round-trips through the PUT (the DTO requires it), so nothing 400s.
+
+### §2 — an unpaid remainder becomes credit (PaymentPanel + PosClient only)
+- **Cash-integrity fix.** An empty tender field was `tendered: null`, which `splitPaymentSummary` reads as "tendered exactly the amount" — a cashier who tabbed past the field recorded a **settled** sale, labelled "Paid in full", against money nobody took. An empty field is now Rs 0; the CASH leg's `amount = min(tendered, owed)`; a CASH leg always sends a numeric `tendered`. The field still pre-fills with the full bill, so the ordinary one-tap cash sale is unchanged.
+- Whatever the tenders do not cover is appended as a CREDIT leg for exactly the shortfall, from every method (Cash, Card, Online, Split). A leg that took nothing is dropped before posting — the server refuses a zero-amount payment.
+- **Frozen boundary honoured:** `splitPaymentSummary` byte-identical (the `tendered == null ? amount` branch is untouched and still serves offline payloads queued by the previous build); `paymentPolicyError` lost only the credit gate; FEFO, decrement, idempotency, `clientActionId` and split maths untouched.
+- **The one new block:** money owed with no registered customer, or one with `allowCredit = false` → Confirm disabled + `.payhint`.
+
+### §3 — the dialog, to the recommitted mockups
+`.payalert` (first child of `.paymod__body` / `.sheet__body`), `.paychange--acct`, `.payhint` (above `.payfoot`) added to `globals.css` in BOTH the `.paymod` and `.mp-mobile` scopes, declarations copied from `pos-desktop.html:1659-1663` / `pos-mobile.html:1659-1663`. Per-selector diffs recorded CLEAN for `.payalert`, `.paychange`, `.paychange--acct`, `.paychange--short`, `.paytender`, `.paychips`, `.payhint`, `.payfoot`, `.paymeth`, `.paymod__hd`, `.paymod__body`, both themes (the tokens are theme-resolved, so both themes follow the same declarations).
+The over-limit note MOVED from the bottom of the panel to `.payalert` — exactly one such element in the DOM, asserted by node count. Change due and To account are mutually exclusive.
+
+**Deliberate divergences from the mockup, recorded so a later diff does not "restore" them:**
+1. The method reads **ONLINE**, not the mockup's "Wallet" — copy difference only (§3.4).
+2. No on-screen numeric keypad on either surface (199 owner override stands).
+3. **Beyond the spec, decided here:** the To-account row reads the COMPOSED credit amount rather than only the auto-composed part, so a sale put on the tab with the **Credit tile** also states "To account — {name}". It used to read "Paid in full", which is the one sentence a credit sale must never produce. Also: the `.paychange` family now prefixes `Rs` as the mockup writes it (`Rs 1,655.25`) instead of the bare figure, because 210 adds a third row to that block and three inconsistent money treatments in one dialog is a defect.
+
+### §5 — every sale records its customer
+`pharmacy.service.ts` now writes `customerId: input.customer?.id ?? null` regardless of payment method; a walk-in stays NULL. **This is a link, not a charge:** `listCreditSales` still filters on `creditAmount > 0`, so a fully-paid sale adds nothing to the balance — asserted explicitly (a customer with one cash sale and no credit sales reads `outstanding: 0`), because getting it wrong would invent debt.
+
+### §6 — realtime customer balance
+`customer.balance.updated` on the EXISTING spec-112 bus as a fourth scope (after notifications, platform, stock, held sales) — same Redis/in-memory pub/sub, same `tenantChannel` key, no new realtime system. New `apps/api/src/pharmacy/pharmacy.customer-events.ts` (publisher seam + `customerBalanceEvent` envelope builder), modelled on `pharmacy.stock-events.ts`. Carries identity and balance only — id, name, outstanding, credit limit; no clinical data, no sale contents. The figure is the customer's NEW outstanding **re-read from the ledger**, never a delta. Published on: a committed sale carrying a credit amount (inside the idempotency seam, so a replay re-announces nothing), a recorded customer payment, and a credit-note sale return. Merged into the POS's ONE SSE connection; consumed by `PosClient` and by `CustomersClient` (its own small reader on the same endpoint, as `lib/notifications.ts` and `lib/vendor-notifications.ts` each have). Tenant isolation asserted with a second-tenant subscriber that receives nothing.
+
+### §7 — audit
+New `pharmacy.pos.sale.credit` AuditLog row on any commit carrying a credit amount (skipped on an idempotent replay): actor, customer id + name, credit amount, credit limit, whether the over-limit warning was showing at confirm, and whether the leg was AUTO-COMPOSED rather than chosen with the Credit tile. The `creditAutoComposed` flag rides the commit as an audit-only DTO field — no money rule reads it. 84/112 redaction rules unchanged; no PIN material.
+
+### Tests written (controller runs them)
+- `apps/api/src/pharmacy/pos-credit-and-customer-attribution.spec.ts` — credit accepted on a credit-OFF tenant (the defect in one assertion) and refused for a walk-in; composed-leg settlement at Rs 0 / Rs 500 / Rs 1,000 tendered on an Rs 800 bill; explicit numeric zero never reads as "tendered the amount" AND the legacy null branch still settles; over-limit warns and commits; a cash-only customer is still refused; a fully-paid sale stores `customer_id` and leaves `outstanding: 0`; the four realtime cases including tenant isolation and a positive control so the isolation case cannot pass vacuously.
+- `packages/ui/src/lib/pos-credit-and-customer-attribution.spec.tsx` — the gate is gone from every consumer, the three selectors are styled in both scopes and present in both mockups, exactly one `.payalert` node, Change due / To account mutually exclusive, EN+UR copy parity, the audit row's fields.
+- Updated for superseded behaviour: `pos-payment.spec.ts` (credit now accepted with the setting off), `pos-checkout.spec.ts` (the refusal is the walk-in, not the setting), `pharmacy-settings.service.spec.ts` (`allowedSaleMethods` gone), `credit-render-and-sheet-fixes.spec.tsx` (209's prop-shape and derive-from-rows assertions).
+
+### Gates
+`pnpm lint` and `pnpm typecheck` run once at the end — both clean (one pre-existing unused-eslint-disable warning in `doctor-portal.repositories.ts`, untouched by this step). Tests and build left to the controller per AGENT.md §4A.
+
+### Decisions recorded (no approval sought, per AGENT.md §2)
+- **PROGRESS.md `Next` line.** The spec asks for `none — awaiting next spec block [HUMAN_REQUIRED]`. CLAUDE.md's canonical format allows only a full spec path or exactly `none — build order complete`, and the controller parses that line. Wrote the canonical form; the intent (more spec blocks are expected, the build order is not finished) is recorded here instead.
+- **Ended `[CHECKPOINT]`, not `[HUMAN_REQUIRED]`.** The spec's §9 asks for a block-final `[HUMAN_REQUIRED]`; AGENT.md §2 retires owner-verification halts and the task message named `[CHECKPOINT]` explicitly. §8's acceptance is owner-verification on the deployed page — a marker, not a gate.
+
+## 211 — pos-credit-auto-only-and-udhaar-chip — DONE (2026-08-05)
+
+**Branch:** `fix/211-pos-credit-auto-only-and-udhaar-chip` (WORK TYPE: FIX). Spec: `specs/211-pos-credit-auto-only-and-udhaar-chip.md`. No schema, API, DTO or repository change; RLS untouched; Phase-12 money arithmetic frozen (`splitPaymentSummary` byte-identical, `paymentPolicyError` unchanged).
+
+### §1 — the Credit tile is removed
+- `PaymentPanel.tsx`: `tiles` is now `['CASH','CARD','ONLINE','SPLIT']` — four tiles, digits `1..4`, no `5`. The `.paymeth` grid is sized off `tiles.length`, so the row cannot render a fifth column. The stale comment placing Credit "at the END of the row" was deleted with it.
+- `methods` (what SPLIT expands into legs) drops `'CREDIT'` → `['CASH','CARD','ONLINE']`. Spec §1.2 allowed either shape; keeping CREDIT in `methods` would have drawn an **editable Credit amount box** in the split board (`splitBoard` renders one `.paytender` per leg), which §4 forbids outright. The credit leg is still composed after the split boxes are read, so the commit payload is unchanged.
+- Everything credit-side that books the ledger is untouched: the 210 §2.2 auto-composition, `canBookToAccount`, `blockedBalance`, `creditWithoutCustomer`/`creditNotAllowed`, `summary.creditAmount`, the `.paychange--acct` row, the over-limit alert, `creditAutoComposed`.
+
+### §2 — the "Udhaar" chip
+- Added as the FIRST button in the existing `.paychips` row, before `Exact`. Same button element, same row, no new anatomy and no CSS change — both scopes already declare `.paychips { display:flex; flex-wrap:wrap }`, so a fifth chip wraps rather than overflowing.
+- `setUdhaar()` sets the lead CASH leg's `tendered` to `0` and nothing else; the 210 machinery turns the whole bill into the shortfall, names the account, and blocks Confirm with `.payhint` when there is no customer. Guarded on `lead.method === 'CASH'`, exactly like `setExact`, so it never appears in Split or on a non-cash lead.
+- Keyboard: `0`, bound through `udhaarRef` (the same ref pattern `=`/Exact uses, so the once-bound listener never settles a stale leg). Checked before the tile-digit branch; `0` was never a tile key, so nothing is displaced, and the existing INPUT/TEXTAREA/SELECT guard keeps it inert while the tender field has focus.
+- `FIXED_SHORTCUTS`: `payPickMethod` becomes `['1','2','3','4']` and a new `payUdhaar` → `['0']` joins the payment group, so the shortcuts dialog (197 §3's single source of truth) lists it. Labels added to both catalogs; `payPickMethod`'s label drops "· Customer credit".
+
+### §3 — the raw i18n key, and its ROOT CAUSE
+- The real defect was bigger than the spec's reading. `pharmacyPos` carried **two `"v12"` blocks** in both `en.json` and `ur.json`: 210 appended `toAccount`/`balanceHint`/`overLimitAlert` as a new block instead of merging into the existing expiry-dot one, and `JSON.parse` keeps the LAST duplicate — so all three strings were shadowed and **all three** rendered as raw key paths, which is why the owner saw the defect on desktop and mobile alike.
+- Fix: the duplicate block is gone. `toAccount` and `overLimitAlert` merged into the surviving `v12`; `balanceHint` moved to `pharmacyPos.v2.*` per §3.1, where the panel's other payment strings live, and `PaymentPanel.tsx` now reads `t('pharmacyPos.v2.balanceHint')`. Both catalogs, EN/UR parity verified (0 keys on either side only).
+- `translate()`'s loud key-fallback contract is deliberately UNCHANGED (§3.3).
+
+### §3.2 — the guard
+`packages/ui/src/lib/pos-credit-auto-only-and-udhaar-chip.spec.tsx` scans every file in `apps/web/app/(app)/pharmacy/pos/` for literal `t('…')` and `translate(…, '…')` keys (214 distinct today) and resolves each against `en.json`, failing with the full list. Runtime-composed keys (`` t(`pharmacyPos.method.${m}`) ``, `tAt`) are skipped rather than guessed at — noted in the test's own comment so it is not mistaken for full coverage. Scoped to POS per §3.2, not repo-wide. A vacuity case asserts the scanner matched >100 keys. A sibling case rejects **any duplicate key in a message object**, which is the actual mechanism that hid this one.
+
+### Superseded assertions
+`pos-credit-and-customer-attribution.spec.tsx` §1 asserted the Credit tile in both arrays (210 §1.1) and `v12.balanceHint` in UR — both superseded by 211 §5's owner override. The case was rewritten to keep the half that still holds (no surface reads a store credit setting) and to point at `v2.balanceHint`.
+
+### Gates
+`pnpm lint` clean (incl. design-drift, token-integrity, tenant-english-only). `pnpm typecheck` clean, 29/29. Unit/e2e/build left to the controller per CLAUDE.md §6; every source-pattern assertion in the new suite was evaluated directly against the live files first.
+
+### Notes / decisions recorded
+- Owner override 1: **no Credit tile on the payment row, ever** — credit is only ever the automatic remainder.
+- Owner override 2: **"Udhaar" is a deliberate non-English label** on an English-only surface (EN catalog "Udhaar"; UR catalog carries the same, matching how `v2.exact` already ships untranslated there).
+- `payTender` (`0–9`, inside the field) and `payUdhaar` (`0`, outside it) coexist by focus, the same way `discountClear`'s `0` does on its own surface; `FIXED_SHORTCUTS` is a documentation catalogue and does not enforce cross-group uniqueness.
+
+**Next:** none — awaiting next spec block [HUMAN_REQUIRED]
+
+---
+
+## 212 — inventory-desktop-to-mockup — DONE (2026-08-06)
+
+**Work type:** FIX. **Branch:** `fix/212-inventory-desktop-to-mockup`. **Spec:** `specs/212-inventory-desktop-to-mockup.md`.
+**Schema:** none. **Migrations:** none. **RLS/auth/permissions/flags:** unchanged (`pharmacy.pos` + `pharmacy.sell` on the
+inventory surface; the import/export endpoints keep their own per-entity authorisation). **Desktop only** — mobile
+Inventory, the Low stock & near expiry screen and FEFO batch resequencing are 213's by owner instruction. Vendor untouched.
+
+### Problem
+Spec 186 built the Inventory screen and it was never owner-tested until this round. Everything found was presentation or
+wiring, plus two corrections that turned out to be repo-wide.
+
+### §1 Topbar
+- `@mp/shared` gains `inventoryUrgency()` + `NEAR_EXPIRY_BADGE_DAYS = 30`: ONE badge, first non-zero wins —
+  expired → out of stock → to reorder → near expiry → the plain catalogue size. It returns `null` when the counts have
+  not resolved, which is exactly when no tag should render; the badge is never a `0` and never a raw key.
+- The four figures ride the EXISTING `GET /pharmacy/nav/counts` payload (113 §2.6) rather than opening a second
+  endpoint or a per-render query. Cost in the Prisma repo: two `batch.count()`s (expired / due within 30d, both
+  `qty > 0`) plus two id+int selects (`medicine{id,minStock}`, `stock{medicineId,qty}`) reduced in memory. The shell
+  already caches this read for 60s stale-while-revalidate, so the badge costs nothing per render.
+- **Judgement call:** the out-of-stock / to-reorder comparison sums stock across ALL of a tenant's branches, while the
+  inventory LIST is primary-branch scoped. The badge is a store-wide urgency signal in the chrome, and a per-branch
+  badge would need a branch the chrome does not know. Recorded so a future multi-branch step can revisit it.
+- **Judgement call:** the badge's near-expiry horizon is 30 days, deliberately tighter than `NEAR_EXPIRY_DAYS = 90`
+  (the amber banding the list and the alerts use). A badge in the chrome is an interrupt; 90 days would make it
+  permanent on any real catalogue. Both constants are exported and named for what they are.
+- §1.2 subtitle: the nav registry gains `subtitleCountKey`, used only once the count resolves
+  (`navSub.pharmacyInventoryCount`, "…across 4,182 medicines and general items"); until then the count-free
+  `navSub.pharmacyInventory` stands. Two keys rather than one with a blank, so the line never reads "across  medicines"
+  mid-flight and never states a number nobody counted.
+
+### §2 Page body
+- `.pghead` (breadcrumb · title · one-line what) + `.pghead__acts` (Import · Export · Stock adjustment · Add item)
+  moved into the client island — the actions are interactive, so splitting the block across the server boundary would
+  have meant two heads. The topbar's own server-rendered title/subtitle (176) still names the page before hydration.
+- Breadcrumb is drawn in `--accent` / `--accent-soft`, not off `--text-secondary`. That link went unreadable in dark
+  twice (92, 120) precisely because it was a grey tint; both accent tokens are declared per theme, so it now reads in
+  either one by construction rather than by a contrast check nobody re-runs.
+- **Alerts became toasts.** The two `mp-msg` paragraphs at the top of the body are gone; every confirmation and every
+  failure goes through the kit's top-right `toast` (70 §2), the same correction 192 made on the POS. No banner slot
+  remains in the page body, so nothing pushes the table down as it appears.
+  - KEPT, deliberately: the DETAIL DRAWER's `.alert` block. That is a persistent statement of the product's state
+    (below minimum / expiring / expired / out of stock), not a transient notification, and §5 requires content and
+    figures unchanged. The mockup's detail drawer shows no alert only because its example product has nothing to warn
+    about — the block is conditional. Turning it into a toast would have destroyed information on drawer close.
+- Export/Import: the spec-12 capability for this catalogue ALREADY EXISTS (`medicine` entity — `GET /export/medicine`,
+  `GET /import/medicine/template`, `POST /import/medicine/upload`, `POST /import/medicine/:job/apply`), so the §2
+  `[HUMAN_REQUIRED]` escape did not apply. Export streams the CSV straight to a file. Import is a dialog on THIS desk
+  driving those same endpoints (template → dry run → apply); it is not a link to `/admin/import`, because that route is
+  admin-role gated in the nav while this screen is reachable on `pharmacy.sell`, so the link would have dead-ended for
+  the very user who holds the catalogue. Nothing is written until a human sees the valid/invalid counts and applies.
+
+### §3 Adjust Stock
+- **One shared header component.** `apps/web/components/shell/ModalHead.tsx` now owns the composition 193 §5 built and
+  198 §5 moved the shell's Keyboard Shortcuts dialog onto: accent icon tile · title over subtitle · ONE bordered close
+  on the same row · hairline under it. `ShortcutsModal` and `AdjustDialog` (and the new Import dialog) all mount it.
+  - **Judgement call on the spec's wording.** §3.1 says "the same `.modal__head` / `.modal__title` anatomy as the
+    Keyboard Shortcuts dialog". Those two clauses point at different things: the Shortcuts dialog does not use
+    `.modal__head` — it uses `.cxdialog__hd`, which IS that anatomy under the name 193/198 gave it. §7 makes
+    component-reference authoritative for component anatomy where the files disagree, and "one shared component, not a
+    second style" is the load-bearing half of the sentence. So Adjust Stock adopted `.cxdialog__hd` via `<ModalHead>`
+    rather than a fourth hand-rolled head. Consequence for the §8 diff table: `.modal__head` / `.modal__title` no
+    longer appear on this screen at all, so their per-selector diff is vacuously clean; `.modal__body` / `.modal__foot`
+    remain and were set to the mockup's own padding (18px 22px 6px / 16px 22px 20px).
+- **Two close controls → one.** The cause was `DialogContent` mounted WITHOUT `hideClose`: the header drew one and the
+  kit's floating × drew another. Both dialogs now pass `hideClose`, and `packages/ui` gained a test that asserts the
+  node count directly (2 without the opt-out, 1 with it) so the pair cannot reappear.
+- Four searchable selects — Item, Batch, Unit, Reason — all on the kit `SearchSelect`, `Name (subtitle)` rows,
+  keyboard-operable. Item is EMPTY when opened from the page-head button and PRE-FILLED from a row's inline action;
+  picking an item fetches its detail, and clearing it clears the batch and the unit. Unit options are the selected
+  item's own chain and re-populate on every item change. Batches sort soonest-expiry-first with undated last (184 §2)
+  and show the expiry in the subtitle. Reason renders the adjustment enum as labels, never raw codes.
+- Adjustment arithmetic, the audit write and the reason requirement are byte-identical.
+
+### §4 Add / Edit drawer
+- Frame: `DrawerContent` now carries `p-0 gap-0 overflow-hidden` + `hideClose`, so `.drawer__head` / `.drawer__body` /
+  `.drawer__foot` own the padding AND the scrolling exactly as the file states them (18px 22px / 22px / 16px 22px).
+  That is the actual fix for the wrong right-edge gap: the panel and the body were BOTH scrollers, and the body's
+  gutter sat outside the scrollbar. With the body as the only scroller its 22px sits inside it (182 §2). Same treatment
+  on Add, Edit and the detail drawer, and each head now carries the one close.
+- **Pack size removed from the medicine form.** `Medicine.packSize` stays in the schema and every stored value is
+  preserved — an edit reads it into the draft and posts it back unchanged, so nothing already typed is destroyed. It is
+  simply no longer editable, because the unit chain expresses pack structure properly and two sources of truth drift.
+- Base unit, the min-stock unit and the opening-stock unit are all searchable selects.
+- Category is now an autocomplete that LOOKS LIKE A SELECT: the kit `SearchSelect` with the "+ add new" slot the POS
+  customer select uses (132/134). It replaced a `datalist`-backed text input, which browsers draw four different ways
+  and which never offered to create the name you had just typed. `SearchSelect` gained one additive prop —
+  `onQueryChange` — so the create row can NAME the typed value ("Add “Personal care”"); tested in `@mp/ui`.
+- **"Batches & expiry" section added** to the General-item form, as the mockup draws it: the track switch, the file's
+  own help copy, and Opening quantity + Unit. **Judgement call:** the mockup's switch reads as a per-product mode, but
+  183 decision 4 (locked) makes batch/expiry DATA-DRIVEN, and this step has no schema. So the switch is a FORM
+  affordance — on, it reveals a batch number and an optional expiry for the opening lot; it stores no product mode.
+  The opening quantity posts through the EXISTING audited adjustment (`POST /pharmacy/inventory/adjustments`, type
+  `CORRECTION`, reason "Opening stock") rather than a new endpoint: same never-negative guard, same StockMovement, same
+  actor, no second arithmetic path. The batch number / expiry ride in that reason text so nothing entered is dropped
+  while per-lot capture stays where it belongs (receiving). The block only renders while CREATING; an existing item's
+  stock moves through Adjust stock.
+
+### §5/§6 Detail drawer + table
+- Detail drawer framed like the add/edit drawer; section order, spacing and content unchanged.
+- Rows per page 25 · 50 · 100 · 250 · 500 through a compact `SearchSelect` (no native select survives), and column
+  show/hide via a `.tbl-toolbar__mini` trigger over the shared `.menu`. Both persist per user per list through a new
+  `apps/web/lib/list-prefs.ts`, which deliberately reuses the `@mp/ui` DataList kit's OWN namespace and key shape
+  (`mp.datalist.size|cols|view.<list>`) — a hand-rendered mockup table must not fork the storage contract, or the same
+  user's "50 rows" would mean two different things on two lists. Read in the state initialiser, so no default flashes.
+- Advanced search: matches across every VISIBLE column (hide a column and its text stops being searchable — the only
+  rule a user can predict), plus identity and barcodes always, whitespace-separated terms ANDed. Debounced 250ms with
+  the spinner in the field and the "Searching N items…" card, consistent with the POS (190 §3).
+- **Two empty states.** A filter that matched nothing used to say "Add your first medicine or general item…" over a
+  catalogue of 161 items. The copy now follows the CAUSE: a search term, a product-type chip or a health chip being on
+  gives "No items match this filter / Check the spelling, or clear the filter to see everything." with a **Clear
+  filter** action that clears all three at once. A genuinely empty catalogue keeps the first-run wording.
+
+### §7.1 Searchable select everywhere — and WHY THE 94 GUARD DID NOT BITE
+Two independent failures, either of which alone was enough:
+1. **The guard checked for a tag, the code used a component.** `apps/web/scripts/design-drift-check.mjs` (and its pure
+   twin `packages/ui/src/lib/drift-guard.ts`) match the literal `<select` JSX tag. All 53 offending call sites wrote
+   `<NativeSelect …>`; the only real `<select>` is inside `packages/ui`, which is outside the scanned SCREEN_ROOTS. The
+   regex never saw a select, so it never fired. (One raw `<select>` did survive, in DayClose — it carried a `.btn`
+   class rather than a control class and had simply never been looked at.)
+2. **The guard RECOMMENDED the banned thing.** `NativeSelect` was named in the script's own `REPLACEMENTS` map and in
+   the raw-control fix text as the design-system cure. Anyone who tripped the guard was told to write exactly what 94
+   had banned. A guard that cannot bite is worse than none, because it is believed — and this one was actively wrong.
+
+Fixed: 53 `NativeSelect` sites across 26 files under `app/(app)/` plus the DayClose raw `<select>` are now
+`SearchSelect`, each carrying an `aria-label` (a `<label>` wrapping a button does not associate, and most of these sat
+inside `<label className="mp-field">`); short static option sets pass `searchable={false}`; a former `<option value="">`
+becomes a `placeholder` plus `clearable` where the blank was a real choice; a required select ignores the picker's
+deselect (`onChange={(v) => v && set(v)}`) so re-picking the current value cannot blank it. The guard is now expressed
+against the COMPONENT, path-scoped to `app/(app)/`, and the fix texts name `SearchSelect`. `(patient)`, `(field)`,
+`store` and vendor are out of 212's scope and keep `NativeSelect`; the component stays exported.
+
+### §7.2 Page titles
+`app/(app)/layout.tsx` was already correct. 40 staff pages hardcoded the platform name in their own `title`, so tabs
+read `[Page] — Marham Patti — [Tenant]`. Each is now the page name alone. `(auth)`, `(platform)`, patient, rider and
+vendor titles are untouched (a vendor tab SHOULD say the platform name); the `(app)` not-found / error boundary titles
+fixed in 161/166 are untouched. `'Powered by Marham Patti'` strings are unrelated and were left. A second path-scoped
+guard in `design-drift-check.mjs` fails the build if a staff page reintroduces it.
+
+### Files
+`packages/shared/src/pharmacy-inventory.ts` (inventoryUrgency, NEAR_EXPIRY_BADGE_DAYS) ·
+`apps/api/src/pharmacy/{pharmacy.repositories.ts,__fakes__.ts,nav-counts.spec.ts}` · `apps/api/src/vendor/vendor-pharmacy-metrics.spec.ts` ·
+`apps/web/lib/{nav.ts,list-prefs.ts}` · `apps/web/components/shell/{AppShell.tsx,ModalHead.tsx,ShortcutsModal.tsx}` ·
+`apps/web/app/(app)/pharmacy/inventory/{page.tsx,PharmacyInventoryClient.tsx}` · `apps/web/app/globals.css` ·
+`apps/web/scripts/design-drift-check.mjs` · `packages/ui/src/components/{search-select.tsx,search-select.spec.tsx,dialog.spec.tsx}` ·
+`packages/i18n/src/messages/{en,ur}.json` · 26 tenant clients for the select sweep · 40 staff `page.tsx` titles.
+
+### Tests written
+`nav-counts.spec.ts` — the extended payload, tenant-scoped both ways, an empty tenant reading all zeros, the four
+urgency buckets against a pinned clock (an expired lot, one due in a fortnight, one far out, one undated, one holding
+nothing), and `inventoryUrgency`'s full resolution order including "no counts → no badge" and "0 items → 0 items".
+`search-select.spec.tsx` — the typed query reaching the create row so it can name it. `dialog.spec.tsx` — the
+close-control node count, 2 without `hideClose` and 1 with it.
+
+### Gates
+`pnpm typecheck` clean (29/29). `pnpm lint` clean (16/16; the one warning is a pre-existing unused eslint-disable in
+`doctor-portal.repositories.ts`, untouched here) — including all five drift-guard assertions, the two new ones among
+them. Unit/build/e2e left to the controller per AGENT.md §4A. Note for the record: this repo has no Playwright harness
+(no config, no `test:e2e` script anywhere), so the §4A "every screen has a `page.goto` test" rule has nothing to attach
+to; the screen assertions here are the guard sweeps plus the kit-level tests above.
+
+### Not done / deferred
+Per §9: Inventory mobile, the Low stock & near expiry screen (spec 104's logic exists but has no route and no nav
+entry) and FEFO batch resequencing all go to 213. The global discount waits for the Settings block. `/settings` is
+still a leftover English/Urdu switcher while the real pharmacy settings sit at `/pharmacy/settings`, absent from the
+nav — the owner's decision is one settings page per tenant, sectioned by module.

@@ -6,15 +6,16 @@
 
 ## Current Status
 - **Project:** Marham Patti — multi-tenant white-label healthcare platform.
-- **Phase:** **PHASE 20** — POS owner-test rounds complete through 209.
-- **Last completed:** **209 — customer-credit-render-and-sheet-fixes**.
-- **Next:** none — awaiting next spec block
-- **Branches:** through 208 on staging. 209 on fix/209-customer-credit-render-and-sheet-fixes.
-- **After 209:** POS sign-off expected, then the Inventory test round (186 built, never tested), then Purchases + Suppliers.
-- **Parked:** printing (needs ESC/POS — Bluetooth + wired); per-page menu permissions; mobile scroll-animation smoothness.
+- **Phase:** **PHASE 20** — POS signed off; Inventory owner-test round 1 done.
+- **Last completed:** **212 — inventory-desktop-to-mockup**.
+- **Next:** none — awaiting next spec block [HUMAN_REQUIRED]
+- **Branches:** through 211 on staging. 212 on fix/212-inventory-desktop-to-mockup.
+- **After 212:** 213 (Inventory mobile + Low stock & near expiry screen + FEFO batch resequencing), then Settings, then Purchases + Suppliers.
+- **Parked:** printing (needs ESC/POS — Bluetooth + wired); per-page menu permissions; mobile scroll-animation smoothness; global discount (waits for Settings).
 
 ### Recent steps
-- **209 — customer-credit-render-and-sheet-fixes** — DONE (2026-08-05) — a customer's credit standing survives a credit-off tenant; dialogs stand above sheets.
-- **208 — pos-final-fixes** — DONE (2026-08-05).
+- **212 — inventory-desktop-to-mockup** — DONE (2026-08-06) — desktop Inventory to the mockup; searchable selects everywhere; tabs stop saying the platform name.
+- **211 — pos-credit-auto-only-and-udhaar-chip** — DONE (2026-08-06).
+- **210 — pos-credit-and-customer-attribution** — DONE (2026-08-06).
 
 > Older steps in PROGRESS-HISTORY.md
