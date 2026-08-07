@@ -8736,3 +8736,111 @@ removed.
   `.histrow*`, `.modal*`, `.selectbox`, `.tbl*`, `.rowactions` and `.skeleton` in BOTH themes still need eyes on the
   deploy; the unit suite pins the source, not the pixels.
 - Vendor surfaces untouched. Mobile inventory is 214; the Low stock & near expiry screen and FEFO resequencing are 215.
+
+## 214 — inventory-mobile-to-mockup — DONE (2026-08-07)
+
+**Work type:** FIX (presentation + interaction). Branch `fix/214-inventory-mobile-to-mockup`.
+**Spec:** `specs/214-inventory-mobile-to-mockup.md`. Mockup: `specs/mockups/pharmacy/inventory-mobile.html`,
+sibling reference `pos-mobile.html`. **No schema, no RLS change, no arithmetic change.**
+
+### §1 Header — the POS chrome, not a bespoke one
+`apps/web/app/(app)/pharmacy/pos/PosMobileChrome.tsx` was DELETED and its contents moved verbatim to
+`apps/web/components/shell/MobilePageChrome.tsx`; POS imports it from there, and Inventory now consumes the
+same component. `initialsOf()` moved with it (it was a private copy in PosClient). Inventory claims the shell
+slot with `claimChrome('inventory')` and portals the header into `chromeSlot.host`; the shell stands its own
+four-button header down for the duration. Two `.mic` controls only — notifications and the avatar. The
+search field lives INSIDE the chrome so it survives the scroll collapse. The collapse is unchanged
+(`--mp-chrome-c` over the file's 84px, `opacity` + `transform` only, driven from `requestAnimationFrame`).
+CSS: `data-page-chrome='inventory'` joins the POS's body-geometry and `scroll-padding-top` rules (identical
+header height: 58 title + 58 search + hairline = 117). The body-scoped `.mp-inv2 .mpos-search` rules were
+DELETED rather than left as dead CSS (the chrome portals outside `.mp-inv2`), and
+`.mp-mobile .mchrome--pos .mpos-search > svg` was added for the leading glyph, which the POS did not need
+because its glyph is a button (`.mpos-search__go`).
+
+### §2 Page actions
+`.mquickacts` is now **Stock adjustment** (secondary, opens the adjust surface empty) + **Add item**
+(primary), mirroring the desktop page head. The "Name" sort control was dropped — the file does not carry it
+at this tier; sorting stays on the desktop table's own column headers. `pinvSortName`/`pinvSortStock`/
+`pinvSortExpiry` now have no call site.
+
+### §3 View row
+`.mviewrow` = list/card toggle + `.miconacts` (Import, Export), the same pair the desktop page head carries;
+this is the first time Import is reachable on the phone at all. `.miconacts`/`.miconacts__btn` added to
+globals from the file (2555-2558). The record count left the row: the full catalogue count now lives in the
+header sub-line (`pinvMobileSub` — "12 below minimum · 4,182 items", the file's own wording), and a
+`.minv__count` line appears under the view row ONLY when a filter has narrowed the set, stating "N items" —
+never a range, because there are no pages.
+
+### §4 Infinite scroll
+Numbered pagination and rows-per-page are gone from the mobile branch (desktop keeps both, 212 §6). A
+`shownCount` window over the filtered rows grows by `MOBILE_PAGE` (25) when an **IntersectionObserver**
+sentinel in the `.infload` row intersects (`rootMargin: 240px`). Never a `scroll` handler — iOS throttles
+`scroll` during momentum, which is the same reason §1's collapse is compositor-driven. De-duplicated by an
+`appending` ref cleared in an effect keyed on `shownCount`, so one append per render cycle however many times
+a flick fires the callback. The row renders one of three things and never spins forever: loading (with the
+sentinel), a failure line with a **Retry** button, or nothing at all once everything is on screen. Filters,
+chips and search reset the window to the first page.
+**Decision, recorded:** the append walks rows this screen already holds, because
+`GET /pharmacy/medicines/inventory` returns the whole catalogue in one response and changing that is an
+endpoint change this FIX spec excludes. The failure/retry branch is therefore defensive today; it is written
+anyway so the surface already states a failed page the day the endpoint pages.
+
+### §5 Everything opens as a bottom sheet
+Introduced `Panel` in the inventory client: ONE frame chooser, so the content of each surface is written
+exactly once. Below the breakpoint it is the shared `<MobileSheet>` (grip, header, internally-scrolling
+`.sheet__body`, `.sheet__foot--row`), which brings the slide + reduced motion (191 §3), drag-to-close with
+the 195 §1 physics, and device-back through the shared LIFO stack. Above it, the drawer or the dialog exactly
+as 212/213 left them. Converted: Detail (drawer), Add/Edit (drawer), Adjust stock (dialog) and — because §3
+made it reachable on the phone — Import (dialog). `DetailSkeleton` is body-only now; the head belongs to the
+frame, which differs per tier. `<DrawerContent>`, `<DialogContent>` and `<MobileSheet>` each appear exactly
+once in the file. CSS: the FEFO table scrolls inside the sheet (bar hidden, 195 §2) instead of taking the
+page sideways, the three-cell price box reflows on `auto-fit`, and the footer keeps the file's proportions
+with the kit's own `<Button>` (secondary hugs, primary fills).
+
+### §6 Every select becomes a bottom sheet on mobile
+`packages/ui/src/components/search-select.tsx`: ONE component, ONE breakpoint guard. New
+`packages/ui/src/lib/mobile-tier.ts` (`useMobileTier`, `MOBILE_TIER_QUERY`) is now the kit's single
+breakpoint; the inventory screen's private copy of the hook was retired onto it. Below 768 the options
+render into a `MobileSheet` **portalled to `document.body`** — a select is very often opened from inside a
+dialog, whose transformed subtree would otherwise resolve `position:fixed` against the dialog and draw the
+sheet behind it (209 §2 / 213 §2, arriving by a different door). `selsheet__panel` / `selsheet__scrim` raise
+it to 82/81, above the dialog layer's 70. `MobileSheet` gained `scrimClassName` for that. The option list is
+NOT forked: `LIST_SKIN` is a class-name table and the filtering, keyboard walk, empty state and "+ add new"
+are the same code — on the sheet the create affordance is the footer's full-width action (191 §1), on the
+panel the pinned row. `useLayerHistory(open && !mobile, close)` so the sheet's own registration is not
+doubled (two entries would take two back presses). The filter box autofocuses on the panel only: on a phone
+the device keyboard must not erupt before the owner has seen an option — and there is no on-screen keypad
+anywhere (199). Row anatomy and search field are the customer chooser's (191 §1) and the unit picker's
+(200 §5). Applied to `MultiSearchSelect` too. The 213 spec's `useLayerHistory(open,` assertion was updated
+to the narrowed condition, with the reason written into the test.
+
+### §7 POS mobile — the over-limit customer row
+`CustomerStanding` now wraps every meta segment in a `.nb` span, so the line wraps only BETWEEN segments and
+never inside a figure ("Limit Rs" / "20,000" was the owner's screenshot). The name truncates at the row's
+edge instead of running under the flag. The danger treatment is unchanged — a tint plus an inset 3px bar,
+which costs the row no width, so an over-limit row holds as much text as an in-limit one. Layout only: the
+four credit states from 208/209 keep their meanings and their words.
+
+### A11y / targets
+`.miconacts__btn` and the mobile `.viewtoggle` buttons keep the file's 32px BOX and gain a 44px hit area via
+`::after { inset:-6px }` — the mockup and the thumb are both satisfied without redrawing the row.
+
+### i18n
+Seven new keys, EN + UR: `pinvAccount`, `pinvMobileSub`, `pinvItemsCount`, `pinvLoadingMore`,
+`pinvLoadMoreFailed`, `pinvLoadMoreRetry`, `pinvDetailTitle`. Parity gate green.
+
+### Tests
+`packages/ui/src/lib/inventory-mobile-to-mockup.spec.ts` — 42 source assertions, one per owner-visible item,
+in the 213 style (a render assertion against a mocked surface could not have caught any of these and cannot
+prove them fixed; what a test can do is stop each one silently coming back). Covers §1–§7 plus the "what did
+NOT change" set: pack maths still goes through `@mp/shared`, the adjustment still posts to the one audited
+endpoint with the same payload shape, and the desktop composition is untouched.
+
+### Gates
+`pnpm lint` and `pnpm typecheck` run once at the end — clean (design-drift, token-integrity,
+tenant-english-only, tenant-search-select and tenant-page-titles guards all green). `@mp/ui` (59 suites, 791
+tests) and `@mp/i18n` (4 suites, 28 tests) pass. §8's gesture, scroll-on-hardware and per-selector diff items
+are owner-device verification and are not claimed here.
+
+### Not done / next
+215 — the Low stock & near expiry screen and FEFO resequencing.

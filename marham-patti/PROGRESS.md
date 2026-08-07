@@ -7,15 +7,15 @@
 ## Current Status
 - **Project:** Marham Patti — multi-tenant white-label healthcare platform.
 - **Phase:** **PHASE 20** — Inventory owner-test round 2. 213–215 authored as an owner-released group.
-- **Last completed:** **213 — inventory-desktop-r2-and-global-fixes**.
-- **Next:** specs/214-inventory-mobile-to-mockup.md
+- **Last completed:** **214 — inventory-mobile-to-mockup**.
+- **Next:** specs/215-stock-alerts-screen-and-fefo-resequencing.md
 - **Group order:** 213 → 214 → 215. Build one step only, then stop at the checkpoint.
 - **After 215:** Settings (mockups committed), then Purchases + Suppliers, Customers + Returns, Day-close + Prints.
 - **Parked:** printing (needs ESC/POS — Bluetooth + wired); per-page menu permissions; global discount stacking question (Settings spec).
 
 ### Recent steps
-- **215 — stock-alerts-screen-and-fefo-resequencing** — AUTHORED — the unreachable Low stock & near expiry screen; optional per-batch sell priority.
-- **214 — inventory-mobile-to-mockup** — AUTHORED — POS chrome header, infinite scroll, everything as bottom sheets, selects as sheets.
-- **213 — inventory-desktop-r2-and-global-fixes** — DONE (2026-08-07) — sales get a number a human can say aloud, and pickers stop hiding behind their own dialog.
+- **215 — stock-alerts-screen-and-fefo-resequencing** — AUTHORED — the unreachable low-stock screen; optional per-batch sell priority.
+- **214 — inventory-mobile-to-mockup** — DONE (2026-08-07) — the phone gets the shop's header, an endless list, and sheets not pages.
+- **213 — inventory-desktop-r2-and-global-fixes** — DONE (2026-08-07) — a sale gets a number a human can say aloud.
 
 > Older steps in PROGRESS-HISTORY.md
