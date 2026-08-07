@@ -8961,3 +8961,120 @@ Amended: `round-4-verification.spec` §3 — an in-layer trigger now satisfies 2
 - The three stock-health chips became LINKS rather than buttons calling `router.push`. A link puts the destination in the `href`, which makes it shareable and middle-clickable and lets the existing capture-click listener arm the progress bar with no extra signal. The in-place chips (Out of stock, Rx, the type chips) stay `aria-pressed` buttons — they filter this table and navigate nowhere.
 - The topmost check lives in the kit and is opt-in per panel rather than being forced on every `useSheetDrag` caller. A future bespoke panel that forgets to pass `layerId` degrades to the old behaviour instead of silently becoming undraggable, and the two panels that matter both pass it.
 - Not verified here, by nature: gesture PHYSICS on a real device, and that a real Android PWA shows no scrollbar. §2 asks for a device check and this step does not claim one.
+
+---
+
+## 217 — stock-alerts-screen-polish — DONE (2026-08-07)
+
+**Branch:** `fix/217-stock-alerts-screen-polish` — WORK TYPE: FIX. Spec `specs/217-stock-alerts-screen-polish.md`.
+No CODEREF covers 217 (the set stops at 113-121). **No schema, no migration, no RLS change, no API change.**
+Vendor untouched. Every figure on the screen is still the spec-104 `lowStock()` / `nearExpiry()` response,
+unrecomputed — the Phase-12 expiry-report reconciliation is unaffected by construction.
+
+### §1 — a days-left figure of `-24` now reads "Expired"
+The owner's literal report. `-24` is arithmetically true and operationally useless: nobody at a counter reads
+"minus twenty-four days" as "this expired last month".
+
+Decision recorded: this is a **DISPLAY rule and nothing else**. The server's `band`, `bucket`, `bucketSummary`
+and every `valueAtRisk` figure are untouched, so the Expired tile's count and total are byte-identical to what
+they were. Two new module-level helpers in `StockAlertsClient.tsx` carry the whole rule:
+`isExpired(daysToExpiry) => daysToExpiry <= 0` and `daysLeftLabel(lang, days)`.
+
+**Zero counts as EXPIRED, not as "expires today"** — a batch whose last day is today cannot be sold tomorrow and
+the safe reading at a counter is the strict one. That is why the operator is `<= 0`; the suite asserts the
+operator, because the operator IS the rule.
+
+Applied everywhere a days figure appears: the desktop Days-left cell (the reported one), the desktop Expiry
+cell's sub-label, the desktop record card's pill and `.expcell`, the phone's `.minv__row` `.msig`, and the
+phone's new near-expiry `.minvcard` pill. The row tone (`is-expired` / `is-nearexp`) moved onto the same
+predicate so the word and the colour can never disagree.
+
+The **date stays beside the word** where the mockup shows one: the phone's rows and cards read
+"Batch A-1187 · Expired 02 Aug 2026", and the desktop Days cell carries the date as its `title` so the figure
+keeps its context even when the Expiry column beside it is hidden. The cell also keeps `data-days={n}` — the
+real number stays addressable, and nothing on this screen sorts on the rendered string (there is no comparator
+on this table at all; rows arrive server-ordered).
+
+### §2 — the list/card switch, shared rather than copied
+The screen shipped in 215 without the one control every other tenant list has. Root cause recorded: `ViewToggle`
+was a **private function inside `PharmacyInventoryClient.tsx`**, so the sibling screen had nothing to reach for.
+
+Extracted verbatim to `apps/web/components/pharmacy/ViewToggle.tsx` and consumed by both screens. It speaks the
+STORED vocabulary (`'list' | 'card'`, the `mp.datalist.view.<list>` contract in `lib/list-prefs`) rather than
+Inventory's internal `'cards'`; Inventory maps at its own call site (`view={storedView} onChange={setStoredView}`)
+and its now-unused `setView` mapper was deleted. `LayoutGrid`/`List` dropped from Inventory's lucide imports.
+
+Placement follows the mockups: inside `.tbl-toolbar__grp` after Columns on desktop (`inventory-desktop.html`
+3274), and in a `.mviewrow` on the phone — with no `.miconacts` pair, because this screen has no import/export.
+
+Persistence is **per user per sub-view**: `useListViewPref(LIST_KEY_LOW)` and `useListViewPref(LIST_KEY_EXPIRY)`,
+two independent keys, read in the state initialiser so the first paint is already the stored choice.
+
+Card compositions reuse Inventory's anatomy rather than adding a third family (which would then need its own
+dark-theme pass): `.minvcard__top` / `__mid` / `__price` on the phone, `.invcard__hd` / `__t` / `__mid` /
+`__price` on desktop. Low stock carries the stock bar against the product's OWN minimum plus cost-to-reorder;
+Near expiry carries the expiry date, the §1 days label and value at risk. Low stock also gained a `.minv` LIST
+view on the phone (it previously had only cards), so both sub-views genuinely offer both.
+
+### §3 — the three gaps, per-selector against the committed mockups
+* **Desktop, both sub-views.** `.mp-inv2 .invtabblock` gap was 16px; the file's is 18px
+  (`inventory-desktop.html` 2466). And there was **nothing above the block** — `.mp-inv2` is a plain block box,
+  so the segmented control and the alert under it sat flush. The mockup gets that space from `.pmain__inner`
+  (872, gap 18px), so: `.mp-inv2 .segctl + .invtabblock { margin-top:18px; }`. One rule covers both reports —
+  `.reorderline` is the block's first child on Low stock, `.expbuckets` on Near expiry.
+* **Mobile.** The alerts chrome reserved `--mchrome:103px`. That is the file's `.mscroll--sub` value, which
+  **includes the phone frame's own 44px status bar** — the thing the real PWA does not draw, and exactly why
+  Inventory's 166 became 117 here. 215 took the number literally, and the 44px difference is the extra gap the
+  owner saw above the Low stock / Near expiry tabs. Since §4 gives this screen the same search row Inventory
+  has, its chrome is now the same object at the same height: `inventory-alerts` was folded into the
+  `pos` / `inventory` 117px rule (and into the matching `scroll-padding-top` rule from 200 §4, so the two can
+  never disagree), and the bespoke 103px block was deleted. The tab row is now the first body element.
+
+### §4 — mobile search moved INTO `.mchrome`
+215 read `inventory-mobile.html` literally: the file draws no search row on this sub-page. The owner's answer
+was that Inventory has one and these two screens are siblings. The field is now a child of `MobilePageChrome`,
+same `.mpos-search` anatomy, same `.kb` spinner slot, same `pinvSearchAllPlaceholder` — which is what makes it
+STICKY while the title row collapses underneath it. The three body-scoped `.mp-inv2 .mp-mobile .mpos-search`
+rules were removed; the chrome's own `.mchrome--pos .mpos-search` styles it like every other one.
+
+The collapse is the shared component's (194 §5) and was not re-implemented: one rAF-coalesced read of `scrollY`
+publishing `--mp-chrome-c`, painting `transform` + `opacity` only, body padding CONSTANT. Compositor-driven
+because iOS throttles `scroll` during momentum scrolling. **Smoothness is a hardware claim and is verified on a
+real phone**, per §6 — the suite holds the mechanism, not the frame rate.
+
+The 250ms debounce now also states itself with the mockup's "Searching N items…" card (`.tbl-searching`,
+190 §3) on BOTH tiers and both sub-views. Note that Inventory's phone shows only the in-field spinner; 217 §4
+names the card explicitly, so this screen shows both.
+
+### §5 — back and breadcrumbs
+Verified already client-side from 216 §1 and left alone: mobile Back is `onBack={() => nav(INVENTORY_PATH)}`
+through `useClientNav`, desktop crumbs are `AppLink`. Nothing was left unfixed by 216, so there is no miss to
+record here beyond this line.
+
+### Copy
+Three new keys, EN + UR, catalogues verified equal at 2522 each: `palertRiskTag`, `palertStockOfMin`
+(`{qty}`/`{min}` placeholders preserved in Urdu), `palertQtyUnits`. "Expired" reuses the existing `pinvExpired`
+rather than adding a fourth spelling of the same word.
+
+### Files
+* `apps/web/components/pharmacy/ViewToggle.tsx` — NEW, the shared control.
+* `apps/web/app/(app)/pharmacy/inventory/alerts/StockAlertsClient.tsx` — §1–§4.
+* `apps/web/app/(app)/pharmacy/inventory/PharmacyInventoryClient.tsx` — consumes the shared toggle.
+* `apps/web/app/globals.css` — §3 spacing, the 117px chrome fold-in, the card `.expcell`/`.mono` variants,
+  removal of the body-scoped `.mpos-search` rules.
+* `packages/i18n/src/messages/{en,ur}.json` — three keys.
+* `packages/ui/src/lib/stock-alerts-screen-polish.spec.ts` — NEW, §1–§7.
+
+### Gates
+`pnpm typecheck` clean (29/29). `pnpm lint` clean — including `design-drift`, `token-integrity`,
+`tenant-english-only`, `tenant-search-select` and `tenant-page-titles`. Per CLAUDE.md the agent does not run
+`test:unit` / `test:e2e` / `build`; the controller runs the full gates. Every source-reading assertion in the
+new suite was verified against the live files before it was written down.
+
+### Design self-check (by inspection)
+Both themes by construction — every new surface uses classes already declared per theme (`.invcard`,
+`.minvcard`, `.msig`, `.pill`, `.expcell`, `.tbl-searching`); no new colour literal was introduced. Phone
+targets: the `.mviewrow` toggle paints at 32px and is grown to 44px by the existing `::after { inset:-6px }`.
+No horizontal scroll at 360 — `.invcards` is desktop-only, the phone's cards are a flex column.
+
+WORK TYPE: FIX (branch fix/217-stock-alerts-screen-polish)
