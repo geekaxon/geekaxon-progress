@@ -8844,3 +8844,42 @@ are owner-device verification and are not claimed here.
 
 ### Not done / next
 215 — the Low stock & near expiry screen and FEFO resequencing.
+
+## 215 — stock-alerts-screen-and-fefo-resequencing — DONE (2026-08-07)
+
+**Branch:** `feature/215-stock-alerts-screen-and-fefo-resequencing` · **Spec:** `/specs/215-stock-alerts-screen-and-fefo-resequencing.md` · Phase 20, last of the 213–215 owner-released group.
+
+### §1 The Low stock & near expiry screen — it exists now
+
+Spec 104 built both views and their value-at-risk figures in 2025; there was no route and no nav entry, so the owner never opened them.
+
+- **Route:** `apps/web/app/(app)/pharmacy/inventory/alerts/{page.tsx,StockAlertsClient.tsx}`.
+- **Registry:** one new entry in `apps/web/lib/nav.ts` (`/pharmacy/inventory/alerts`, `pharmacy.pos` + `pharmacy.sell`, no new permission), which is what puts it in the sidebar and the mobile More sheet with no further code. New `NavIcon` key `expiry` → `CalendarClock`.
+- **Deep links:** `NavItem.urgencyHref` is new — the topbar severity badge (212 §1.1) becomes a `<Link>` to this screen when the registry gives it a destination, so the shell still knows nothing about which route a module's tag belongs to. The Inventory Low stock / Near expiry / Expired chips now NAVIGATE (`?tab=low`, `?tab=expiry`, `?tab=expiry&bucket=EXPIRED`) instead of filtering in place; Out of stock and Rx stay in-place filters because no screen exists for them.
+- **API:** one new read, `GET /pharmacy/inventory/alerts` → `stockAlerts()`, which is `lowStock()` + `nearExpiry()` returned together. No second calculation and no second query path (§1.4).
+- **Figures added to the EXISTING views, not beside them:** `LowStockRow.costToReorder` = `valueAtRisk(suggestedOrderQty, costPrice)` — the same pure helper 104/108 value stock with — plus `LowStockView.totalCostToReorder`; `NearExpiryView.bucketSummary` (EXPIRED/30/60/90, batches + distinct medicines + value at risk) from the new shared `summariseExpiryBuckets`, which SUMS the items the table renders so a tile and its rows cannot disagree. Rows also gained the identity fields the `.medcell` needs.
+- **Undated lots:** excluded entirely, as they already were (`isWithinExpiryHorizon` is false for null, 184 §2). The screen now SAYS so under the tiles, because an owner counting batches by hand would otherwise read the difference as a bug.
+- **Composition:** `.segctl` over `.reorderline` + the 212 §6 table kit (search debounced 250ms, rows 25–500, columns show/hide, both persisted per list) on Low stock; `.expbuckets` tiles over the batch table on Near expiry, with the tiles doubling as bucket filters. Mobile uses the file's own `.xbuckets` scroller (a NEW component the mockup adds explicitly to replace the squeezed desktop tile), `.minvcards`, `.minv` rows and 214 §4 infinite scroll. Skeleton on load, designed empty states, and the 212 §6 filtered-empty wording. Toasts, no banners.
+- **Chrome:** `MobilePageChrome` gained an optional `onBack`/`backLabel` (and `children` is now optional) so this sub-page wears the header the file draws — back, title, context line, no bell, no avatar, no search row. New `data-page-chrome='inventory-alerts'` reserves the file's own 103px `.mscroll--sub` height rather than inheriting the 117px search-header geometry.
+
+### §2 FEFO resequencing
+
+- **Schema:** ONE nullable column, `Batch.sellPriority` (`sell_priority`), plus `@@index([tenantId, medicineId, sellPriority])`. Migration `20260808000000_batch_sell_priority` — both statements `IF NOT EXISTS`, no backfill, DDL inside a NO FORCE window restored in the same transaction (the 61/90 trap).
+- **Allocator:** the ordering moved into a new exported comparator `compareBatchesForSale` — `sellPriority ASC NULLS LAST, expiry ASC NULLS LAST, createdAt ASC` — which `allocateFefo` now sorts with, plus `orderBatchesForSale` so the batch table marks the next-to-dispense lot from the same rule. Partial-batch splitting and the shortfall remainder are untouched: this changes WHICH batch is drawn, never HOW MUCH. Repo `ORDER BY`s updated to match in `listBatchesForFefo`, `listMedicineBatches` and the online-pharmacy reserve (which passes `sellPriority` through so the online counter draws in the same order as the shop counter).
+- **Writes:** `setBatchSellPriorities` / `clearBatchSellPriorities`, clear-then-set so a batch left out of a payload comes back priority-free rather than keeping a stale number. **DECISION: branch-scoped.** The spec says "one product's batches"; batches are a branch's shelf and the screen shows one branch, so a reorder at one branch must not clear another branch's order. Repo signatures take `branchId`.
+- **Endpoints:** `POST /pharmacy/inventory/batch-order` and `.../reset`, both `@RequirePermission(pharmacy.stock.adjust)` — **DECISION:** same gate as the stock adjustment, since a salesman reads stock and only a pharmacist changes how it is dispensed. §1.2's "no new permission" is about the SCREEN, which stays on `pharmacy.sell`.
+- **Audit (§2.6):** the handler result IS the `@Audited` summary, so `inventory.batch.reorder` / `inventory.batch.reset` record the product label, `before` → `after` as BATCH NUMBERS, the `warned` flag and (via the interceptor) actor + time. No cuid reaches the trail.
+- **Realtime (§2.7):** a priority change publishes a `stock.updated` envelope for the product on the EXISTING spec-112 tenant channel, carrying the unchanged on-hand. **DECISION:** no new event type — every POS already re-reads a product's batches on that event, which is exactly the refresh this needs.
+- **Control (§2.4):** `FefoOrder` in `PharmacyInventoryClient.tsx`, on the mockup's `.fefo` anatomy. Drag (native HTML5, no library), keyboard move-up/move-down on every row, per-row "Sell this first", and "Reset to FEFO" in the section header, always available and never behind a confirm gate. The order shown between a drag and the server's answer is optimistic; the response replaces it, so the screen always ends on the order the allocator will actually use, and a refused write rolls back.
+- **Warning (§2.5):** the shared `expiryInversions` names every lot the current arrangement holds back past something more perishable; the `.alert--warning` treatment states the consequence and the change still applies. Warn, never block.
+
+### Gates + tests
+
+- `pnpm prisma generate`, `pnpm lint`, `pnpm typecheck` — clean (the one remaining API lint warning is a pre-existing unused eslint-disable in `doctor-portal.repositories.ts`, untouched here).
+- `apps/api/src/pharmacy/fefo-resequencing.spec.ts` — the no-op case FIRST (four pre-215 allocation shapes written out longhand, plus explicit-null equivalence), then prioritised-first, two-in-priority-order, exhausted-then-FEFO, and a total-allocated equality check; the service's reorder/sell-first/reset/branch-isolation/bad-payload paths; the audit summary's human references; the realtime publish; the on-hand-unchanged assertion; and the alerts payload's buckets, value figures and undated-lot exclusion.
+- `packages/db/src/batch-sell-priority.spec.ts` — real migrations over pglite: 01…214, seed pre-215 batches, apply 215, assert additive + nullable + no default + the index, prove the ORDER BY in SQL (all-NULL collapses to the 184 §2 order; a priority sorts ahead, NULLS still last), then RE-APPLY the whole migration and assert nothing changed and `batches` is still FORCE-RLS.
+
+### Gaps recorded, not papered over
+
+- §1.2 says the new route appears in **global search (177) with zero further code**. It does not: `GlobalSearch` is an ENTITY search (products / customers / suppliers) with no route or command bucket, so a registry entry cannot show up there. Adding one would be a new capability, not this module. Sidebar and the mobile More sheet do come free from the registry, as claimed.
+- §1.2 also cites "the registry test 163 already carries". There is no test over `apps/web/lib/nav.ts` in this repo — `apps/web` has no test script at all, and the only `visibleNav` spec is `packages/ui`'s own separate registry. Nothing was invented to fake one.
