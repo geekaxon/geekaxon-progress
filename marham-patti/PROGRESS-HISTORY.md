@@ -8565,3 +8565,174 @@ Per §9: Inventory mobile, the Low stock & near expiry screen (spec 104's logic 
 entry) and FEFO batch resequencing all go to 213. The global discount waits for the Settings block. `/settings` is
 still a leftover English/Urdu switcher while the real pharmacy settings sit at `/pharmacy/settings`, absent from the
 nav — the owner's decision is one settings page per tenant, sectioned by module.
+
+---
+
+## 213 — inventory-desktop-r2-and-global-fixes — DONE (2026-08-07)
+
+**Branch:** `feature/213-inventory-desktop-r2-and-global-fixes` · **Spec:** `specs/213-inventory-desktop-r2-and-global-fixes.md`
+**Gates:** `pnpm prisma generate`, `pnpm lint`, `pnpm typecheck` — all clean (the one remaining lint warning is a
+pre-existing unused eslint-disable in `doctor-portal.repositories.ts`, untouched by this step).
+
+### §1 Inventory body — breadcrumbs only
+Removed the in-body `<h3>{pinvTitle}</h3>` and `<p>{pinvIntro}</p>` from `PharmacyInventoryClient.tsx`. 176 moved the
+title and hint INTO the topbar and 212 §1 gave that bar its severity badge and subtitle, so the body was repeating the
+same sentence and pushing the KPI row down a block. Retired the two CSS rules that dressed them
+(`.mp-inv2 .pghead__t h3` / `… p`) rather than leaving dead selectors, and flipped `.mp-inv2 .pghead` from
+`align-items:flex-end` to `center` — with one short crumb line opposite a 44px action cluster, bottom-alignment left
+the trail sitting on the floor of the row. `.crumb` still reads off `--accent` (declared per theme) for both the link
+and the current page, which is the 92/120 dark-theme regression stated as a rule.
+
+### §2 Dropdown panels behind the dialog / drawer — DIAGNOSIS CORRECTED
+Spec 209 §2's transform/stacking-context story is the usual cause and the spec told me not to re-diagnose, so this is
+recorded precisely rather than re-argued: **that was not what was happening here.** The panel was ALREADY portalled to
+the document root — Radix `Popover.Portal` mounts on `document.body`, so it was never inside the drawer's transform. It
+simply LOST a plain numeric comparison: both it and the dialog family are children of the root stacking context, the
+dialog/drawer sit at `OVERLAY_LAYER` (`z-[70]`, set by 209), and the panel sat at a hardcoded `z-50`. Raising the
+z-index is exactly what was needed; the 209 trap did not apply.
+
+So `POPOVER_LAYER = 'z-[80]'` is stated once in `dialog.tsx` beside `OVERLAY_LAYER`, above the overlay family and below
+the toast rail (100) and the POS PIN lock (200). `search-select.tsx` (both single and multi) and `data-list.tsx` (both
+menus) read it; no `z-50` survives in either file. Also added `avoidCollisions` + `collisionPadding` (flips above the
+trigger when there is no room below) and `updatePositionStrategy="always"` — Radix's optimized default only re-measures
+on layout events, which let a panel drift off its trigger inside a scrolling dialog body. Dismissal stays with Radix's
+DismissableLayer, which is portal-aware by construction; a `contains()` check on the trigger's subtree would break the
+moment the panel moved to the root, which is the trap 193 §4 warned about. Device-back: `useLayerHistory(open, …)` now
+registers an open panel on the ONE layer stack (195 §3 / 203 §2), which is LIFO, so back closes the panel before the
+dialog beneath it.
+
+**AUDIT — every select/panel with its own markup, as §2 asked.** Grepped `Popover.Content`, `role="listbox"` and
+`aria-haspopup` across `apps/web` and `packages/ui`:
+- `packages/ui/search-select.tsx` — the shared one. FIXED (both variants).
+- `packages/ui/data-list.tsx` — Columns menu + row-actions menu, its own `Popover.Content`. FIXED.
+- `packages/ui/counter-select.tsx` — carries `role="listbox"` but is an INLINE grid, not a popover. No stacking
+  surface, nothing to fix.
+- `apps/web/…/PosClient.tsx` — the hand-rolled scan-results dropdown and `.pos-sel` customer panel (drawn verbatim
+  from `pos-desktop.html`, on the 193 §4 `useDismissOnOutside` contract). In-page, never opened from inside a dialog
+  or drawer, so the defect does not reach them; left alone deliberately rather than churned.
+- `apps/web/…/PharmacyInventoryClient.tsx` — `ColumnsMenu` (`.colmenu` → `.menu`) and `RowActions`. Same story:
+  in-page, on the shared dismissal contract, not inside an overlay.
+Conclusion: there was NO second implementation this time — one shared component, one layer bug.
+
+### §3 Actions column header
+`<th aria-hidden="true" />` → `<th className="tbl-actions">{pinvColActions}</th>`, not sortable. New i18n key in `en`
+and `ur`. `.mp-inv2 .tbl thead th.tbl-actions` keeps it right-aligned with `cursor:default` so it wears the header
+row's own treatment without pretending to be clickable.
+
+### §4 Batches & expiry on Add AND Edit
+The gate was `general && d.id === ''`, so an owner arriving via Edit could not see the section at all. Add and edit were
+already ONE component with a mode (`ProductForm`), so this is a one-line gate change, not a merge. `submitForm` now
+posts the typed quantity through the SAME audited adjustment on both paths (`draft.id || created?.id`) — one endpoint,
+one arithmetic path, the same never-negative guard, StockMovement and actor. The audit NOTE distinguishes the two
+events honestly: `pinvOpeningStockReason` on create, a new `pinvStockAddedReason` on edit, because "Opening stock" is a
+lie in the ledger for a mid-life correction. Expiry stays optional and data-driven; an undated batch is normal.
+
+### §5 Sales get a human number — ONE additive migration
+`packages/db/prisma/migrations/20260807000000_sale_numbers/migration.sql` — modelled directly on 190's held-sale
+migration: new `sale_number_sequences` table (PK `tenant_id`, `apply_tenant_rls`, ENABLE+FORCE), `sales.number` added
+NULLABLE, backfilled per tenant in `created_at, id` order inside a `NO FORCE` window (the 61/90 trap — FORCE subjects
+the owner-run migration to the fail-closed policy and would backfill zero rows, silently), sequence seeded to
+`MAX(number)+1` with `ON CONFLICT DO NOTHING`, then `SET NOT NULL` + `sales_tenant_id_number_key` unique on
+`(tenant_id, number)`. Every statement guarded and the backfill guarded on `number IS NULL`, so a second run is a no-op.
+
+**DECISION (recorded, not deferred): the same migration also adds `sales.counter_id`.** §5.2's acceptance is
+`Sale · INV-4192` over `{cashier} · {counter}`, and the counter was NOT recoverable from any existing column — a branch
+can have several tills and `DayClose` is per counter per day, so nothing could name the one that took the money. The
+commit path already resolves `dayCounter` for day-close; it simply never stored it. Nullable, no FK (the `Sale` model
+declares no relations), written from the value already in hand. Pre-213 sales have none and the line names the cashier
+alone, per the spec's own "never a cuid, never an empty string" rule.
+
+Numbering: claimed in the SAME transaction as the insert, under `TENANT_ADVISORY_XACT_LOCK_SQL` with the shared
+explicit `::int4` casts and a DISTINCT namespace (`SALE_NUMBER_LOCK_NAMESPACE = 2_130_001`) — parking a cart must not
+block a checkout. 192 §1's correction is honoured by construction because the statement is imported, not retyped.
+`formatSaleNumber(n)` lives in `@mp/shared` (beside `formatHeldSaleNumber`) and returns **null**, never a placeholder,
+for a sale with no number — a string like "INV-—" would read as a real reference and get quoted at a counter.
+
+Rendering (§5.2): the movement's cuid is resolved SERVER-side and in BULK. New `resolveMovementRefs(tenantId, refs)`
+and `findStaffNames(tenantId, ids)` on the repo (Prisma + fake), grouped by reference kind so the drawer's 50 movements
+cost two round trips, not fifty. `MovementView` gained `refLabel` / `actorName` / `contextName`, all nullable on
+purpose. The client's `movementLines()` composes the mockup's exact `.histrow` anatomy —
+`Sale · INV-4192 / cashier · counter`, `Adjustment / reason · user`, `Purchase / supplier · user`,
+`Customer return / INV-#### · user`, `Supplier return / supplier · user` — and **no branch can reach an id**; where a
+reference genuinely does not exist (legacy row, opening-stock batch, a PurchaseOrder, which carries no human number at
+all) the row states the plain kind and names the person. The movement `reason` for a sale changed from
+`Sale ${sale.id}` to `Sale INV-####` via `saleMovementReason()` — a NOTE column, not an arithmetic input. Receipt
+prints `saleNo ?? id` so an old slip reprints as it always did. The `@Audited` interceptor summarises the whole
+response, so the number rides into the audit entry automatically; `saleNo` was also added explicitly to the
+back-dated / credit / from-held summaries. **Frozen and verified untouched:** pricing, FEFO allocation, stock
+decrement, unit conversion, valuation, payment and adjustment arithmetic.
+
+**Proof:** `packages/db/src/sale-number-lock.spec.ts` — pglite, REAL migrations, the imported lock statement. It seeds
+three T1 sales OUT of chronological order plus one T2 sale BEFORE applying the migration under test, then asserts the
+created-at-first backfill (1/2/3 and 1), the per-tenant seed (next_seq 4 and 2), a byte-identical re-run of the whole
+migration file, NOT NULL + the unique index, RLS ENABLE+FORCE on the counter table, and that new commits continue from
+4 gaplessly with no duplicates.
+
+### §6 Skeletons
+`InventorySkeleton` (page head, four `.statcard` tiles in their real three-slot box, toolbar, eight rows — the real
+`.pkpis` / `.tbl-wrap` / `.tbl-toolbar` boxes, and the same `.mp-inv2` › `.mp-mobile.mp-inv2-mobile` nesting) replaces
+the "Loading inventory…" sentence. `DetailSkeleton` replaces the drawer's. `PosSkeleton` replaces
+`<SkeletonCard lines={6} />` with the till's own `.pos` two-column composition. All three reuse the designed
+`.skeleton`/`.skel-line` shimmer (126 §2.3), which stills under `prefers-reduced-motion`, and are `aria-hidden` behind
+one polite status line. **Every in-place spinner stayed** — the search debounce, committing buttons, payment posting
+(190 §4): a surface that has not arrived gets a skeleton, an action that is running gets a spinner.
+
+### §7 List/card view persists — WHY THE EXISTING MECHANISM DID NOT COVER IT
+`apps/web/lib/list-prefs.ts` is the one storage contract, and its module header has documented
+`mp.datalist.view.<list>` since it was written. But the file only ever EXPORTED accessors for size and columns. The
+`@mp/ui` DataList kit persists all three for the lists it renders; a screen that hand-draws the mockup's own table —
+Inventory does, POS does — could reach two thirds of the contract and had **nowhere to put the third**, so the view
+lived in a plain `useState` and died on navigation. The key was always right; the accessor never existed. That is
+exactly how a persistence layer gets believed while not working. Added `readListView` / `useListViewPref` (read in the
+state initialiser, so no flash of the wrong view) and wired Inventory to it, mapping its own word `'cards'` to the
+kit's stored `'card'` at the boundary rather than forking the stored value. Audited every tenant list: Inventory is the
+ONLY one that hand-rolls a view toggle (`grep ViewMode|'cards'` across `apps/web/app`); every other list is a DataList
+and was already covered. Keyed per list, so one user's two lists keep independent choices.
+
+### §8.1 2FA error → toast
+`TwoFactorPanel` lost its `error` state and its `<p className="mp-msg mp-msg-error">` slot entirely; both the
+enrollment-start failure and the code failure now raise `toast.error` with the same `authErrorMessage` description.
+Wording untouched and still deliberately non-enumerating — it does not distinguish "wrong code" from "expired code",
+and moving the message must not start to; that would be a free oracle. **`StaffLoginForm`'s mfa branch returned
+`TwoFactorPanel` WITHOUT a `ToastProvider`** (only the login-form branch had one), so it is now wrapped — otherwise the
+toast would have had nowhere to render and a wrong code would have failed silently, worse than the banner it replaces.
+Lockout, attempt counting, rate limiting and the audit trail are server-side and untouched.
+
+### §8.2 Remember me — THE ACTUAL GAP
+The 30-day sliding window under a 90-day absolute cap already existed and was already shared with the installed PWA:
+`REMEMBER_ME_TTL_DAYS=30` / `PERSISTENT_SESSION_MAX_DAYS=90` in config and `.env.example`, `persistentExpiry()` taking
+`Math.min(sliding, absolute)`, the persistent mark carried on the family id so it survives rotation (188 §4). Login and
+the plain 2FA step both pass `rememberMe`. **The hole was first-login 2FA ENROLLMENT:** `EnrollConfirmDto` parsed no
+`rememberMe` at all and `enroll2faConfirm` called `issueBundle(principal)` with no device and no flag — so a user who
+enrolled at first login (precisely the money/admin roles the owner uses daily) completed their login into an ORDINARY
+session while the checkbox they ticked said otherwise. That is the "two session mechanisms" the spec objects to. The
+DTO now parses it, the controller passes it plus the login context, and the service threads both into `issueBundle`.
+The web already sent `rememberMe` on this call. PIN gate (178), device revoke and 2FA enforcement unchanged; the
+sliding refresh still cannot extend a session past the absolute cap.
+
+### §9 Drawer width
+`.mp-inv2.mp-inv2-drawer` → `width:520px; max-width:calc(100vw - 40px)`. 520 is the value
+`inventory-desktop.html` itself draws (`.drawer is-open` inline style), not the 550 estimated in review; the spec's
+cited line number was a snapshot, the value matched. Specificity `(0,2,0)` beats the kit's `max-w-[420px]`/`w-full`
+utilities. Both the detail and the add/edit drawer carry the class, so both widen. Contents reflow; nothing added or
+removed.
+
+### Files
+- `packages/db`: `prisma/schema.prisma` (Sale.number + Sale.counterId + `@@unique([tenantId, number])`,
+  `SaleNumberSequence`), `prisma/migrations/20260807000000_sale_numbers/migration.sql`, `src/advisory-locks.ts`,
+  `src/index.ts`, `src/demo/plan.ts`, `src/sale-number-lock.spec.ts` (new).
+- `packages/shared`: `src/pharmacy-pos.ts` (`formatSaleNumber`).
+- `packages/ui`: `components/dialog.tsx` (`POPOVER_LAYER`), `components/search-select.tsx`, `components/data-list.tsx`,
+  `index.ts`, `src/lib/inventory-desktop-r2-and-global-fixes.spec.tsx` (new).
+- `apps/api`: `pharmacy/pharmacy.repositories.ts`, `pharmacy/pharmacy.service.ts`, `pharmacy/pharmacy.controller.ts`,
+  `pharmacy/__fakes__.ts`, `auth/auth.dto.ts`, `auth/auth.controller.ts`, `auth/auth.service.ts`.
+- `apps/web`: `app/(app)/pharmacy/inventory/PharmacyInventoryClient.tsx`, `app/(app)/pharmacy/pos/PosClient.tsx`,
+  `app/(auth)/login/TwoFactorPanel.tsx`, `app/(auth)/login/StaffLoginForm.tsx`, `lib/list-prefs.ts`, `app/globals.css`.
+- `packages/i18n`: `en.json` / `ur.json` — `pinvColActions`, `pinvStockAddedReason`, `pinvMoveSale`,
+  `pinvMovePurchase`, `pinvMoveAdjustment`, `pinvMoveCustomerReturn`, `pinvMoveSupplierReturn`.
+
+### Notes for the next round
+- §10 acceptance is explicitly "verified on the deployed page". The per-selector diffs for `.crumb`, `.drawer*`,
+  `.histrow*`, `.modal*`, `.selectbox`, `.tbl*`, `.rowactions` and `.skeleton` in BOTH themes still need eyes on the
+  deploy; the unit suite pins the source, not the pixels.
+- Vendor surfaces untouched. Mobile inventory is 214; the Low stock & near expiry screen and FEFO resequencing are 215.
