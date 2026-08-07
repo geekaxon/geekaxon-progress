@@ -8883,3 +8883,81 @@ Spec 104 built both views and their value-at-risk figures in 2025; there was no 
 
 - §1.2 says the new route appears in **global search (177) with zero further code**. It does not: `GlobalSearch` is an ENTITY search (products / customers / suppliers) with no route or command bucket, so a registry entry cannot show up there. Adding one would be a new capability, not this module. Sidebar and the mobile More sheet do come free from the registry, as claimed.
 - §1.2 also cites "the registry test 163 already carries". There is no test over `apps/web/lib/nav.ts` in this repo — `apps/web` has no test script at all, and the only `visibleNav` spec is `packages/ui`'s own separate registry. Nothing was invented to fake one.
+
+---
+
+## 216 — client-side-navigation-and-layer-gestures — DONE (2026-08-07)
+
+**Branch:** `fix/216-client-side-navigation-and-layer-gestures` (WORK TYPE: FIX). Spec: `specs/216-client-side-navigation-and-layer-gestures.md`.
+**Schema:** none. **RLS:** unchanged. **Vendor:** untouched. No arithmetic touched — FEFO, decrement, conversion, valuation, payment and adjustment paths are byte-identical.
+
+### §1.1 THE AUDIT — every navigation trigger on a tenant surface
+
+Scope swept: `apps/web/app/(app)/**`, `apps/web/components/**`, `apps/web/lib/**`, `packages/ui/src/components/**`.
+Line numbers are the PRE-FIX positions.
+
+**FIXED — was a full page load, is now a router navigation**
+
+| # | File : line | Was | Now |
+|---|---|---|---|
+| 1 | `apps/web/app/(app)/pharmacy/inventory/PharmacyInventoryClient.tsx:940` | `window.location.assign(...)` behind the **Low stock / Expiring soon / Expired** chips | the three chips are `<AppLink>`s carrying `ALERTS_HREF` — the route is in the `href`, so the tap is client-side, the destination is shareable and middle-clickable, and the progress bar arms itself off the anchor |
+| 2 | `…/PharmacyInventoryClient.tsx:1213` | `<a href="/dashboard">` breadcrumb | `<AppLink>` |
+| 3 | `…/inventory/alerts/StockAlertsClient.tsx:224` | `new URLSearchParams(window.location.search)` read ONCE on mount, then the sub-view held in private state | `useSearchParams()` — `tab` and `bucket` are DERIVED from the query and every change is pushed back, so refresh keeps the view, a shared link means what it says, and browser back returns to the previous filter instead of leaving the screen |
+| 4 | `…/StockAlertsClient.tsx:462` | `window.location.assign('/pharmacy/inventory')` on the empty-state button | `nav(INVENTORY_PATH)` |
+| 5 | `…/StockAlertsClient.tsx:581` | `onBack={() => window.location.assign('/pharmacy/inventory')}` — the **mobile back control** | `nav(INVENTORY_PATH)` |
+| 6 | `…/StockAlertsClient.tsx:707,709` | two breadcrumb `<a href>` | `<AppLink>` |
+| 7 | `apps/web/app/(app)/dashboard/DashboardClient.tsx:308` | `<a href="/admin/ai-cost">` | `<AppLink>` |
+| 8 | `…/DashboardClient.tsx:358` | alert-tile drill-down `<a href={href}>` | `<AppLink>` |
+| 9 | `apps/web/app/(app)/doctor/DoctorClient.tsx:268` | `<a href="/login">` | `<AppLink>` (going TO sign-in is ordinary navigation; signing OUT is the one that discards state, and that path is untouched) |
+| 10 | `apps/web/components/shell/GlobalSearch.tsx:161` | `router.push` — closed its layer correctly but the progress bar never armed (no anchor to see) | `useClientNav()` |
+| 11 | `apps/web/components/shell/NotificationBell.tsx:115` | same | `useClientNav()` |
+| 12 | `apps/web/components/shell/TopbarActions.tsx:151` | `router.push` with **no** layer declaration and no progress | `useClientNav()` |
+| 13 | `apps/web/app/(app)/pharmacy/pos/PosClient.tsx:1617-1620` | the four `nav.*` keyboard shortcuts pushed bare | `useClientNav()` |
+
+**LEFT DELIBERATELY — and why (§1.4)**
+
+- `components/shell/ImpersonationBanner.tsx:68` — `window.location.assign('/vendor')`. Leaving impersonation MUST discard every cached tenant read; a soft push would carry them across an identity change.
+- `lib/api.ts:113`, `lib/vendor-api.ts:67`, `lib/platform-api.ts:63` — the 401 → login redirect. Same reason: the session is gone, the caches must go with it.
+- `components/error/ErrorState.tsx:68` — `location.reload()`. A reload IS the recovery.
+- `components/demo/DemoBanner.tsx:29` — the demo window closing. A fresh load is the visible reset (spec 76 §2).
+- `PosClient.tsx:1588` — sign-out `router.replace('/login')` after `clearBundle()`. Already declares its layer close; the state discard is deliberate.
+- `app/(app)/admin/audit/AuditExplorer.tsx:141` — `<a href={exportHref}>` where `exportHref` is an `API_BASE` CSV download. Not a route; an anchor is correct.
+- `AppShell.tsx:496`, `VendorChrome`, `EntranceChrome`, `PlatformChrome` — `href="#…"` skip links. In-page, correct as anchors.
+- `packages/ui/src/components/breadcrumb.tsx:34` — the kit Breadcrumb's `<a>`. Used only on vendor screens and the UI showcase; tenant screens draw their own `.crumb` (now fixed). Out of scope per §1.4.
+- `mobile-dock.tsx:102`, `mobile-tab-bar.tsx:81`, `mobile-more-sheet.tsx:248,291` — plain-`<a>` FALLBACKS taken only when no `renderLink` is supplied. The tenant shell always supplies one (`next/link` + `leaveForNavigation`), so the fallback is unreachable there; the kit keeps it because it has no `next` dependency.
+- Read-only `window.location.*` (`origin` / `search` / `pathname`) in `EntranceInstall`, `DirectoryClient`, `InstallApp`, `lib/session.ts`, `lib/tenant.ts`, `RouteProgress` — not navigations.
+- `app/(vendor)/vendor/tenants/[id]/page.tsx:2449` — vendor surface, out of scope.
+
+The sweep is now a TEST, not a memory: `client-nav-and-layer-gestures.spec` walks `app/(app)` and `components/shell` and fails on any new `window.location` assignment, `location.reload()` or internal `<a href="/…">`, with the impersonation exit as the single named exception.
+
+### §1 What was built
+
+- **`apps/web/lib/client-nav.tsx` — one helper, two shapes.** `<AppLink>` is `next/link` that first calls `closeLayersForNavigation()` (203 §2) on an unmodified click, so a link inside a sheet/drawer/dialog closes its layer WITHOUT consuming the router's history entry — device-back afterwards goes one step, not two. A ctrl/cmd-click is left alone: it opens a tab and this one stays put, so dismissing the sheet under the finger would be a side effect of a navigation that never happened. `useClientNav()` is the same contract for a control with no href, and it also ARMS the progress bar.
+- **The progress bar now has a programmatic trigger** (§1.3). `startRouteProgress()` (kit) dispatches `mp:route-progress-start`; `RouteProgress` listens for it beside its capture-click listener, and both go through ONE `arm()` — a second copy is how the two would drift. Deliberately NOT fired for a query-only push (the bar completes on a pathname change; nothing would clear it), which is the same rule `navigationEligible` already applies to anchors.
+- **Filter state moved into the URL** on Low stock & near expiry. `tab` and `bucket` are read from `useSearchParams()` and written with `router.push`; a hand-edited or missing bucket resolves to "every bucket" rather than a broken screen. The page needed a `<Suspense>` boundary — a client island reading `useSearchParams` cannot be prerendered without one. Scroll: a filter change starts the list at the top (the router's default plus the existing page/shown-count reset), which is what §1.3 asks for a list that has just changed.
+
+### §2 A gesture moves only the topmost sheet
+
+**How topmost is determined — recorded as §2 requires.** Not a new notion and not a per-sheet guard: the SHARED LAYER STACK from 195 §3, which has decided "which layer is in front" for the device back button since then. `useLayerHistory` now RETURNS the id it pushed (`null` when closed); `isTopLayer(id)` compares it with the top of that stack; `useSheetDrag` takes an optional `layerId` and bails on `pointerdown` when it is not top. A panel that passes no `layerId` is not layer-managed and keeps its old behaviour, so the guard is opt-in and the existing 195/207 physics tests are untouched.
+
+Two causes, one answer:
+1. **Both sheets were mounted and both listened.** The bottom one is now inert — it does not translate, its scrim does not fade, and its scroll position survives the sheet above being dragged away.
+2. **React events travel the REACT tree.** A sheet opened from inside another is a child there wherever it is portalled in the DOM, so the top sheet's `pointerdown` also arrived at the bottom sheet's handler carrying a target that matched its handle selector — the same shape 209 §2 hit with `Escape`. Beside the layer check, `useSheetDrag` now ignores any press whose target is not inside its own panel.
+
+Wired at both call sites that own a drag: `MobileSheet` (registration moved above the drag so the id exists first) and the POS full-screen customer picker.
+
+### Tests
+
+New: `packages/ui/src/lib/client-nav-and-layer-gestures.spec.tsx` — 22 tests. Behaviour: `topLayerId`/`isTopLayer` semantics including the one-commit window where a fresh sheet has no id yet; a layer-managed drag that follows the finger on top and is completely inert underneath (no transform, no scrim fade, no `onClose`); a press belonging to a sheet standing on this one; the opt-in escape hatch; `useLayerHistory` returning its id; `startRouteProgress` dispatching; `navigationEligible` still refusing a query-only change. Source: the tenant-surface sweep above, the three known instances, the URL-derived filter, the Suspense boundary, and the helper's ordering contract.
+
+Amended: `round-4-verification.spec` §3 — an in-layer trigger now satisfies 203 §2 either by calling `closeLayersForNavigation()` itself or by going through `useClientNav()`. `inventory-mobile-to-mockup.spec` §1 — the `.mic` count was still 214-era and had not been updated for the sub-page back chevron 215 §1.3 added to `MobilePageChrome`; it was RED on the branch before this step and is now correct at two, with the back control asserted by name.
+
+### Gates
+
+`pnpm lint` clean (16/16, including the web drift + token-integrity checks). `pnpm typecheck` clean (29/29). The `@mp/ui` suite was run to prove the new file and the two amendments: 60 suites, 813 tests, all passing. `pnpm test:unit` / `build` / e2e left to the controller.
+
+### Decisions
+
+- The three stock-health chips became LINKS rather than buttons calling `router.push`. A link puts the destination in the `href`, which makes it shareable and middle-clickable and lets the existing capture-click listener arm the progress bar with no extra signal. The in-place chips (Out of stock, Rx, the type chips) stay `aria-pressed` buttons — they filter this table and navigate nowhere.
+- The topmost check lives in the kit and is opt-in per panel rather than being forced on every `useSheetDrag` caller. A future bespoke panel that forgets to pass `layerId` degrades to the old behaviour instead of silently becoming undraggable, and the two panels that matter both pass it.
+- Not verified here, by nature: gesture PHYSICS on a real device, and that a real Android PWA shows no scrollbar. §2 asks for a device check and this step does not claim one.

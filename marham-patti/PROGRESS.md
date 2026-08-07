@@ -6,13 +6,16 @@
 
 ## Current Status
 - **Project:** Marham Patti — multi-tenant white-label healthcare platform.
-- **Current build-step:** none in flight — the 213–215 owner-released group is complete.
-- **Last completed:** **215 — stock-alerts-screen-and-fefo-resequencing**.
-- **Next:** none — awaiting next spec block `[HUMAN_REQUIRED]`
+- **Phase:** **PHASE 20** — Inventory owner-test round 3. 216–218 authored as an owner-released group.
+- **Last completed:** **216 — client-side-navigation-and-layer-gestures**.
+- **Next:** specs/217-stock-alerts-screen-polish.md
+- **Group order:** 216 → 217 → 218. Build one step only, then stop at the checkpoint.
+- **After 218:** Settings (mockups committed), then Purchases + Suppliers, Customers + Returns, Day-close + Prints.
+- **Parked:** printing (needs ESC/POS — Bluetooth + wired); per-page menu permissions; global discount stacking question (Settings spec).
 
 ### Recent steps
-- **215 — stock-alerts-screen-and-fefo-resequencing** — DONE (2026-08-07) — the screen nobody could open, and "sell this one first".
-- **214 — inventory-mobile-to-mockup** — DONE (2026-08-07) — the phone gets the shop's header, an endless list, and sheets not pages.
-- **213 — inventory-desktop-r2-and-global-fixes** — DONE (2026-08-07) — a sale gets a number a human can say aloud.
+- **218 — mobile-picker-and-list-fixes** — AUTHORED — over-limit row measured against the mockup; infinite scroll re-observed; long pickers full-screen.
+- **217 — stock-alerts-screen-polish** — AUTHORED — negative days read "Expired", list/card switch, spacing, mobile search in chrome.
+- **216 — client-side-navigation-and-layer-gestures** — DONE (2026-08-07) — nothing reloads the page any more, and only the top sheet moves.
 
 > Older steps in PROGRESS-HISTORY.md
