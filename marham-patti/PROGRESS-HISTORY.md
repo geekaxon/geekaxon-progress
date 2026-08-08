@@ -9844,3 +9844,53 @@ boot warnings (subscriptions/permission reconcile/branding migration all continu
 reported no test failures. Only `@mp/ui` failed, with the one suite above.
 
 Gates: `pnpm lint` 16/16 pass, `pnpm typecheck` 29/29 pass.
+
+## 227 — customer-advance-balance — DONE (2026-08-08)
+
+**Spec:** /specs/227-customer-advance-balance.md — FEATURE, branch `feature/227-customer-advance-balance`. No CODEREF in range. **No schema change, no migration, RLS untouched.**
+
+### The decision the round turns on
+`outstanding` was already `Σ credit sales − Σ payments ± returns`. The owner's model is to STOP CLAMPING IT AT ZERO and name the negative range: an advance is not a wallet, a second table or a new movement type — it is the same number with the other sign. Everything below follows from that one choice, which is why the money path needed no change at all.
+
+### Shared math (`packages/shared/src/pharmacy-customers.ts`)
+- NEW `customerBalanceParts(outstanding) -> { due, advance, inAdvance }` — the one split every surface renders from, so list, detail, ledger, both POS pickers and the payment block cannot drift.
+- NEW `creditHeadroom(creditLimit, outstanding)` = `limit + advance − due` (§2.3). Because the two halves are one balance this reduces to `limit − balance`, i.e. exactly the projection `checkCreditLimit` and `isOverCreditLimit` already test — no second money rule. Verified: limit 300 + advance 5,000 → 5,300 headroom, `--over` fires at 5,300.01 and not before.
+- `customerHasCreditStanding` now counts an advance as a standing (a customer holding Rs 5,000 with no limit set used to read "No credit account" on every picker row).
+- `customerCreditState` gains `inAdvance` + `advance`; `dueZero` is now `balance <= 0 && !inAdvance`, so a settled account keeps the quiet tone and an advance takes the success one.
+- `isOverCreditLimit` already returned false for a negative balance (`bal > 0`) — the over-limit icon stays off for a customer in advance with no new rule. `customerListStats.totalOutstanding` already clamps per customer, so an advance cannot net off somebody else's debt.
+
+### API
+- `pharmacy.dto.ts`: NEW `optionalSignedMoney` used for the POS payload's `currentBalance` — the strict money parser 400'd a negative balance, so a customer in advance could not check out at all. NEW optional `advanceApplied` on `CheckoutInput`.
+- `pharmacy.service.ts` (checkout): server re-derives `advanceHeld = max(0, −position.currentBalance)` from the balance it already resolved and clamps `advanceApplied = min(posted, advanceHeld, payment.creditAmount)` — the browser figure is a statement, never an instruction. Rides on `CommittedPosSale` into `buildReceipt`.
+- `pharmacy.controller.ts`: `advanceApplied` added to the existing `pharmacy.pos.sale.credit` audit entry beside `autoComposed`.
+- `parseCustomerPayment` needed NO change — it only ever required a positive amount and never compared it to the outstanding, so an overpayment was always postable; the clamp the spec describes lived in the screens.
+
+### POS payment surface (`PaymentPanel.tsx`)
+- The applied advance IS the credit leg — charging the account is what spends a negative balance (sell Rs 2,000 against Rs 5,000 → −5,000 + 2,000 = −3,000, ledger netting with no new movement type). It is composed as its own CREDIT tender beside any auto-composed remainder; `splitPaymentSummary` sums them into one `byMethod.CREDIT`, so Σ legs still equals the bill and **`splitPaymentSummary` is byte-identical** (asserted character-for-character in the new suite).
+- Pre-filled `advanceOffered = min(advance, grandTotal)` — never more than they hold, never more than the sale (change is not made out of an advance) and **zero for a cash-only customer**, whose credit leg the panel refuses anyway (204 §2.5); offering it would pre-fill a sale Confirm then blocks.
+- NEW `.payadv` block (success-toned, `.credblk` anatomy + a `.paytender` box + Use all / Use none chips) between the credit block and the method row, on BOTH layouts. Changing it re-points the lead tender at the remainder in the same action, so `Use none` puts the whole bill straight back into the ordinary flow.
+- NEW `.paychange--adv` line — "Advance applied − Rs X" — above "To account", which now states only `autoCredit`, what the sale ADDS to the tab.
+- `.credblk`: the Outstanding cell becomes a success-toned Advance cell when the balance is negative (that is WHY the headroom exceeds the limit); headroom is `creditHeadroom(creditLimit, projected)`; `hasCeiling = hasLimit || advance > 0` so an advance is never the "no limit set" state, while the LIMIT cell still dashes; the within-limit gauge scales to `limit + advance`.
+
+### Display elsewhere
+- POS pickers (desktop `.pos-opt__due` + phone `.mpick__due`): third tone `--adv`, subtitle reads `Advance Rs 5,000` in whole rupees (219).
+- Customers screen: owe cell, card pill (success `StatusPill`), detail header card (label swaps to "Advance held", not a minus under the word "Outstanding"), facts row, gauge (drawn against `limit + advance`, headroom from `creditHeadroom`) and the running ledger balance, which crosses zero honestly and reads "Advance Rs X" below it. NEW `moneyAbs` so nothing prints "Advance Rs -5,000".
+- Record payment: a live sentence above the confirm button — "This clears Rs 10,000 due and leaves Rs 5,000 in advance" — in four variants, plus a hint when the customer is already in advance. Never silent.
+- Receipt: `ThermalReceiptInput.advanceApplied` (optional) prints as a deduction under the tenders. A REPRINT carries none — the payment split is not a persisted column (schema frozen to 98), which the reprint path already documents; an old slip reprints exactly as before.
+
+### Superseded assertions updated (recorded, not silent)
+- `pos-credit-ux-and-fullpage-payment.spec.tsx` §2: `const advance = 0;` (which its own comment said 227 would make real), the `outstanding`/`projected`/`headroom` literals, and the headroom cell's `hasLimit` → `hasCeiling`.
+- `pos-credit-and-customer-attribution.spec.tsx`: the "To account" guard `summary.creditAmount > 0` → `autoCredit > 0`. Mutual exclusion with Change due is unchanged, which is what that test is for.
+- Every other frozen literal was deliberately PRESERVED — notably `return autoCredit > 0 ? [...taken, { method: 'CREDIT', ... }] : taken;` and `creditAutoComposed: autoCredit > 0,` — by folding the advance leg into `taken` rather than rewriting the return.
+
+### Tests
+NEW `packages/ui/src/lib/customer-advance-balance.spec.tsx` — §1 the ledger crossing zero on the owner's Rs 10,000/Rs 15,000 case + the payment preview; §2 every display surface and the over-limit signal staying off; §3 the 5,300 boundary and the 226 arithmetic unchanged; §4 the applied advance netting the ledger, the part-advance sale adding up to the paisa, the pre-fill being reducible, and the sale record / receipt / audit stating it; plus the frozen-money guard (`splitPaymentSummary` compared byte-for-byte) and EN/UR copy parity.
+
+### i18n
+NEW `pharmacyPos.v14` (advance, advanceOnAccount, advanceApplied, applyAdvance, useAllAdvance, useNoAdvance, creditAdvancePart) and eight flat `pcus*` keys, in EN and UR.
+
+### Out of scope, per §2.5
+Returns, day-close, reports and supplier ledgers untouched (asserted). A supplier advance is the same model and a later spec.
+
+### Gates
+`pnpm lint` and `pnpm typecheck` — clean (the single `@mp/api` warning is a pre-existing unused eslint-disable in `doctor-portal.repositories.ts`, untouched by this step). Per AGENT.md the agent does not run `test:unit`/`test:e2e`/`build`; every source literal asserted by the new suite was verified present by grep, and the multi-line/regex assertions were evaluated directly against the files.
