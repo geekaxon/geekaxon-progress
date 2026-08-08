@@ -9252,3 +9252,103 @@ amounts, which always fit.
 Added: `packages/shared/src/store-profile.ts`, `packages/ui/src/lib/settings-nav.ts` (+ spec), `apps/web/app/(app)/settings/{SettingsShell,registry,registry-types,section-kit,store-data}.tsx|ts`, `apps/web/app/(app)/settings/sections/{StoreSection,SalesTaxSection,ReceiptsSection,CountersSection,HandoffSection}.tsx`.
 Changed: `packages/shared/src/index.ts`, `packages/brand/src/index.ts`, `packages/ui/src/index.ts`, `apps/api/src/brand/brand.dto.ts`, `apps/web/app/(app)/settings/page.tsx`, `apps/web/app/(app)/pharmacy/settings/page.tsx`, `apps/web/lib/nav.ts`, `apps/web/components/shell/{AppShell,TopbarActions}.tsx`, `apps/web/app/globals.css`, both i18n catalogs.
 Deleted: `apps/web/app/(app)/settings/SettingsClient.tsx`, `apps/web/app/(app)/pharmacy/settings/PharmacySettingsClient.tsx`.
+
+## 221 — settings-units-categories-counters — DONE (2026-08-08)
+
+**Branch:** `feature/221-settings-units-categories-counters` · **Spec:** /specs/221-settings-units-categories-counters.md · No CODEREF covers 221.
+
+### §1 Units — the tenant unit master
+
+**Migration `20260808010000_tenant_unit_master`** (one additive migration, as the spec allows):
+- enum `UnitType` (COUNT | WEIGHT | VOLUME) — descriptive only, nothing converts from it;
+- table `units` (name, `short_label`, type, active), UNIQUE `(tenant_id, name)`, `apply_tenant_rls('units')`;
+- `product_units` gains a NULLABLE `unit_id` + `(tenant_id, unit_id)` index. Deliberately optional — every
+  `ProductUnit` keeps its `name` string, and that string stays what conversion, display and FEFO read.
+
+**Backfill** — one master row per distinct name per tenant, grouped on `lower(btrim(name))` with the most
+common casing winning and alphabetical breaking ties (so two runs agree). Row id is DERIVED,
+`'un_' || md5(tenant_id || ':' || lower(name))`, which makes the INSERT idempotent by construction; the link
+UPDATE is guarded on `unit_id IS NULL` plus an EXISTS on the computed master id. Blank/whitespace names are
+ambiguous and are left UNLINKED rather than guessed at. FORCE RLS is lifted on `product_units` AND on `units`
+for the length of the statements and restored inside the same transaction (the 61/90 bypass path — on a
+re-apply the first run's policy would otherwise hide the rows the idempotency guards must see, and reject the
+insert under WITH CHECK). `apply_tenant_rls('units')` runs only after the rows are in.
+
+**Proof:** `packages/db/src/unit-master-isolation.spec.ts` — real migrations over pglite, 10 tests, all green.
+Seeds "Strip"/"strip"/" Strip " on T1 and "STRIP" on T2 plus a blank name; asserts one row per distinct name
+per tenant, majority casing wins, T2 never shares T1's row, the blank stays unlinked, no cross-tenant link,
+**the migration applied a SECOND time changes nothing** (the twice-run proof the spec asks for by name), the
+whole `product_units` fingerprint (name/contains/barcode/price/level) is byte-identical, an unlinked row is
+still legal, and `units` is fail-closed under RLS (own-tenant only, WITH CHECK blocks a cross-tenant write,
+no context → zero rows).
+
+### API
+
+`pharmacy-settings` grew the whole vocabulary surface (reads flag-gated, writes `pharmacy.settings.manage`):
+`GET/POST/PUT/DELETE /pharmacy/settings/units` and `.../categories`. In-use is counted over DISTINCT
+medicines (a product using "strip" at two levels is one product on the shelf). Delete throws 409 with the
+count in the message; rename PROPAGATES to every linked `ProductUnit.name` and returns
+`{propagated, unlinked}` so the pane can say plainly how many products still hold the old raw string
+unlinked — those are reported, never rewritten. Categories need no propagation pass (products point at the
+row). `AuditService` is injected into `PharmacySettingsService` and every unit/category mutation records a
+`{before, after}` summary; `@Audited` alone only ever knows the result.
+
+Counters: `CounterRow` gained `assignedCashier` (the cashier of the LAST sale on that till — there is no
+counter↔cashier table and inventing one would be a second source of truth) and `hasOpenShift` (an OPEN
+`DayClose` on the counter). `updateCounter` REFUSES `active:false` while a shift is open (409, reason
+stated); rename still works. There is deliberately no delete endpoint at all.
+
+`pharmacy` module: `listUnitMaster`/`upsertUnitMaster` + `GET/POST /pharmacy/medicines/units`, and
+`inventoryList` now ships `unitMaster` beside `categories` — the same `units` rows Settings manages.
+
+`@mp/db` re-exports `UnitType`.
+
+### Web
+
+- `settings/list-kit.tsx` — the mockup's table anatomy shared by all three list sections (`.tbl-wrap`,
+  `.tbl-toolbar` with search + one primary action, `.tbl`, `.rowacts`, `.tbl-foot`, `.emptystate`,
+  `.refusenote`, the inline `EditRow`). A refused destructive action is answered with a SENTENCE naming the
+  count and a link to those products — never a disabled button with nothing to explain it, which is the
+  correction this project keeps making. Row action buttons are always enabled and always labelled.
+- `sections/UnitsSection.tsx` (name · short label · type · in-use, add/edit/delete, search, empty state with
+  "Add your first unit", segmented type control), `sections/CategoriesSection.tsx` (name · items),
+  `sections/CountersSection.tsx` rewritten to the mockup (name · status · assigned cashier, add/rename/
+  deactivate, no delete anywhere, a standing note saying why, and the multi-counter-off explanation instead
+  of the section vanishing).
+- `registry.tsx` — `units` (ruler) and `categories` (tags) ADDED to the pharmacy group; the two rail rows
+  appeared with no change to the shell, the rail or the URL handling, which is what `settings-nav.spec.ts`
+  asserts. Nothing else in the registry moved.
+- `globals.css` — the table/pill/emptystate/refusenote/setform block under `.mp-set`, taken by selector from
+  `settings-desktop.html` (the `.mp-kit` copies are the /ui reference surface and are not reachable here).
+  Both themes are tokens only.
+- Item form (§1.4): `UnitNameSelect` replaces the hardcoded `BASE_UNITS` select on the base unit AND the
+  plain input on every pack level. It offers the tenant's master, still ACCEPTS free text, and OFFERS a newly
+  typed name for adding to the master under the field rather than creating it silently. Empty master falls
+  back to the built-in starter list, so a brand-new tenant sees exactly what it saw before.
+- `?q=` now seeds the inventory search box, so the refusal notes' "see those products" link actually lands on
+  those products instead of the whole catalogue.
+- 71 i18n keys added to en + ur (parity gate green).
+
+### Decisions recorded
+
+1. **In-use counts DISTINCT products, not product_unit rows** — the refusal says "used by N products", and a
+   product using a unit at two pack levels is one product to move.
+2. **Rename propagates the label, and reports what it did not touch.** Unlinked rows keep their string: an
+   unlinked value is somebody's deliberate typing, and rewriting it by name-match would be the silent guess
+   §1.2 forbids.
+3. **"Assigned cashier" is the last cashier to ring on that till.** No assignment table exists; the last sale
+   is the store's own record of who is at a counter.
+4. **"A shift is open on that counter" == an OPEN `DayClose` on it.** `CashierShift` carries no `counterId`;
+   the per-counter day-close IS the per-counter shift in this schema (98/110).
+5. **Counters have no delete endpoint at all**, not merely a hidden button — sales, shifts and day-close rows
+   point at them.
+6. Multi-counter switch stays in Sales & tax per §3; when it is off this section explains itself rather than
+   disappearing.
+
+### Gates
+
+`pnpm prisma generate` ✓ · `pnpm lint` ✓ (0 errors; the single warning is a pre-existing unused
+eslint-disable in `doctor-portal.repositories.ts`, untouched) · `pnpm typecheck` ✓ 29/29.
+Targeted runs while building: `unit-master-isolation` 10/10, `enum-native-types` + `schema-enum-types` 7/7,
+`pharmacy-settings.service.spec` 29/29, and the whole `src/pharmacy*` API suite 505/505 — FEFO, conversion,
+valuation, returns, day-close and every money figure unchanged. Full gates left to the controller.

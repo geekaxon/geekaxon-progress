@@ -7,15 +7,15 @@
 ## Current Status
 - **Project:** Marham Patti — multi-tenant white-label healthcare platform.
 - **Phase:** **PHASE 21** — the Settings screen. 219–224 authored as an owner-released group.
-- **Last completed:** **220 — settings-shell-and-general**.
-- **Next:** specs/221-settings-units-categories-counters.md
+- **Last completed:** **221 — settings-units-categories-counters**.
+- **Next:** specs/222-global-discount.md
 - **Group order:** 220 → 221 → 222 → 223 → 224. Build one step only, then stop at the checkpoint.
 - **After 224:** Purchases + Suppliers, then Customers + Returns, then Day-close + Prints, then production cutover.
 - **Parked:** printing (needs raw ESC/POS — Bluetooth + wired); per-page menu permissions; deferred shortcut bindings.
 
 ### Recent steps
+- **221 — settings-units-categories-counters** — DONE (2026-08-08) — the shop owns its unit list; deleting one in use is refused.
 - **220 — settings-shell-and-general** — DONE (2026-08-08) — one settings screen, sections from a registry; the old pharmacy one redirects in.
 - **219 — picker-meta-whole-rupees** — DONE (2026-08-08) — picker amounts in whole rupees; the ellipsis is gone, the line wraps instead.
-- **218 — mobile-picker-and-list-fixes** — DONE (2026-08-08) — the amount stopped hiding under the pill; lists keep loading after a switch.
 
 > Older steps in PROGRESS-HISTORY.md
