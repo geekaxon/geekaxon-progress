@@ -9446,3 +9446,163 @@ percentage equal to today's rule IS that rule, anything else was typed.
 `pnpm prisma generate` OK · `pnpm lint` clean (one pre-existing unused-disable warning in
 `apps/api`, present before this step) · `pnpm typecheck` clean, 29/29. Unit/e2e/build left to
 the controller per the standing rule. Vendor console untouched.
+
+---
+
+## 223 — settings-people-branding-personal — DONE (2026-08-08)
+
+**Branch:** `feature/223-settings-people-branding-personal` (WORK TYPE: FEATURE)
+**Spec:** `specs/223-settings-people-branding-personal.md`. No CODEREF companion exists in that range.
+**Schema:** none. **RLS:** unchanged. **Migration:** none.
+
+### What landed
+
+Five registry entries stopped being placeholders. Branding and My profile were `island` wrappers
+around clients built for a different page; Users, Roles and Shortcuts were `handoff` rows pointing at
+`/admin/users`, `/admin/roles` and `/pharmacy/shortcuts`. All five are now real panes. The shell,
+the rail and the URL handling did not change — third step running that the 220 registry has absorbed
+new surfaces without being touched, which is the guarantee `settings-nav.spec.ts` asserts.
+
+New web panes (all under `apps/web/app/(app)/settings/sections/`): `BrandingSection.tsx`,
+`UsersSection.tsx`, `RolesSection.tsx`, `ShortcutsSection.tsx`, `ProfileSection.tsx`.
+`PersonalizationClient.tsx` and `TwoFactorClient.tsx` were deleted — both were superseded whole and
+had no other referrer. CSS: a 223 block appended to `apps/web/app/globals.css`, taken by selector
+from the mockup (`.logoslot*`, `.palgrid`/`.palcard*`, `.locktok*`, `.brandprev*`, `.permmx*`,
+`.kbd*`, `.seslist`/`.sesrow*`, `.reqlist`, `.qrbox`, `.avatarphoto`), scoped under `.mp-set` as the
+220 and 221 blocks are. i18n: 270 new keys, EN + UR at parity (3013 each).
+
+### Decisions taken (no approval gate exists; recorded here per AGENT.md §2)
+
+**1. Base64 is now absent from the tenant upload path, not just from storage.** 141 removed base64
+STORAGE; the acceptance for 223 says no base64 in a request or response either. Added
+`POST /personalization/assets/binary` — slot in the query string, format in `Content-Type`, the
+file's own bytes as the body — plus a raw body parser in `main.ts` scoped to `image/svg+xml` and
+`image/png` only, at a 600 KB limit (the raw size, not the +37% base64 inflation). The JSON
+envelope stays for the vendor console. Web side: `uploadBinary()` in `lib/api.ts` uses XHR rather
+than fetch, because fetch cannot report upload progress and the mockup's slot draws a progress bar.
+
+**2. `favicon` joined `ASSET_VARIANTS`.** `variant` is a free-form string column, so this is a
+vocabulary change and not a schema change. `BRAND_SLOTS` + `slotModes()` in `@mp/shared` make the
+five slots DATA: App Icon carries `themed: false` and therefore renders one tile, which is how the
+screen cannot accidentally grow it a second one. `resolveSlotAsset()` returns `{url, fallback}` —
+139's cross-theme fallback was always correct and always silent, and a silent fallback makes a
+failed dark upload look identical to a successful one. Every fallback tile now says so.
+
+**3. Remove keeps the bytes.** `DELETE /personalization/assets/:id` drops the row and leaves the
+stored object. Asset URLs are content-addressed and served immutably (141), and a
+previously-APPROVED brand may still point at exactly those bytes — deleting them would blank a live
+sign-in page to save a few KB.
+
+**4. A system role is now genuinely editable in the tenant scope — by ADOPTION.** The prior answer
+("this is a shared platform role, clone it") was immutability wearing a different hat, and 144/150
+removed immutability. Editing a `tenant_id IS NULL` role now copies it into the tenant's own scope
+with the same name and keys, still flagged `isSystem`; the shared row is never written to, so every
+other tenant keeps the platform default. `listForTenant` hides the original once an adoption with
+that name exists, and `permissionsFor` resolves through `keysForTenantSystemRole()` — otherwise the
+edit would have been theatre, since enforcement read the global role by name. Cached per
+`${tenantId}:${roleName}`, cleared on every role mutation for that tenant. This is consistent with
+the standing rule that seed roles are shared and never shadowed per tenant: adoption is opt-in, only
+on a real edit, and the shared row stays authoritative for everyone who has not edited it.
+
+**5. Renaming an adopted role un-adopts it.** The adoption↔platform link is the NAME (there is no
+spare column and no schema change is permitted). So renaming the copy to "Counter In-charge" flips
+it to Custom and the platform's Manager returns to the list, still assignable. This is the honest
+reading rather than a lie: `User.role` is an enum, MANAGER exists whether or not any AppRole row
+does. For the same reason DELETE on an adopted system role is labelled **"Reset to the platform
+default"** in the UI, with its own dialog and glyph — it removes the tenant's copy, it does not and
+cannot erase the role. Deleting a never-adopted shared role answers with a plain sentence saying
+there is nothing here to reset, and the button is disabled carrying that sentence.
+
+**6. The lockout floor replaced immutability as the guard.** `packages/shared/src/rbac-floor.ts` is
+pure so the server's refusal and the editor's disabled control are provably one predicate. Rule: the
+tenant always keeps one full-admin role (holds `brand.manage` + `audit.view` +
+`pharmacy.settings.manage`) with at least one ACTIVE holder. Enforced in `setRoleKeys`, `deleteRole`
+and — new — `AdminUserService.deactivate`, whose only prior guard covered TENANT_OWNER, so a shop
+whose last administrator was an ADMIN could lock itself out. Refusals are sentences naming the role
+and the holder count, because a disabled button in a list of twenty staff tells nobody whom to
+promote first. `GET /rbac/roles` now carries `activeHolders` per row so the screen and the server
+compute the floor from the same number.
+
+**7. The invite link is shown, not sent.** SMTP is deferred. `AdminUserService.create` and
+`resendInvite` now mint a reset-step token and return an ABSOLUTE tenant-addressed URL through the
+existing 91 `InviteLinkService` (AdminModule imports TenantDomainsModule and provides it — one
+invite builder, not two). The Users pane displays the link with a copy button and states plainly
+that no email went out. An account created WITH a password gets no invite.
+
+**8. Change-own-password was missing for tenant staff.** Only reset-request/confirm existed.
+Added `POST /auth/staff/password/change` — proves the CURRENT password first (a live session at a
+shared till is not evidence of who is standing there), then revokes every session. The rules live in
+`packages/shared/src/password-policy.ts` and are used by both the profile screen's live checklist
+and `auth.dto`'s `password()` helper, so the ticks and the refusal cannot disagree. Minimum stays
+8 characters — deliberately unchanged so no existing account is invalidated. `password()` no longer
+trims, so a pasted leading space is reported instead of silently swallowed.
+
+**9. Personal notification preferences were NOT wired.** 60's preference engine is keyed by
+recipient and gated on `notifications.manage`, which counter staff do not hold. Loosening that
+permission from a personal screen is a security change this step has no business making, and a
+second per-user preference store is exactly the duplicate engine the spec forbids. The card
+therefore states that an owner or manager manages message settings, and shows the transactional
+category as permanently on (60 already refuses to mute it). Flagged for a later step.
+
+**10. Session revoke goes through 62's `/privacy/sessions/*`**, which kills the refresh-token family
+server-side — 143's requirement applied to the tenant. The current session is marked by matching the
+caller's own refresh token server-side, not guessed from a user-agent.
+
+**11. The permission matrix is one tick column, not the mockup's four.** The mockup compares four
+roles side by side; this editor edits ONE role, so four columns would leave three empty gutters.
+Out-of-plan permissions are drawn LOCKED, never hidden (05 precedence). The three capability
+permissions the spec names are grouped separately; 190 deliberately did not mint a key for
+discard-another-user's-hold (it rides `pharmacy.settings.manage`), so the row says what that
+permission also governs rather than inventing a fourth key.
+
+**12. The live preview repaints itself, not the app.** The old island wrote `--brand-*` onto
+`document.documentElement`, which made a "preview" an unsaved change the owner could not undo by
+navigating away. The preview now scopes its own custom properties.
+
+**13. Ordering bug caught and fixed in the role editor.** Permissions are saved BEFORE the name.
+Renaming first would move the name out from under the permissions call, which finds the adoption by
+name and would have created a SECOND copy — two Managers.
+
+### Files touched
+
+API: `main.ts`; `personalization/{controller,dto,service,repository}`;
+`permissions/{permission.service,permission.repositories,rbac.controller,__fakes__}`;
+`admin/{admin-user.service,admin.controller,admin.module,__fakes__,admin-user.service.spec}`;
+`auth/{auth.controller,auth.dto,auth.service,auth.repositories,auth-events.service}`.
+Shared: `personalization.ts` (favicon, `BRAND_SLOTS`, `resolveSlotAsset`), new `rbac-floor.ts`, new
+`password-policy.ts`, `index.ts`. Web: five new section panes, `registry.tsx`, `globals.css`,
+`lib/api.ts`; deleted `PersonalizationClient.tsx` and `TwoFactorClient.tsx`. i18n: en/ur.
+
+### Tests written (controller runs them)
+
+`apps/api/src/permissions/rbac-floor.spec.ts` — the pure floor rules, plus adoption proven at the
+RESOLVER: editing T1's Manager changes T1's effective keys and leaves T2's untouched; one Manager in
+the list after adoption; rename un-adopts to Custom; the floor refuses a SERVER call (not a click)
+when the last held full-admin role would be stripped, before and after adoption.
+`apps/api/src/personalization/brand-slots.spec.ts` — five slots in order, App Icon one / favicon two,
+`favicon` additive, the fallback FLAG, the binary upload envelope (mime with charset, bad format,
+empty body, unknown slot), and the password policy including the unchanged 8-character minimum.
+`apps/api/src/admin/admin-user.service.spec.ts` — three added cases: an absolute tenant-hosted invite
+link, no invite when a password was set, and a fresh link on resend.
+
+The repo has no Playwright harness and no `test:e2e` script (AGENT.md §4A describes one that does
+not exist here), so no `page.goto` test was added. Noted for the controller.
+
+### Gates
+
+`pnpm lint` and `pnpm typecheck` run once at the end, both clean. The only warning in the tree is
+pre-existing and in `doctor-portal.repositories.ts`, untouched by this step. `pnpm test:unit`,
+`pnpm build` and `pnpm test:e2e` deliberately not run (CLAUDE.md §6).
+
+### Design self-check (by inspection)
+
+Two themes: every new selector uses the token layer (`--surface-card`, `--border-hairline`,
+`--accent`, `--danger`, `--warning-soft`) with no literal colour except the deliberately
+theme-independent upload chequerboard and the QR box's white plate. Per-selector diffs for
+`.setcard`, `.setcard__hd`, `.brandslot`→`.logoslot`, `.palette`→`.palgrid`/`.palcard`, `.tbl`,
+`.rowactions`→`.rowacts`, `.permgrid`→`.permmx`, `.kbd`, `.sessionrow`→`.sesrow`, `.savebar`,
+`.emptystate` read clean against the mockup (the spec's acceptance names four selectors by a
+shorthand the mockup itself does not use; the mockup's own names were followed). RTL-safe
+(`inset-inline-*`, `margin-inline-*`) throughout. Vendor console untouched: no file under
+`apps/web/app/(vendor)` or `apps/api/src/vendor` changed except that AdminModule now provides the
+already-existing `InviteLinkService`, which the vendor module continues to provide for itself.
