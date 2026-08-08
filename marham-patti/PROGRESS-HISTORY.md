@@ -9606,3 +9606,54 @@ shorthand the mockup itself does not use; the mockup's own names were followed).
 (`inset-inline-*`, `margin-inline-*`) throughout. Vendor console untouched: no file under
 `apps/web/app/(vendor)` or `apps/api/src/vendor` changed except that AdminModule now provides the
 already-existing `InviteLinkService`, which the vendor module continues to provide for itself.
+
+---
+
+## 224 — settings-mobile — DONE (2026-08-08)
+
+**Branch:** `fix/224-settings-mobile` · **Work type:** FIX (presentation + interaction) · **Spec:** `/specs/224-settings-mobile.md` · **Mockup:** `specs/mockups/pharmacy/settings-mobile.html` · **No CODEREF for this range.**
+
+**Schema: none. RLS: unchanged. No endpoint, validator, permission gate or audit write moved.** Every setting on the phone saves through the same call, with the same validation and the same audit entry, as it does on the desktop. The desktop composition (220–223) and every vendor surface are untouched.
+
+### What was built
+
+**§1 Navigation — a drilldown, not a rail.** `/settings` below 768px opens a grouped list (`.setdrill`), one row per section with the mockup's glyph / label / one-line "what is in here" / live count / chevron. A Clinic row is drawn dimmed with a padlock and is a `div`, not a button that swallows the tap. Tapping opens the section as its own page at **the same `?s=` URL the desktop uses**, so a link shared from a desk opens the same place on the counter phone.
+
+- The list is the SAME `visibleSettingsNav` output the rail is built from. The only new declaration is `descKey` on `SettingsSectionDef`, added to all 19 registry entries — a property of the section, not of the phone, so a future Clinic/Lab group appears in the drilldown with no code change. That claim is the load-bearing test in the new spec file.
+- `findSettingsSection()` (new, in `@mp/ui`) is the phone's resolver and is deliberately NOT `resolveSettingsSection()`: the desktop must fill its content column so a missing slug falls back to the first section, but on a phone the list IS a destination and that fallback would make it unreachable from the dock. A stale or forbidden slug lands on the list too, which is the only sensible resolution on a device whose back button must still have somewhere to go.
+
+**§2 Back and the save bar.**
+- Back is client-side: `history.back()` when this shell pushed the entry (so the browser's stack stays true and forward still works), and a pushed list when the section was reached by a direct link — back never drops out of Settings and never returns to the dashboard.
+- **DEVICE BACK NOW WARNS ON UNSAVED CHANGES.** 220 armed `beforeunload` and confirmed on a rail click, but `popstate` had already happened by the time anything could ask, so browser/phone back discarded edits in silence. The entry is now pushed back FIRST and the dialog asked second, so the address bar never disagrees with the screen while the question is open. This lands on both tiers because it is the same handler and a desktop back loses the same edits.
+- The shared `SaveBar` grew a phone branch rendering the mockup's `.msavebar`: floating glass, inset 14px, pinned above BOTH `env(safe-area-inset-bottom)` and the dock, one status line, two 44px actions. No pane hand-rolls a second bar. The body gives the room back via `:has(.msavebar)`.
+- **Decision recorded:** the Roles editor does NOT use the shared `SaveBar` on the phone. Its number is the count of permissions the role HOLDS, not the count of edited fields, and a brand-new role with none of them is still saveable — the shared bar would disable itself at zero and read "0 unsaved changes". Same anatomy and same 44px actions, a different sentence, because it is a different number.
+
+**§3 Controls.**
+- Tables → cards. Units, Categories, Counters, Users, Roles and the discount rules list each grew a `CardFeed`/`CardRow` branch behind `useMobileTier()`; the `<table>` stays for the desktop. `list-kit.tsx` gained the layout primitives, not an auto-table: each section decides which fact leads (what uses a unit, who is on a till, whether a user can sign in) because only the section knows, and a generic table-to-card converter would have to guess.
+- 218 §5's select rule applied by LIST LENGTH: timezone and category are `mobileKind="long"` (full-screen); the Users role picker uses ONE threshold (`roles.length > 8`) for both searchable and full-screen so the two cannot disagree; currency, scope, product type and unit type stay bounded sheets.
+- Infinite scroll on Categories and Users via `useInfiniteScroll` (218 §2's sentinel-as-state), window reset on a new search. No pager on the phone.
+- No on-screen keypad anywhere (199) — percentages keep `inputMode="decimal"` and the device keyboard. **Settings has no date field at all, so 196's `.dpop--touch` has nothing to adopt here.**
+
+**§4 The four that needed real thought.**
+- **Roles matrix** → grouped collapsible `.permgrp` cards, one row per permission with a `Switch`, count on the header, collapsed by default. Never a sideways-scrolling grid: a permission set that must be dragged left to be read is a permission set nobody audits. An out-of-plan permission is still shown, locked (05 precedence).
+- **Branding** → the preview moves above the controls with `order:-1` rather than a DOM reorder, so the reading order the desktop established survives for a screen reader while the effect of a palette change is visible without scrolling past it.
+- **Global discount** → the precedence explainer stays visible (never collapsed); the add-rule form became ONE `ruleForm` expression mounted in a `SetCard` on the desk and a shared `MobileSheet` on the phone, so the two surfaces cannot drift apart; rules keep a 44px delete.
+- **My profile** → sessions already were cards; they now wrap rather than elide (which of these is the phone in my hand is the only question the list answers), Revoke is 44px, the current session cannot revoke itself, and the login history stops being a four-column table.
+
+**Header context line.** A new `section-chrome.tsx` context lets a pane publish its own header sub-line ("6 units · pack chains", "9 staff · 1 invite pending") without threading a prop through thirteen panes, twelve of which would pass `undefined`. A pane that publishes nothing falls back to the registry's `descKey`, so the drilldown row and the section header read as the same sentence.
+
+**Defect found and fixed while building:** `MobilePageChrome` collapses its title row on scroll, which is right for the POS and Inventory because a search field stays pinned behind it. The settings chrome has no search row and its leading control is BACK — collapsing would have scrolled the only way out of the section off the screen. The title row is pinned open for `data-page-chrome='settings'`, and the body reservation (58px, no search row) is a constant for the same reason.
+
+**Also fixed:** three panes (Store, Sales & tax, Receipts) initially took the new hook after an early `if (failed) return`, a rules-of-hooks violation that lint did not flag. All hook calls now precede every early return; audited across all thirteen panes.
+
+### Files
+
+`packages/ui`: `lib/settings-nav.ts` (+`descKey`, +`findSettingsSection`), `index.ts`, new `lib/settings-mobile.spec.tsx`.
+`apps/web`: new `app/(app)/settings/MobileSettings.tsx` + `section-chrome.tsx`; `SettingsShell.tsx`, `registry.tsx`, `section-kit.tsx`, `list-kit.tsx`, all 13 section panes touched only where the tier branches; `app/globals.css` (+ one `224` block, ~90 selectors, every one scoped under `.mp-set--mobile` or `.mp-shell[data-page-chrome='settings']` — a test asserts that, so no rule here can reach the desktop).
+`packages/i18n`: 39 keys added to EN and UR alike, append-only.
+
+### Tests
+
+`packages/ui/src/lib/settings-mobile.spec.tsx` — pure tests for the two resolvers and the future-module guarantee, then source assertions pinning each decision the owner would otherwise have to re-report: client-side back, the popstate guard, the card branches, the collapsible matrix with no `overflow-x`, the pinned header, the select guard, the absence of a keypad, 44px targets, the preview order, the CSS scoping, and EN/UR parity for every new key. The gesture and real-device items in the spec's §6 are verified on a device, which is why §6 is written the way it is.
+
+Gates run here: `pnpm lint` and `pnpm typecheck`, both clean (the one `@mp/api` lint warning is pre-existing and untouched by this step). Unit/e2e/build are the controller's.
