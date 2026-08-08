@@ -9352,3 +9352,97 @@ eslint-disable in `doctor-portal.repositories.ts`, untouched) · `pnpm typecheck
 Targeted runs while building: `unit-master-isolation` 10/10, `enum-native-types` + `schema-enum-types` 7/7,
 `pharmacy-settings.service.spec` 29/29, and the whole `src/pharmacy*` API suite 505/505 — FEFO, conversion,
 valuation, returns, day-close and every money figure unchanged. Full gates left to the controller.
+
+## 222 — global-discount — DONE (2026-08-08)
+
+**Branch:** `feature/222-global-discount` · **Spec:** `/specs/222-global-discount.md` · WORK TYPE: FEATURE
+
+### What landed
+
+A standing percentage off the catalogue — what a Pakistani pharmacy means by "we give 5% on
+medicines" — set centrally, scoped, and opt-out-able per product. Until now the only discount
+this system had was one a cashier typed, per line or per bill.
+
+**Schema (one additive migration, `20260808020000_global_discount`).** Enum
+`DiscountScopeKind` (ALL | PRODUCT_TYPE | CATEGORY); table `discount_rules` (tenant-scoped,
+FORCED RLS, two CHECK constraints); `medicines.exclude_from_global_discount` DEFAULT false.
+No backfill, so nothing in the migration reads an already-FORCE-RLS'd table and no FORCE is
+lifted (the 61/90 trap does not arise here). Every statement is guarded, there is no INSERT
+anywhere, and `apply_tenant_rls` re-creates its own policy — idempotent by construction.
+
+**Decision — `scope_key`.** A rule's scope is a kind plus a NULLABLE target, and Postgres
+treats NULLs as distinct, so a unique index over (tenant_id, scope_kind, product_type,
+category_id) would happily accept two "All items" rules — exactly the §3 conflict that must be
+impossible. The scope's identity is therefore a derived text column (`ALL` / `TYPE:MEDICINE` /
+`CAT:<id>`) with ONE ordinary unique index on (tenant_id, scope_key). The conflict is
+prevented in the database rather than in a race between two admins. Proven both ways in
+`packages/db/src/global-discount-isolation.spec.ts`.
+
+**Decision — the scope is immutable.** A rule's percentage and active flag are patchable; its
+SCOPE is not. Re-scoping in place would move a rule onto another scope's key, which is the one
+way "one rule per scope" could be walked around silently. Re-scoping is remove + add.
+
+**Precedence (§2.3), in one place.** `packages/shared/src/pharmacy-discount.ts` —
+`resolveGlobalDiscount` returns exactly ONE rule: an excluded product beats everything, then
+CATEGORY, then PRODUCT_TYPE, then ALL. Rules never sum, which is why it returns a single value
+and not a list to fold. `effectiveLineDiscountPct(global, manual)` encodes the other owner
+decision: a typed discount REPLACES the store rule (not "wins by being bigger"), and clearing
+it restores the rule.
+
+**The frozen boundary (§4.2) — held.** This step adds a SOURCE for a line's discount
+percentage. `computePosCartTotals`, `splitPaymentSummary`, `paymentPolicyError`, exact tender,
+credit composition, tax, FEFO, the decrement, `clientActionId` idempotency, returns, day-close
+and every report figure are untouched; no column any of them read was altered. The POS still
+sends one `lineDiscountPct` per line, exactly as it has since 102. Returns already refund from
+the stored sale record, so a rule changed after a sale cannot reach that sale's history —
+nothing had to be done for §4.3 beyond not touching it.
+
+**API.** `pharmacy-settings` gains GET/POST/PUT/DELETE `discount-rules`. Reads are flag-gated
+only (the POS resolves lines from these rules); writes are `pharmacy.settings.manage` and
+audited before → after. POST on a taken scope is a 409 naming the live rule's percentage;
+`replace: true` is the explicit confirmation and updates that rule IN PLACE, so one scope can
+never end up with two rows. `PosSearchRow` gains `globalDiscount { pct, scopeKind, scopeLabel }`
+— resolved server-side because the rules and the product's category are both server data and a
+cashier must never see one number on the row and another on the line. One rules read per
+request, a pure lookup per row; category names are fetched only when a CATEGORY rule exists.
+
+**Settings → Global discount.** New registry entry between Categories and Counters — one entry
+added and nothing else in the file or the shell moved, which is the registry's whole claim.
+The mockup's `.precede` explainer states the ladder in plain words (including that a product's
+exclusion overrides every rule), the `.drules` list names each rule's scope with the type or
+category spelled out, the conflict row is drawn as designed for pre-constraint data, and the
+percentage is validated 0–100 on blur and on submit, never on mount.
+
+**POS.** A line now carries `globalDiscountPct` + its origin and `manualDiscountPct`; the
+effective percentage is DERIVED (`lineDiscPct`) so the two sources cannot drift. The discount
+dialog is pre-filled with the CASHIER's number only — seeding it with the store's would turn
+"clear it" into "retype it". The cart chip gained a store variant naming its scope, on both
+surfaces, so a cashier can tell "our standing discount" from "someone gave this line 10%". A
+resumed hold re-reads today's rule (the 192 payload has one discount field, frozen); a parked
+percentage equal to today's rule IS that rule, anything else was typed.
+
+**Item form.** An "Exclude from global discount" switch in the Rules section, beside `active`
+— it is a rule about the product, not a price.
+
+### Files
+
+- `packages/db/prisma/migrations/20260808020000_global_discount/migration.sql`, `schema.prisma`,
+  `packages/db/src/index.ts` (+ `DiscountScopeKind`, `ProductType` re-exports)
+- `packages/db/src/global-discount-isolation.spec.ts` (pglite: additive, one-rule-per-scope,
+  the NULL trap, the CHECKs, twice-run, RLS fail-closed)
+- `packages/shared/src/pharmacy-discount.ts` + `index.ts`
+- `apps/api/src/pharmacy-settings/{controller,dto,repositories,service,service.spec}.ts`
+- `apps/api/src/pharmacy/{pharmacy.dto,pharmacy.repositories,pharmacy.service,__fakes__}.ts`
+- `apps/api/src/pharmacy/global-discount.spec.ts` (the ladder, manual-replaces-global, the POS
+  rows, and the Phase-12 totals reconciliation that pins §4.2)
+- 14 existing pharmacy specs: the `MedicineRow` fixture gains the new boolean, nothing else
+- `apps/web/app/(app)/settings/sections/GlobalDiscountSection.tsx`, `registry.tsx`
+- `apps/web/app/(app)/pharmacy/pos/PosClient.tsx`, `inventory/PharmacyInventoryClient.tsx`
+- `apps/web/app/globals.css` (`.precede`, `.drules`/`.drule*`, `.cart__disc--store`)
+- `packages/i18n/src/messages/{en,ur}.json`
+
+### Gates
+
+`pnpm prisma generate` OK · `pnpm lint` clean (one pre-existing unused-disable warning in
+`apps/api`, present before this step) · `pnpm typecheck` clean, 29/29. Unit/e2e/build left to
+the controller per the standing rule. Vendor console untouched.
