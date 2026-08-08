@@ -9657,3 +9657,137 @@ already-existing `InviteLinkService`, which the vendor module continues to provi
 `packages/ui/src/lib/settings-mobile.spec.tsx` — pure tests for the two resolvers and the future-module guarantee, then source assertions pinning each decision the owner would otherwise have to re-report: client-side back, the popstate guard, the card branches, the collapsible matrix with no `overflow-x`, the pinned header, the select guard, the absence of a keypad, 44px targets, the preview order, the CSS scoping, and EN/UR parity for every new key. The gesture and real-device items in the spec's §6 are verified on a device, which is why §6 is written the way it is.
 
 Gates run here: `pnpm lint` and `pnpm typecheck`, both clean (the one `@mp/api` lint warning is pre-existing and untouched by this step). Unit/e2e/build are the controller's.
+
+## 225 — remember-me-evidence-and-fix — DONE (2026-08-08)
+
+**Branch:** `fix/225-remember-me-evidence-and-fix` · WORK TYPE: FIX · no schema change · RLS unchanged.
+
+### §1 — The three captures, taken BEFORE any code was written
+
+**Capture 1 — what the login actually issues.** There is no `Set-Cookie` on this login: the API
+returns the bundle in the JSON body and the browser stores it under `mp.auth` in `localStorage`
+(`apps/web/lib/session.ts`), so the capture is the issued refresh-row `expiresAt` plus the access
+`exp`. Executed against the real `loadConfig()` + the real issuance arithmetic:
+
+```
+ACCESS_TOKEN_TTL             = 15m
+REFRESH_TOKEN_TTL_DAYS       = 30   (plain login)
+REMEMBER_ME_TTL_DAYS         = 30   (sliding)
+PERSISTENT_SESSION_MAX_DAYS  = 90   (absolute cap)
+remember-me refresh expiresAt = now + 30d
+plain       refresh expiresAt = now + 30d
+```
+
+**This capture alone settles it.** A remembered session is issued 30 days and an UNremembered one
+is issued 30 days. No value the server holds can produce a logout after a few hours, so no
+server-side TTL change could ever have fixed the report — which is exactly why three of them
+didn't.
+
+**Capture 2 — the live process env.** The API is not running on the build host (pm2 here carries
+only the agent controller), so `/proc/<pid>/environ` could not be read from this session. It is
+also the wrong instrument for a recurring check. Two things were done instead: `deploy.sh:181`
+was confirmed to already use `pm2 restart ecosystem.config.js --update-env`, and the API now LOGS
+its effective session TTLs at boot (`apps/api/src/main.ts`), so `pm2 logs mp-api` proves what the
+running process holds rather than what a file intends. Independently, the stale-env hypothesis is
+ruled out as a sufficient cause: the schema defaults are 30/30/90, so even a process running with
+no session env at all still issues 30 days.
+
+**Capture 3 — the refresh path at the moment of logout.** Traced through
+`apps/web/lib/api.ts` → `apps/api/src/auth/token.service.ts#rotate`. The refresh call DOES fire.
+Two distinct client-side mechanisms then destroy a server-valid session:
+
+1. *Any* failed refresh was read as "session over". `attemptRefresh()` returned a bare `false` for
+   a thrown fetch (offline / DNS / reset / API mid-restart), a 5xx, a proxy 502, a 429 and an
+   unparseable body alike; the caller then ran `handleAuthFailure()` → `clearBundle()`. A
+   two-second blip on a pharmacy's connection, or a deploy restart, deleted a 30-day token off
+   the device permanently.
+2. Single-flight was per-JS-context. `refreshInFlight` is a module variable, but one counter runs
+   several contexts over one origin's `localStorage` — the installed POS PWA and a browser tab,
+   or two tabs. At the shared 15-minute access expiry they all read the same refresh token and
+   all presented it; rotation being one-shot, the losers were indistinguishable from an attacker
+   replaying a stolen token, so `rotate` revoked the whole family and signed the device out.
+
+### Named cause
+
+**The client discarded a valid token** — both by deleting it on indeterminate failures, and by
+racing itself into the server's reuse detector. The server was never issuing a short TTL.
+
+### Why 188 and 192 did not stick
+
+They were correct and irrelevant. 188 §4 fixed a genuine bug (the long life not surviving
+rotation) and 192 §6 pinned the desktop checkbox leg; both are still right and still tested. But
+both were server-side TTL work, and the failure was a client-side session teardown plus a
+protocol race that no TTL value can influence. Each round the owner saw the same symptom and each
+round the next spec reached for the same lever.
+
+### The fix
+
+Server (`token.service.ts`, `auth.repositories.ts`, `@mp/config`):
+- New `REFRESH_REUSE_GRACE_SECONDS` (default 30, max 300, 0 disables). A token replayed within the
+  window is a benign concurrent rotation IFF the family still holds a live token; it gets its own
+  successor and the family is left intact.
+- Reuse detection outside the pinhole is unchanged: a later replay still burns the family, and a
+  family already revoked (logout, password change, prior reuse) has no live token so it can never
+  be rotated again — revocation stays authoritative.
+- A grace rotation does NOT re-stamp `revokedAt`, so replaying every 20s cannot roll the window
+  forward forever. New `RefreshRepo.familyHasLiveToken`; new `token.refresh.concurrent` audit
+  event so the race is visible in the trail instead of inferred.
+
+Client (`apps/web/lib/api.ts`, new `@mp/ui/session-persistence`):
+- Refresh returns a tri-state `ok | retry | dead`. **Only** a definitive 401/403 from the refresh
+  endpoint clears the session; everything else keeps it and lets the next call try again.
+- The refresh runs under a `navigator.locks` lock (`mp.auth.refresh`), which is shared across
+  same-origin contexts — the exact scope the race lives in. Inside the lock the stored token is
+  re-read; if another context already rotated, we adopt its token instead of spending ours.
+  Where Web Locks is unavailable the server grace covers the remainder; the two halves are
+  deliberately independent.
+
+One TTL configuration for both paths: `rememberMe = pwa || remember` in `StaffLoginForm` already
+funnels the desktop checkbox and the installed PWA through the single `issueBundle(rememberMe)`
+path, and 213 §8.2 carries it across first-login 2FA enrollment. The one remaining divergent
+number — the presence-only mirror cookie's hardcoded 30 days — is now pinned to
+`SESSION_MIRROR_COOKIE_DAYS` (90, the absolute cap), so it can never expire before the session it
+mirrors.
+
+### Decisions recorded
+
+- **Grace window weakens reuse detection slightly, and that is accepted.** An attacker holding a
+  stolen refresh token now has a ≤30s window to rotate it after the legitimate client did.
+  Against that: the token is opaque and server-stored, the window is closed by the first replay
+  outside it, and the alternative — the status quo — was signing real shopkeepers out several
+  times a day. This is the standard OAuth rotation-grace tradeoff. Configurable to 0.
+- **Vendor/platform consoles (`vendor-api.ts`, `platform-api.ts`) were left alone.** They carry
+  the same clear-on-any-failure shape, but they are a different audience with separate sessions
+  and the spec says no other behaviour is touched. Worth a later step.
+- **Live cross-day verification remains the owner's**, per §3. The agent pinned `exp` arithmetic
+  and simulated the clock: 40 days of daily use stays alive, an untouched device dies at 31 days,
+  the 90-day cap binds. The startup log makes the post-deploy check one line of `pm2 logs`.
+
+### Tests
+
+`apps/api/src/auth/auth.service.spec.ts` — new `concurrent rotation vs reuse (225)` suite: two
+contexts racing one token both keep the session; a replay one second outside the window still
+burns the family; replay-every-20s cannot extend its own window; the grace never resurrects a
+family ended by logout; `REFRESH_REUSE_GRACE_SECONDS=0` restores strict one-shot rotation; an
+unticked session gets the same protection (one mechanism, not two). The two pre-existing reuse
+tests now advance the clock past the window before replaying, so they assert reuse and not a race.
+`packages/ui/src/lib/session-persistence.spec.ts` — the client policy: 401/403 are the only
+answers that end a session; status 0, 429, 5xx, 502/503/504, 404 and an unparseable 200 all keep
+it; the cross-context rotation check.
+
+No screen changed, so no new Playwright test. Gates run in-session: `pnpm lint` and
+`pnpm typecheck` both clean (one pre-existing unrelated warning in `doctor-portal.repositories.ts`).
+
+### Files
+
+`packages/config/src/index.ts` · `apps/api/src/auth/token.service.ts` ·
+`apps/api/src/auth/auth.repositories.ts` · `apps/api/src/auth/auth-events.service.ts` ·
+`apps/api/src/auth/__fakes__.ts` · `apps/api/src/auth/auth.service.spec.ts` ·
+`apps/api/src/main.ts` · `packages/ui/src/lib/session-persistence.ts` (+ spec) ·
+`packages/ui/package.json` · `apps/web/lib/api.ts` · `apps/web/lib/session.ts` · `.env.example`
+
+### Deploy note
+
+`deploy.sh` already passes `--update-env`. After deploy, confirm the running process with:
+`pm2 logs mp-api --lines 50 | grep "Session TTLs"` — it must read
+`access=15m session=30d rememberMe=30d sliding cap=90d rotationGrace=30s`. Do not read `pm2 env`.
