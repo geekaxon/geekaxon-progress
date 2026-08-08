@@ -9078,3 +9078,142 @@ targets: the `.mviewrow` toggle paints at 32px and is grown to 44px by the exist
 No horizontal scroll at 360 — `.invcards` is desktop-only, the phone's cards are a flex column.
 
 WORK TYPE: FIX (branch fix/217-stock-alerts-screen-polish)
+
+## 218 — mobile-picker-and-list-fixes — DONE (2026-08-07)
+
+**Branch:** `fix/218-mobile-picker-and-list-fixes` (WORK TYPE: FIX). Spec: `/specs/218-mobile-picker-and-list-fixes.md`. No CODEREF covers 218. Schema: none. RLS: unchanged. Tenant mobile only; vendor and desktop untouched.
+
+### §1 — the over-limit customer row, third report. The audit first.
+
+The spec required every rendered customer-row implementation to be grepped and listed before anything changed, because 149/150/208/209 were each a second implementation nobody had found. The audit:
+
+- `MobileCustomerPicker` → `.mpick__row` (apps/web/app/(app)/pharmacy/pos/PosClient.tsx:3997) — the phone's POS customer chooser. THIS is the row in the owner's screenshot, and the only picker row the phone renders. `mpick__row` appears exactly three times in the tree, all inside that one component.
+- `CustomerSelect` → `.pos-opt` (same file, ~3630) — the DESKTOP dropdown. Shares `CustomerStanding` and `OverLimitFlag` with the phone row under different element names. Out of scope by the spec's own "desktop untouched".
+- `CustomersClient` → `.mp-pinv-card` / `OweCell` / `CreditGauge` — the Customers SCREEN's card, table cell and detail gauge. A different anatomy with a `StatusPill`, not this defect.
+
+**So this time there is NO second implementation, and the reason two rounds went green is different — and worth recording, because it is the trap the next round would otherwise fall into as well.** The mockup's declarations DID reach the row; `.t` DID already carry `min-width:0`; the flag WAS 22px at 11px. A per-selector diff of `.mpick__row`, `.mpick__row.is-sel`, `.mpick__row .t`, `.mpick__row .t b`, `.mpick__row .t small`, `.mpick__row svg`, `.mpick__due`, `.mpick__due--zero`, `.mpick__row--over`, `.mpick__row--over .t b`, `.mpick__row--over .mpick__due`, `.mpick__flag` and `.mpick__flag svg` against `specs/mockups/pharmacy/pos-mobile.html` came back clean, value for value, and is now asserted mechanically rather than by eye (13 generated cases).
+
+The actual cause: `min-width:0` lets a flex item shrink, but says nothing about what the item's CONTENT does once it has. 214 §7 wrapped every meta segment in `.nb { white-space:nowrap }` so a rupee figure could never split mid-number — and an unbreakable segment WIDER than the shrunken `.t` simply overflows it, inline-end, underneath the flag that is painted after it. The mockup's sample `Rs 24,900` fits and passes; the owner's `Rs 3,000.00` beside a limit does not. That is exactly why a shorter figure went green twice while the phone stayed broken, and why raising the pill's z-index or nudging padding never helped.
+
+**Fix (deliberate addition beyond the mockup, recorded as the spec asks):** `.mp-pos2 .mpick__row .t { overflow:hidden }` and `.mp-pos2 .mpick__row .t small { overflow:hidden; text-overflow:ellipsis }`. Wrapping between segments (214 §7) is untouched — the ellipsis can only ever land on a single segment that could not have wrapped anyway. The name keeps its own `text-overflow` on the same width, so it never yields first. Both themes by construction: the rules sit outside any `[data-theme]` block and introduce no colour. All four credit states (in limit · due · over limit · no credit account) keep their meanings, words and tones.
+
+### §2 — infinite scroll after a view switch
+
+Cause confirmed in code, not inferred: both Inventory and Low stock & near expiry built their own `IntersectionObserver` in an effect keyed on PAGING state (`[isMobile, hasMore, moreError, appendMore]` / `[isMobile, hasMore]`) and pointed it at `sentinelRef.current`. Switching list ↔ card remounts the whole list, `.infload` foot included; the ref then holds a new node, but no dependency moved, so the effect never re-ran and the observer went on watching a detached element for ever.
+
+New shared machinery: `packages/ui/src/lib/infinite-scroll.ts` → `useInfiniteScroll({ enabled, hasMore, onMore, cursor, rootMargin })`, exported from `@mp/ui`. The sentinel is STATE set by a callback ref, so the node is a dependency of the observing effect: a remount disconnects the old observer (effect cleanup) and observes the new one, in that order, which is also why two can never be live at once. The one-shot flick latch moved in with it, released by `cursor` when a page lands, and re-armed when `enabled` comes back after a failure so retry is never permanently disarmed. Both screens now call it and neither constructs an observer any more. Paging state deliberately survives a view switch: the reset effects stay keyed on filters/chips/search/sub-view (`[debounced, typeChip, chips, sort, pageSize]` and `[tab, bucket, debounced, pageSize]`) and never on the stored view preference, so nobody is dropped back to page one halfway down a list. End-of-list, retry-on-failure and no-double-fire behaviour from 214 §4 preserved.
+
+### §3 — long pickers full-screen, short ones sheets
+
+`MobileSheet` gains `variant?: 'sheet' | 'fullscreen'` — the SAME element, the same slide, the same drag-from-the-header dismiss, the same layer/back contract, the same focus trap. Fullscreen drops the grip and moves the dismiss control to the head of `.sheet__hd` as a back arrow (the `.mpick__hd` composition, 191 §1); the CSS variant `.sheet--full` takes the panel edge to edge, square, on `--page-bg`, with a safe-area top inset. `SearchSelect`/`MultiSearchSelect` gain `mobileKind?: 'short' | 'long'` (default `'short'`), which is the single breakpoint-and-kind guard: the option list, its search, its keyboard behaviour, its "+ add new" footer slot and both empty states are the one `OptionList`/`LIST_SKIN` composition either way. Desktop is untouched — the portalled 213 §2 panel in every case, asserted by "no member of the sheet family is mounted".
+
+Marked `mobileKind="long"`: Adjust Stock's **Item** picker (the 162-product case the spec cites), the purchase-line medicine picker, and the returns-line medicine picker. Left as sheets: Unit, Batch, Reason, Category, method/status and rows-per-page — all bounded. No new i18n keys: the back control reuses the sheet's existing `close` label. No on-screen keypad anywhere (199); the search field does not autofocus on the phone, so the device keyboard waits for a thumb. Device-back closes the picker first and registers exactly one layer (the sheet's), asserted.
+
+### Decisions taken without escalation
+
+- **The desktop `.pos-opt` row was NOT given the same clipping.** The spec scopes this step to tenant mobile, the desktop meta line is ordinary wrapping inline text inside an already-shrinking `.pos-opt__t`, and it has never been reported. Recorded here so the next round does not read the asymmetry as an oversight.
+- **The full-screen back control stays the kit's 40px `.mic`**, matching the POS customer chooser's own control and every other sheet close button on the surface. Raising it to 44 here alone would split the family; if the ≥44 rule is to bite, it is a surface-wide change and its own step.
+- **Two 214-era assertions in `inventory-mobile-to-mockup.spec.ts` were rewritten**, not deleted: they pinned the per-screen observer and the per-screen `appending` ref that 218 §2 exists to remove. They now assert the shared contract; the guarantees themselves are asserted behaviourally in the new suite.
+
+### Files
+
+- NEW `packages/ui/src/lib/infinite-scroll.ts`; exported from `packages/ui/src/index.ts`.
+- NEW `packages/ui/src/lib/mobile-picker-and-list-fixes.spec.tsx` — 37 cases: a generated per-selector CSS diff against the mockup, the §1 additions, a fake-`IntersectionObserver` harness that remounts the sentinel list ↔ card in both directions, the flick latch, the end-of-list and not-on-a-phone teardowns, and the §3 full-screen/sheet/desktop guard rendered for real.
+- `packages/ui/src/components/mobile-sheet.tsx` — `variant`, `MobileSheetVariant`, `BackIcon`.
+- `packages/ui/src/components/search-select.tsx` — `SelectMobileKind`, `mobileKind`, `SelectSheet` `kind`.
+- `apps/web/app/globals.css` — appended build-step 218 block (§1 clipping, §3 `.sheet--full`).
+- `apps/web/app/(app)/pharmacy/inventory/PharmacyInventoryClient.tsx`, `.../inventory/alerts/StockAlertsClient.tsx` — on the shared hook; Item picker marked long.
+- `apps/web/app/(app)/pharmacy/purchase/PharmacyPurchaseClient.tsx`, `.../returns/ReturnsClient.tsx` — medicine pickers marked long.
+- `packages/ui/src/lib/inventory-mobile-to-mockup.spec.ts` — the two 214-era assertions updated.
+
+### Gates
+
+`pnpm lint` and `pnpm typecheck` run once at the end: both clean (design-drift, token-integrity, tenant-english-only, tenant-search-select and tenant-page-titles checks all pass). The new suite and every suite that touches the changed files were run targeted rather than through the full runner: 39 suites, 718 cases, all passing. There is no Playwright project in this repo (`pnpm test:e2e` is not a script and no `playwright.config` exists), so the DOM suite is the screen-level gate; 218 adds no route. FEFO, stock decrement, unit conversion, valuation, payment, credit and adjustment arithmetic are untouched — no file under `apps/api` or `packages/shared` was modified.
+
+
+---
+
+## 219 — picker-meta-whole-rupees — DONE (2026-08-08)
+
+**Work type:** FIX. **Branch:** `fix/219-picker-meta-whole-rupees`. **Spec:** `specs/219-picker-meta-whole-rupees.md`.
+**Schema:** none. **RLS:** unchanged. **Migrations:** none. Presentation only.
+
+### The finding — 218 fixed the wrong layer
+
+218 §1.2 read the customer picker's meta-line overflow as a truncation problem and answered
+it with `overflow:hidden; text-overflow:ellipsis` on `.mpick__row .t` and its `small`. The
+owner rejected it, and the spec agrees. Held against the file the two disagree on width,
+not on truncation:
+
+    Limit Rs 20,000  ·  Due Rs 24,900      pos-mobile.html / pos-desktop.html
+    Limit Rs 300.00  ·  Due Rs 3,000.00    deployed
+
+Both mockups write picker-row amounts in WHOLE RUPEES. The port put two decimal places on a
+line that was already tight beside a 22px over-limit pill — six characters, measured, which
+is exactly what pushed an unbreakable `.nb` segment past the shrunken `.t` and under the
+pill. Remove them and the line fits with room to spare, and nothing needs hiding. Recorded
+as the reason two earlier rounds tested green: every test used the mockup's own short
+amounts, which always fit.
+
+### Decisions
+
+- **The formatter moved to `@mp/shared`, not a second local helper.** `pickerMetaAmount()`
+  now lives in `packages/shared/src/pharmacy-customers.ts`, beside `customerCreditState` —
+  the same argument that put the credit-state rule there applies here: the desktop select and
+  the phone's picker sheet must render an identical string and there must be no second
+  implementation to drift. It is also the only way the format is directly unit-testable;
+  PosClient's `rs` is module-private and every prior test could only assert source strings.
+- **Round, not floor.** `Math.round` on the way to the string, so a Rs 3,000.50 due reads
+  "Rs 3,001" and the line never understates what a customer owes.
+- **The boundary is enforced by test, not by comment (spec §3).** `rsWhole` has exactly two
+  call sites — the limit and the due inside `customerStandingParts` — and the suite asserts
+  that count, asserts `rs(` (two decimals) still has 20+ call sites for cart lines, totals,
+  tendered, change, To account and the payment dialog, and asserts that neither
+  `CustomersClient` nor `pharmacy.service` has adopted `pickerMetaAmount`. No stored value is
+  rounded anywhere; this rounds a string on its way to one subtitle.
+- **Wrapping replaces the ellipsis, deliberately.** A lakh-scale figure now breaks BETWEEN
+  the `.nb` segments 214 §7 made unbreakable (never inside a number) and the row grows
+  taller. Per spec §2: a due a cashier cannot read in full is worse than a taller row.
+- **Kept from 218 §1:** the flag's 22px / 11px, and `min-width:0` on `.t` — the precondition
+  for the row laying out at all, and never the thing that overflowed. The name (`.t b`)
+  keeps its own single-line ellipsis, which is the mockup's own rule.
+
+### Files
+
+- `packages/shared/src/pharmacy-customers.ts` — new exported `pickerMetaAmount(amount)`:
+  `Rs 24,900`, whole rupees, thousands separated, non-finite input coerced to 0. Carries the
+  §3 scope note in its doc comment.
+- `apps/web/app/(app)/pharmacy/pos/PosClient.tsx` — imports it as the module-local `rsWhole`;
+  `customerStandingParts` formats the limit and the due through it instead of `rs`. `rs`
+  itself and its 27 other call sites are untouched. `CustomerStandingParts`' doc comments now
+  state the whole-rupee samples.
+- `apps/web/app/globals.css` — the 218 §1 rules `.mp-pos2 .mpick__row .t { overflow:hidden }`
+  and `.mp-pos2 .mpick__row .t small { overflow:hidden; text-overflow:ellipsis }` DELETED.
+  The 218 comment block is kept and extended with the 219 reversal so the history of the
+  three reports stays readable in place.
+- `packages/ui/src/lib/picker-meta-whole-rupees.spec.tsx` — NEW. Format cases against the
+  exact figures both mockups print; no-decimal and rounding cases; "Rs" said once; NaN and
+  Infinity; the six-character measurement that is the whole of §1; one-formatter-both-surfaces
+  by source and by call-site count; the per-selector CSS diff for `.mpick__row`,
+  `.mpick__row .t`, `.mpick__row .t small`, `.mpick__flag`, `.mpick__due`, `.mpick__row--over`
+  against pos-mobile.html and for `.pos-opt`, `.pos-opt__t`, `.pos-opt__due`, `.pos-opt__flag`
+  against pos-desktop.html; the clip's absence; the §3 boundary cases.
+- `packages/ui/src/lib/mobile-picker-and-list-fixes.spec.tsx` — 218's "clips and ellipses the
+  meta line" case SUPERSEDED in place (renamed, now asserting the clip is absent) rather than
+  deleted, so the reversal stays legible next to the reasoning it overturns.
+- `packages/ui/src/lib/round-3-verification.spec.tsx` — one source-string assertion updated
+  from `rs(c.currentBalance ?? 0)` to `rsWhole(...)`. The clause it guards — the due is
+  stated, from the CURRENT balance — is unchanged.
+
+### Gates
+
+- `pnpm lint` — clean (16/16 tasks; design-drift, token-integrity, tenant-english-only,
+  tenant-search-select and tenant-page-titles checks all pass).
+- `pnpm typecheck` — clean (29/29 tasks).
+- `pnpm test:unit` / `test:e2e` / `build` — not run by the agent per CLAUDE.md §6; the
+  controller runs the full gates.
+- Vendor untouched. No schema, no migration, no API payload change.
+
+## Gate fix — 219 unit-test failure (2026-08-08)
+
+`@mp/ui` `mobile-picker-and-list-fixes.spec.tsx` §1 asserts the phone picker row is composed in exactly ONE place by counting `mpick__row` mentions in PosClient.tsx (expected 3). Step 219 added a doc comment on `rsWhole` that named the selector `.mpick__row .t small` in prose, pushing the count to 4 — a false positive for "a second renderer appeared". Fix: reworded that one comment to say "`.t small` inside the phone picker row below" without repeating the class token. No behaviour change; the three real mentions (row, `--over` modifier, walk-in row) are untouched. `pnpm lint` and `pnpm typecheck` pass.

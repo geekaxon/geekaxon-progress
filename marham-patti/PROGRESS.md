@@ -6,16 +6,16 @@
 
 ## Current Status
 - **Project:** Marham Patti — multi-tenant white-label healthcare platform.
-- **Phase:** **PHASE 20** — Inventory owner-test round 3. 216–218 authored as an owner-released group.
-- **Last completed:** **217 — stock-alerts-screen-polish**.
-- **Next:** specs/218-mobile-picker-and-list-fixes.md
-- **Group order:** 216 → 217 → 218. Build one step only, then stop at the checkpoint.
-- **After 218:** Settings (mockups committed), then Purchases + Suppliers, Customers + Returns, Day-close + Prints.
-- **Parked:** printing (needs ESC/POS — Bluetooth + wired); per-page menu permissions; global discount stacking question (Settings spec).
+- **Phase:** **PHASE 21** — the Settings screen. 219–224 authored as an owner-released group.
+- **Last completed:** **219 — picker-meta-whole-rupees**.
+- **Next:** specs/220-settings-shell-and-general.md
+- **Group order:** 220 → 221 → 222 → 223 → 224. Build one step only, then stop at the checkpoint.
+- **After 224:** Purchases + Suppliers, then Customers + Returns, then Day-close + Prints, then production cutover.
+- **Parked:** printing (needs raw ESC/POS — Bluetooth + wired); per-page menu permissions; deferred shortcut bindings.
 
 ### Recent steps
-- **218 — mobile-picker-and-list-fixes** — AUTHORED — over-limit row measured against the mockup; infinite scroll re-observed; long pickers full-screen.
-- **217 — stock-alerts-screen-polish** — DONE (2026-08-07) — no more minus days, a card view, and search where the owner looks for it.
-- **216 — client-side-navigation-and-layer-gestures** — DONE (2026-08-07) — nothing reloads the page any more, and only the top sheet moves.
+- **219 — picker-meta-whole-rupees** — DONE (2026-08-08) — picker amounts in whole rupees; the ellipsis is gone, the line wraps instead.
+- **218 — mobile-picker-and-list-fixes** — DONE (2026-08-08) — the amount stopped hiding under the pill; lists keep loading after a switch.
+- **217 — negative-age-and-the-missing-switch** — DONE (2026-08-08) — a negative age stopped being a number, and everyone got the switch.
 
 > Older steps in PROGRESS-HISTORY.md
