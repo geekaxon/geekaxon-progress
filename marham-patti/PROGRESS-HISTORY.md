@@ -9894,3 +9894,41 @@ Returns, day-close, reports and supplier ledgers untouched (asserted). A supplie
 
 ### Gates
 `pnpm lint` and `pnpm typecheck` — clean (the single `@mp/api` warning is a pre-existing unused eslint-disable in `doctor-portal.repositories.ts`, untouched by this step). Per AGENT.md the agent does not run `test:unit`/`test:e2e`/`build`; every source literal asserted by the new suite was verified present by grep, and the multi-line/regex assertions were evaluated directly against the files.
+
+---
+
+## 228 — picker-performance-server-search — DONE (2026-08-08)
+
+**Work type:** FEATURE. **Branch:** `feature/228-picker-performance-server-search`. **Spec:** `/specs/228-picker-performance-server-search.md`. No CODEREF.
+
+**Schema:** none (a migration was added, but it creates INDEXES only — no column, constraint or row changes, and `schema.prisma` is untouched, so no `prisma generate`). **RLS:** unchanged. **Flags/permissions:** unchanged — both new routes sit on the existing `pharmacy/medicines` and `pharmacy/customers` controllers and inherit `pharmacy.pos` + `pharmacy.sell`.
+
+### The problem
+Adjust-Stock's Item picker and the POS Customer chooser each loaded their ENTIRE list on open and filtered it in the browser. The owner proposed "20 rows + scroll + search" — the right instinct at the wrong layer: at 50k items the cost is the payload and the parse, not the rendering. Twenty rendered rows over a fifty-thousand-row download is still a fifty-thousand-row download.
+
+### What was built
+- **`usePagedOptions` (`@mp/ui`, new `lib/paged-options.ts`)** — the ONE server-paged source. 25 rows on open (immediately, no debounce on the way in), a 250ms-debounced server search while typing, keyset paging on scroll, a sequence guard + `AbortController` so a superseded query's answer can never render, and a `failed` flag the caller degrades on. Says nothing about the endpoint or the projection, which is what lets three surfaces share it.
+- **`SearchSelect`** gained `paged` / `pagedLabels` / `selectedOption` / `onOpenChange`, plus `SelectOption.icon`. With a paged source it renders the in-flight card (190 §4's anatomy), the 218 §2 sentinel and the page loader; with a FAILED source it silently falls back to the `options` it was given and filters those in the browser. `selectedOption` exists because a paged trigger can no longer look its own value up in a list it does not hold.
+- **API** — `GET /pharmacy/medicines/picker` and `GET /pharmacy/customers/picker`, both `?q&cursor&limit`, returning `{rows, nextCursor, total}`. Keyset (`cursor` = the previous page's last id, `orderBy [name/brandName, id]`), never offset: an offset re-walks every row it skips and is the same table scan by page twenty. `limit` is CLAMPED at 100 — a caller must not be able to ask for the table back in one request. `total` is the size of the CURRENT query, which is what the card states.
+- **Repo** — `pageMedicines`/`countMedicines`, `pageCustomers`/`countCustomers`, and `listCreditSalesFor`/`listCustomerPaymentsFor` (the two credit streams narrowed to the page's ids). The predicates are written ONCE per repo (`medicineSearchWhere`/`customerSearchWhere`, and the fakes' matchers) because a page and a count that disagree about what matches is a count that lies.
+- **Migration `20260808030000_picker_search_indexes`** — defensive `pg_trgm` GIN indexes on `customers.name`/`phone`. `medicines` already had them (eprescription); customers did not, so its `ILIKE '%…%'` would have been a sequential scan per keystroke per till. Same DO/EXCEPTION shape as the two earlier trigram migrations, so pglite still runs it.
+- **§2 `ProductTypeMark`** — one component (medicine = Pill, general = ShoppingBasket) now worn by the desktop rows, the mobile cards, the detail head, `TypeTag` AND the picker options. Deliberately not the expiry dot: that glyph already means something else in the POS search, so two meanings for one mark was refused (owner decision, recorded).
+- **§3 full-page header parity** — the divergence was CSS, not markup: 218 §3 had already given the shared full-screen sheet the chooser's back-control header. `.sheet--full` now drops the hairline divider and the sheet's full-bleed negative margins, and takes the chooser's frame (16px inset, 16px under the status bar, 10px header→search→list, 17px/650 title). Asserted per selector against `.mpick__*`.
+- **POS** — the bootstrap no longer reads every customer. `customers` became the counter's KNOWN set: every landed page is folded in, it is persisted (capped at 300) so an offline till still opens on its regulars, and `selectedCustomer` / the hold / the commit / the live-balance feed keep reading one list. Desktop panel and phone chooser consume the SAME `customerPage` state.
+
+### Judgement calls
+1. **New `/picker` routes rather than changing the existing list responses.** The spec says "the existing list endpoints given `q`/`cursor` where missing"; `GET /pharmacy/medicines` and `GET /pharmacy/customers` return bare arrays to five other callers, and it also demands an identity-and-display-only payload, which is a different projection anyway. A literal sub-route on the SAME controllers keeps the gate, the RLS and the ownership identical while breaking nothing. Recorded rather than escalated.
+2. **An index-only migration under a "Schema: none" spec.** Without a trigram index the customer search the step introduces is a per-keystroke sequential scan — the step would have moved the cost rather than removed it. Additive, defensive, no schema.prisma change.
+3. **Duplicate-phone lookup moved to the server.** 226 §3's "one person, one ledger" scanned the whole local customer list. With paging that list is partial, so the check would have silently failed open into a split ledger for any regular served at another till. It now asks `/customers/picker?q=<digits>` and re-compares the last ten digits locally; offline it proceeds with creation, because a recoverable duplicate beats refusing to register a customer mid-sale.
+4. **Offline = degrade, never block.** A failed source falls back to rows already in hand on all three surfaces rather than showing an error, per §1.
+
+### Tests written (not run here beyond the two new suites + the two they touched)
+- `packages/ui/src/lib/picker-performance-server-search.spec.tsx` (26 cases) — immediate first page, 25-row page size, the 250ms debounce pinned to `POS_SEARCH_DEBOUNCE_MS`, one request per typing burst, a superseded answer never rendering, the abort actually firing, append-on-page, offline fallback, the leading mark + trailing tick, the §3 per-selector header diff against `.mpick__*`, and the wiring of both pickers.
+- `apps/api/src/pharmacy/picker-search.spec.ts` (12 cases) — 25 rows over a 4,000-item catalogue, cursor paging with no repeats or gaps, brand/generic/barcode search with a truthful count, the identity-only projection (no cost/price/tax/stock), and tenant isolation including a cross-tenant cursor paging NOTHING.
+- Two existing assertions updated where this step legitimately moved the code they read: `pos-credit-ux-and-fullpage-payment.spec.tsx` (the customer projection is now the shared `toCustomer`; the duplicate check now also hits the server) and `mobile-picker-and-list-fixes.spec.tsx` (`.sheet--full`'s `padding-top` became the frame shorthand).
+
+### i18n
+EN+UR: `pinvPickerSearching`, `pinvPickerSearchingCount`, `pinvPickerLoadingMore`, `pinvPickerOffline`, `pharmacyPos.v14.searchingCustomers`.
+
+### Gates
+`pnpm lint` and `pnpm typecheck` clean (the one API warning is pre-existing, in a file this step did not touch). `pnpm test:unit` / `test:e2e` / `build` left to the controller per the standing rules.
