@@ -9932,3 +9932,127 @@ EN+UR: `pinvPickerSearching`, `pinvPickerSearchingCount`, `pinvPickerLoadingMore
 
 ### Gates
 `pnpm lint` and `pnpm typecheck` clean (the one API warning is pre-existing, in a file this step did not touch). `pnpm test:unit` / `test:e2e` / `build` left to the controller per the standing rules.
+
+---
+
+## 229 — inventory-desktop-polish-r2 (DONE 2026-08-08)
+
+**Branch:** `fix/229-inventory-desktop-polish-r2` · **Spec:** `/specs/229-inventory-desktop-polish-r2.md` · no CODEREF companion.
+**Work type:** FIX — presentation + navigation structure. No schema, no migration, no endpoint, no RLS change, no arithmetic.
+
+### §1 Table toolbar
+
+**Rows-per-page width — 120 §3's defect back on a new consumer.** The shared `SearchSelect`
+`size="sm"` trigger already carried `w-fit` and already suppressed label truncation, and it still
+clipped "100 rows" in the Inventory toolbar. Diagnosis: `w-fit` is a *preferred* width — a flex
+item can be squeezed below it — and the trigger's inner label box carried `min-w-0`, which is
+precisely the licence to fall under the content's intrinsic width. Fixed in the shared control,
+not the page: `TRIGGER_SM` gains `shrink-0 whitespace-nowrap`, and `min-w-0` on the label flex box
+is now applied only for `size="md"` (which IS a full-width form field and truncates by design).
+Every list inherits it; neither screen states a width.
+
+**Columns hidden in card view.** Column show/hide governs table columns. Stated once, in the new
+shared toolbar control, so both screens get it from the same line.
+
+**New shared component `apps/web/components/pharmacy/ListToolbarControls.tsx`** — rows-per-page ·
+Columns · list/card, i.e. the whole `.tbl-toolbar__grp`. Inventory's private `ColumnsMenu` is
+deleted; the alerts screen's hand-rolled rows-per-page menu is deleted. Same ending as 217 §2's
+`ViewToggle` extraction, for the same reason.
+
+### §2 FEFO warning — the kit alert. TWO findings recorded.
+
+1. **The mobile sheet was outside the stylesheet's scope entirely.** The detail surface renders as
+   a `DrawerContent className="mp-inv2 …"` on desktop but as `<MobileSheet className="mp-inv2-sheet">`
+   on the phone — and `.mp-inv2-sheet` matched *nothing* in `globals.css`. So on the phone the
+   warning had no padding, no radius, no surface and an unconstrained lucide glyph. That is exactly
+   the "raw box, oversized text" in the owner's phone screenshot.
+2. **The anatomy was only part-built in the scope that did apply.** `.mp-inv2 .alert__title` was
+   never declared (the title fell back to inherited body type — the desktop "oversized text"), and
+   `.alert--warning` recoloured the BODY text warning where the kit keeps the body at secondary.
+   The icon was the `<svg>` itself wearing `.alert__icon` rather than the kit's 20px box holding a
+   16px glyph.
+
+Rebuilt on `component-reference.html` §alerts (425-438), stated once for BOTH surfaces via a
+grouped `.mp-inv2 … , .mp-inv2-sheet …` selector list: reference padding/radius/gap, `--text-body`
+semibold title with the reference's `margin:0 0 2px`, `--text-sm`/`--text-secondary` body, tone in
+the icon only. Multi-batch warnings take the kit's own 2px step between `.alert__text` lines. All
+three `.alert__icon` sites on the Inventory screen converted to the kit's `<span>` wrapper. Wording
+(215 §2.5) untouched; still `role="status"`, still warns and never blocks.
+
+### §3 Low stock & near expiry — desktop
+
+**Second implementation found and replaced.** The screen rendered a `.tbl-toolbar__mini` button over
+a hand-rolled `.menu` with its own open flag and outside-click dismissal, while Inventory rendered
+the kit `SearchSelect` — two controls with one name. Now both render `<ListToolbarControls>`; the
+screen's `colsOpen`/`sizeOpen` state, its two refs and its `useDismissOnOutside` wiring are gone.
+
+**"Value to reorder" spacing — why the 217 §3 gate missed the bottom edge.** The gate compared
+DECLARATIONS and both matched: 18px above the block (`.segctl + .invtabblock`), 18px between its
+children (`.invtabblock` gap). What a declaration diff cannot see is that only one of those 18px was
+the whole gap. In the mockup `.segctl` is a flex ITEM of `.pmain__inner` (a flex column), so its
+`inline-flex` is blockified and it contributes no line box. In `.mp-inv2` — a plain block root — it
+stays inline-level, and the line box it sits on adds the font's descent underneath it. Rendered top
+gap = 18px + the descent; rendered bottom gap = 18px. Fixed by reproducing what `align-self:flex-start`
+did in the mockup: `.mp-inv2 .segctl:not(.segctl--full) { display:flex; width:fit-content; }`. The
+`:not()` keeps the full-width variant's `width:100%`. `.reorderline`'s own padding was already the
+mockup's 13px/16px and is unchanged.
+
+**Export/Import in the page head.** Endpoints exist (spec-12 `/export/medicine`,
+`/import/medicine/{template,upload,:id/apply}`), so no `[HUMAN_REQUIRED]`. Rather than write a second
+exporter, the wiring was shared out of `PharmacyInventoryClient`:
+- `apps/web/components/pharmacy/Panel.tsx` — the 214 §5 three-frame chooser, moved verbatim.
+- `apps/web/components/pharmacy/CatalogueIO.tsx` — `CATALOGUE_ENTITY`, `useCatalogueExport`,
+  `CatalogueHeadActions` (the icon pair; `place` picks `.iconbtn--44` vs `.miconacts__btn`) and
+  `CatalogueImportDialog` (the moved `ImportDialog`).
+Both screens now call the same three. Desktop page head only — §3 is the desktop section, and the
+alerts screen's phone header is `MobilePageChrome` with a back control in that slot.
+
+### §4 Alerts screen becomes a submenu of Inventory
+
+- `NavItem` gains `parentHref?: string`; the alerts row declares `parentHref: '/pharmacy/inventory'`.
+  Same flag, same permission, same route — placement only. `urgencyHref` deep link untouched.
+- `visibleNavTree(me)` derives a ONE-DEEP tree from `visibleNav(me)`, so the flat registry (and
+  therefore the mobile dock's priority order) is byte-identical to before. Two rules: a child whose
+  parent the session cannot see stays top-level (nesting must never become a second silent
+  permission), and a child's own `parentHref` is not followed.
+- `isNavSectionActive()` — Inventory highlights while either it or its child is open. The child keeps
+  `aria-current="page"`; the parent gets `data-section-active="true"`, styled as accent TEXT only, so
+  exactly one row wears the `--accent-soft` wash and it is the row you are on.
+- Sidebar composition: `.mp-shell-navrow` (`display:contents`, so the group's 0.1rem rhythm and the
+  rail's centring maths are untouched) → parent `.mp-shell-navlink` → `.mp-shell-navchildren` of
+  `.mp-shell-navlink--child`. **Recorded as an owner-approved composition:** the component reference
+  has no nested-nav section, so this is built from anatomy it does carry — the settings nav's
+  `.setnav__grp` + indented `.setnav__item` relationship — over the sidebar's own row, not a second
+  row anatomy. 36px, 18px indent, hairline guide that turns accent when the child is the page.
+- Collapsed rail shows Inventory only: the child collapses through INTERPOLABLE properties like
+  every other rail collapse (a stated 36px base height animating to 0, gap and padding with it), and
+  the transitions are declared on the BASE selectors so collapse and expand are one animation
+  reversed (181 §2.5). Reached again via hover-expand (180).
+- Mobile More sheet: `MoreSheetRow` gains `nested?: boolean`; the shell builds its rows from the same
+  tree. One wrinkle the flat list never had — when the PARENT is already on the dock it drops out of
+  the sheet, so its children are promoted to rows of their own rather than leaving with it.
+  `.msheet__row--nested` indents one step (30px) with logical padding, RTL included.
+
+### Decisions recorded (no approval gate exists)
+
+- Alert icon at **16px inside the 20px box**, per the spec's explicit wording, rather than the
+  `.mp-kit` scope's 18px. The spec is authoritative on the number.
+- `Panel` kept its hardcoded `mp-inv2-sheet` mobile class after the move; it is the pharmacy module's
+  scope and both consumers are in that module.
+- Import/Export added to the alerts screen's DESKTOP head only (§3 is the desktop section).
+
+### Files
+
+`packages/ui/src/components/search-select.tsx`, `packages/ui/src/components/mobile-more-sheet.tsx`,
+`apps/web/components/pharmacy/ListToolbarControls.tsx` (new), `apps/web/components/pharmacy/Panel.tsx`
+(new), `apps/web/components/pharmacy/CatalogueIO.tsx` (new),
+`apps/web/app/(app)/pharmacy/inventory/PharmacyInventoryClient.tsx`,
+`apps/web/app/(app)/pharmacy/inventory/alerts/StockAlertsClient.tsx`, `apps/web/lib/nav.ts`,
+`apps/web/components/shell/AppShell.tsx`, `apps/web/app/globals.css`.
+Tests: `packages/ui/src/lib/inventory-desktop-polish-r2.spec.tsx` (new);
+`packages/ui/src/lib/inventory-mobile-to-mockup.spec.ts` re-pointed at the moved `Panel` /
+`CatalogueIO` / `ListToolbarControls` (same contracts, new addresses).
+
+**Gates run here:** `pnpm lint` and `pnpm typecheck` — clean, including the design-drift,
+token-integrity, tenant-english-only, search-select and page-title checks. Unit suites are the
+controller's.
