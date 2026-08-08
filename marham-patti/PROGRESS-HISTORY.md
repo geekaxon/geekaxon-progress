@@ -9791,3 +9791,56 @@ No screen changed, so no new Playwright test. Gates run in-session: `pnpm lint` 
 `deploy.sh` already passes `--update-env`. After deploy, confirm the running process with:
 `pm2 logs mp-api --lines 50 | grep "Session TTLs"` — it must read
 `access=15m session=30d rememberMe=30d sliding cap=90d rotationGrace=30s`. Do not read `pm2 env`.
+
+## 226 — pos-credit-ux-and-fullpage-payment — DONE (2026-08-08)
+
+**Work type:** FEATURE. **Branch:** `feature/226-pos-credit-ux-and-fullpage-payment`. **Spec:** specs/226-pos-credit-ux-and-fullpage-payment.md.
+**Schema:** none. **Migrations:** none. **RLS / tenancy:** unchanged — no query touched. **Auth / permissions / flags:** unchanged (credit is a core pharmacy capability since 210 §1.1; nothing new is gated). **Endpoints:** none added; the capture reuses `POST /pharmacy/customers`. **Audit:** unchanged — the commit still carries `creditAutoComposed` and `customer_id`.
+**Mockup gate:** PASSED before any code — `.credblk` is present in both recommitted files and `.mpay` in pos-mobile.html, with all four credblk variants drawn.
+
+**Problem.** Payment on a phone was a bottom sheet, and a sheet cannot show the credit picture and the tender at the same time above a keyboard. Meanwhile the only thing a salesman was told about a customer's tab was one sentence stating how far over the limit the sale went — the figure they can already feel — and nothing about the ceiling, the balance or the headroom, which they cannot. And a walk-in who wanted to leave money owing hit a dead end: a disabled Confirm and a hint.
+
+**What changed.**
+- §1 The phone takes payment on the file's `.mpay` full page (`__hd` / `__due` / `__body` / `__foot`), mounted only while open. `PaymentPanel` gained `layout="page"` (replacing `layout="sheet"`, which is gone, not merely unused) and registers itself with `useLayerHistory`, so the back control and the device back button both step ONE level, to the cart. The desktop keeps its centred dialog untouched; the 199 no-keypad override and 211's Udhaar chip are unchanged.
+- §2 `.credblk` replaces 210 §3.1's `.payalert` sentence at the top of the payment body — one element, two bindings, four states (within limit / `--over` / `--nolimit` / `--walkin`). Figures come from the existing customer payload and the frozen `checkCreditLimit` / `splitPaymentSummary`; no endpoint was added.
+- §3 A walk-in that would leave money owing is captured: Confirm becomes "Add customer to continue" and opens the existing add-customer sheet/dialog reduced to name + phone. A duplicate phone offers the existing customer instead of posting; abandoning creates nothing.
+- §4 The over-limit picker flag is a 16px glyph; the desktop customer field opens the picker across its whole area; `clearable={false}` now REMOVES the date popover's Clear instead of greying it out.
+
+**Judgement calls, and why.**
+1. **`.mpay` is `position:fixed`, not the file's `absolute`.** In the mockup the surface sits inside a positioned phone frame; the real shell has no such ancestor and the viewport is the frame. This is the identical translation `.mpick` already carries, and it is the ONLY declaration in the whole `.mpay*` family that differs from the file — the per-selector diff test skips exactly that one property and then asserts the translated value explicitly, so it cannot drift silently. `.mpay__hd`'s 52px top padding likewise became the real safe-area inset.
+2. **The `mp-mobile` scope is on the `.mpay` element itself.** The POS section carries that class only on an inner div, and the sheet being replaced got the scope from MobileSheet's own wrapper. Without it every payment atom inside the page — credit block, method tiles, tender row, change rows — would have resolved to nothing. Caught by inspection, not by the type checker.
+3. **Headroom is stated AFTER this sale** (`limit + advance − (outstanding + sale credit)`), which is the arithmetic the mockup's own figures encode (50,000 − 29,000 − 1,655 = 19,345). "What is left once I do this" is the question at the counter; "what was left before" is not. `advance` is present as a term at 0 so 227 drops straight in.
+4. **An unset ceiling renders "—", never "Rs 0".** "Limit Rs 0" reads as "this customer may owe nothing", the opposite of what no-limit means.
+5. **Both walk-in actions open the CAPTURE, not the customer picker.** The mockup labels the in-block action "Choose customer", which on desktop would mean closing the payment dialog to reach the field behind it. One action, identical on both surfaces, is worth more than fidelity to a label — the capture's own duplicate-phone check is how an existing customer gets found anyway.
+6. **The captured customer is created with credit allowed and NO limit** (`creditLimit: 0`, `allowCredit` left at the column default). The sale must complete now; a ceiling invented at the counter would either block the sale or be a number nobody chose. The owner sets one later from Customers.
+7. **Duplicate phones are matched on the last ten digits** of the digits-only number, so `0300 123 4567`, `+92 300 123 4567` and `03001234567` are one person. Deliberately loose: a false match costs one tap on an offer; a false miss costs a ledger split across two rows of the same customer, which is the failure this exists to prevent.
+8. **The over-limit flag override is enforced in the tests, not just the CSS.** The spec says no future diff may restore the text pill, so the pill's metrics were removed from the two superseded assertions in 218/219's suites and `.mpick__flag` / `.pos-opt__flag` were taken off their mockup-diff lists with the reason recorded inline. The new suite asserts the glyph's contract positively (16px, `flex:none`, no `position`, no background/height/font-size, `var(--danger)` so both themes resolve).
+9. **The `.credblk__act` button is dressed explicitly in both scopes.** The desktop dialog is portalled out of `.mp-pos2` and only dresses `.payfoot .btn`, so the file's `btn--secondary btn--sm` would have rendered as a bare native button on the one surface that most needs to look deliberate.
+10. **The blocked hint was narrowed, not deleted.** A cash-only customer with money owing still gets 210's sentence — there is nothing to capture there. Only the walk-in half became an action.
+
+**Frozen and verified by inspection:** `splitPaymentSummary`, the exact-tender rule, the auto-composed CREDIT leg, the committed payload (`composed.map`), `creditAutoComposed`, the tile list without a Credit tile (211 §1), and the 201 keyboard map (`Enter` / `=` / `0` / digits). Over-limit still never gates `canPay`.
+
+**Files:** `apps/web/app/(app)/pharmacy/pos/PaymentPanel.tsx`, `apps/web/app/(app)/pharmacy/pos/PosClient.tsx`, `apps/web/app/globals.css`, `packages/ui/src/components/date-picker.tsx`, `packages/i18n/src/messages/{en,ur}.json` (new `pharmacyPos.v13`, 23 keys, EN+UR parity).
+**Tests written (not run — controller gate):** new `packages/ui/src/lib/pos-credit-ux-and-fullpage-payment.spec.tsx` — the mockup gate, the `.mpay*` and `.credblk*` per-selector diffs against pos-mobile.html in both scopes, the four states, the headroom boundary (due == limit is within, one paisa past is over) through `checkCreditLimit`, the whole §3 capture flow, the three §4 corrections and EN/UR parity on every new key. Superseded assertions updated in `pos-credit-and-customer-attribution.spec.tsx`, `mobile-picker-and-list-fixes.spec.tsx` and `picker-meta-whole-rupees.spec.tsx`, each with the reason inline rather than deleted.
+**Self-checks:** i18n EN+UR parity ✅ · isolation ➖ (pure presentation, no query) · flags ➖ (nothing new gated) · white-label ✅ (tokens only; no hex outside globals.css) · design ✅ (mockup-matched, both themes via tokens, 44px+ targets, safe areas, glyph carries an `aria-label`) · accountability ➖ (no new state change) · offline ➖ (unchanged path) · `.env.example` untouched.
+**Gates run here:** `pnpm lint` ✅ and `pnpm typecheck` ✅, once, at the end.
+
+## 226 — gate fix: `pnpm test:unit` (@mp/ui)
+
+`packages/ui/src/lib/settings-mobile.spec.tsx` §7 ("every mobile CSS rule is scoped under
+`.mp-set--mobile`") sliced `globals.css` from the 224 banner comment **to the end of the file**.
+That held only while 224 was the last block in the file; step 226 appended its own banner and
+CSS (`.paymod .credblk*`, `.mp-pos2 .mpay*`, `.cxdialog .dupoffer*`) below it, so 224's scoping
+assertion started auditing 226's rules and failed (`Expected: true, Received: false`).
+
+Fix: bound the slice at the next `/* =====` banner comment instead of EOF. The 224 block now
+yields 91 selectors (assertion requires >30), all scoped to `.mp-set--mobile` or
+`.mp-shell[data-page-chrome`. No CSS and no component code changed — 226's rules are scoped to
+their own surfaces (`.paymod`, `.mp-mobile`, `.mp-pos2`, `.cxdialog`) and answer to their own
+spec, not 224's.
+
+The `@mp/api` Prisma "Can't reach database server" lines in the gate output are logged, handled
+boot warnings (subscriptions/permission reconcile/branding migration all continue); that package
+reported no test failures. Only `@mp/ui` failed, with the one suite above.
+
+Gates: `pnpm lint` 16/16 pass, `pnpm typecheck` 29/29 pass.
