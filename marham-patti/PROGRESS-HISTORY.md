@@ -10056,3 +10056,63 @@ Tests: `packages/ui/src/lib/inventory-desktop-polish-r2.spec.tsx` (new);
 **Gates run here:** `pnpm lint` and `pnpm typecheck` — clean, including the design-drift,
 token-integrity, tenant-english-only, search-select and page-title checks. Unit suites are the
 controller's.
+
+---
+
+## 230 — mobile-and-global-polish — DONE (2026-08-08)
+
+**Branch:** `fix/230-mobile-and-global-polish`. **WORK TYPE: FIX.** Spec `/specs/230-mobile-and-global-polish.md`. No CODEREF covers 230 (the companions stop at 113–121). No schema, no migration, no RLS change.
+
+### §1 — barcode scan in every mobile search field
+
+The POS's scan control was **inline markup inside `PosClient`**, which is exactly why Inventory and the alerts screen had nothing to consume. Extracted first, then shared:
+
+- **NEW `apps/web/components/pharmacy/MobileScanSearch.tsx`** — the `.mpos-search` field, the leading glyph (a real button only where a screen has an explicit trigger, 190 §3), the in-field spinner slot, the trailing `.mscan` and the viewfinder behind it. Consumed by `PosClient`, `PharmacyInventoryClient` and `StockAlertsClient`.
+- **MOVED `BarcodeScanner.tsx`** from `app/(app)/pharmacy/pos/` to `components/pharmacy/` (git mv, contents unchanged). Path updated in `pos-final-fixes.spec.tsx`'s sheet sweep.
+- `PosClient` lost its `scannerOpen` state and the `setScannerOpen(false)` line in `onScanDetected` — the composition owns both now. Its CUSTOMER picker keeps its own plain `.mpos-search` (scanning a person is not a thing).
+- **Scan means SEARCH on the two list screens.** New `GET /pharmacy/medicines/scan?code=` → `PharmacyService.scanLookup`, which delegates to the existing `scanBarcode` (so 184's `resolveBarcode` precedence is the one and only rule) and returns **identity only**: `{ medicineId, brandName, label }`. No unit, no price, no row — structurally unable to reach a cart. Literal route declared before the `:id/...` routes. Inherits the controller's `pharmacy.pos` flag + `pharmacy.sell` permission, the same gate both screens already pass.
+- Client behaviour: the raw code goes into the search field immediately, then the resolved product's `brandName` replaces it if the catalogue knows the code. An unknown code stays a raw search — the haystack already reads barcodes and shelf codes, and the screen's own empty state is the honest answer.
+
+**DECISION RECORDED (§1's parenthetical):** a scan does **not** open the detail sheet. `inventory-mobile.html` draws no such behaviour — its `.mpos-search` has no scan control at all in markup (the `.mscan` rules are present in its CSS, which is what the owner requirement resolves) — so the scan filters and the row is left for the same tap that opens it after a typed search. Both screens behave identically; no new i18n keys were needed (the scanner reuses the `pharmacyPos.v4.scan*` set, EN+UR already in parity).
+
+**TWO STRUCTURAL BUGS FOUND AND FIXED while sharing the control:**
+
+1. **The whole `.mscanner` stylesheet was scoped to `.mp-pos2` and reached nothing.** The scan field is portalled into the shell's chrome host, which sits outside `.mp-pos2` and outside `.mp-inv2` alike — so once the viewfinder moved into the composition it would have been unstyled on every screen, the POS's own included. The block is de-scoped to bare `.mscanner` (values unchanged; there is no competing definition anywhere in the file).
+2. **The chrome's `.mchrome` carries `backdrop-filter`, which makes it a containing block for `position: fixed` descendants.** A full-screen scanner rendered as a child of the portalled field would have been laid out inside the ~100px header bar. The composition therefore portals the viewfinder to `document.body`, inside the `display:contents` `.mp-mobile.mp-mobile--live` scope every live mobile surface wears — which also carries the kit button atoms to the scanner's permission-failure surface (its only styled control).
+
+Also: the mockup's ≥44px hit area for `.mscan` (`::after`, mockup 2095-2096) was stated only under `.mp-pos2` and so never reached the portalled chrome on any screen. Restated at `.mp-mobile .mchrome--pos .mscan`, with `:active` and `:focus-visible`, covering all three.
+
+### §2 — swipe between months on the touch date picker
+
+In `packages/ui/src/components/date-picker.tsx`, the 195 §1 physics family applied to a second axis:
+
+- Two exported pure helpers: `isHorizontalSwipe(dx, dy)` (8px slop, then |dx| must beat |dy| × 1.2 — a ~40° cone) and `monthSwipeOutcome(dx, velocity, width)` (flick ≥0.4 px/ms over ≥30px **in the direction it travelled**, else the ~⅓-width threshold, else settle). Both testable without a device.
+- The touch grid moves into `.dpop__view` (clipping) over `.dpop__track` (the finger carries it 1:1 on `translate3d`); the neighbouring months hang off either side as `.dpop__pane`s **rendered only while a swipe is in flight**, so an ordinary open still paints exactly one grid. Panes are `aria-hidden`, disabled and untabbable — the accessibility tree and the tab order are unchanged.
+- Width is measured **once** at engage; moves are writes only. Release animates on `SHEET_MOTION_MS`/`--ease-out` and then commits through the SAME `goMonth` the arrows call. A `pointercancel` always settles, never turns a page (207 §1.1's lesson).
+- Vertical is protected twice: `touch-action: pan-y` on the track (iOS's compositor decides before any handler runs) and a gesture that reads vertical first is marked dead for good rather than re-tested each move.
+- Reduced motion: the drag stays (it is the finger's own movement), the release becomes an instant month switch with no slide; a CSS `@media` rule backs the JS.
+- Arrows, keyboard (`PageUp`/`PageDown`, arrows, `Home`/`End`), min/max bounds and the desktop popover are untouched — the popover gets the bare grid with no wrapper and no handlers, so its DOM and per-selector diff are unchanged.
+
+### §3 — toast height
+
+The description was **already** skipped when absent, so the conditional was not the bug. The cause was the dismiss button's `min-h-touch min-w-touch` (44px): in an `items-start` row it floors the whole toast at 44px + padding, so a title-only toast reserved a description's worth of empty space — the owner's screenshot exactly. Rebuilt on the reference's own anatomy (`component-reference.html` 6589): a 28px box with the ≥44px target grown around it by a pseudo-element. Title-only now collapses to the single-line height; title+description is unchanged. Additionally the queue normalises a whitespace-only `description` to `undefined`, so "title-only" is a property of the queued toast rather than of one render path.
+
+**Second-implementation grep (§3 asks for it), FINDING:** the only other `.toast` markup in the repo is `apps/web/app/ui/StaffKit.tsx` — the component-reference **gallery**, which draws static specimens and mounts no provider (no `ToastProvider`, no `useToast`). Every real toast in the product goes through the one kit provider, so the fix reaches every surface. Held as a test rather than a note.
+
+### §4 — mobile FEFO warning at 360
+
+Verified 229 §2's rebuild actually lands on the phone: `Panel` puts `className="mp-inv2-sheet"` on the `MobileSheet`, which renders in the React tree inside `.mp-inv2`, so both the `.mp-inv2` and the `.mp-inv2-sheet` halves of that ruleset match. The one thing a 360px column could still break is content, not chrome — the warning names batch numbers, and a long unbroken token would push the sheet sideways rather than wrap. Added `overflow-wrap: anywhere` for the alert's title and text inside the sheet. No wording change; it still warns and never blocks (`role="status"`, no dialog, no disabled commit).
+
+### Tests written (controller runs them)
+
+`packages/ui/src/lib/mobile-and-global-polish.spec.tsx` — §1 the composition is genuinely shared (all three consume it, none draws `.mscan`, none imports the scanner), the search screens can only search (no `/pharmacy/pos/scan`, no `addRow`), the endpoint returns identity only and is declared before `:id/...`, the portal + scope fixes, the de-scoped scanner CSS; §2 the two pure physics helpers across flick / twitch / pull-back / threshold / angle cases plus the wiring, reduced motion, and that the desktop popover keeps the bare grid; §3 rendered title-only / empty-description / title+description toasts through the real provider, the absence of `min-h-touch`, and the single-implementation grep; §4 the alert anatomy reaching the sheet scope in both themes, the 360 wrap, and warn-never-block. Also updated the moved scanner's path in `pos-final-fixes.spec.tsx`.
+
+### Gates
+
+`pnpm lint` and `pnpm typecheck` run once at the end: both clean. (One pre-existing unused-eslint-disable warning in `apps/api/src/doctor-portal/doctor-portal.repositories.ts`, untouched by this step.) Per AGENT.md §4A, unit/e2e/build are the controller's. Vendor surfaces untouched; no secrets; no production.
+
+### Owner decisions this block carries forward (spec §6, so no future diff restores them)
+
+Over-limit picker flag is an icon, not a text pill (226 §4); the sale-date picker has no Clear, that instance only (226 §4); headroom = limit + advance − due (227 §2.3); a walk-in leaving money owing is captured with name and phone, never refused and never anonymous (226 §3); long pickers are server-paged (228 §1); the alerts screen lives under Inventory (229 §4). Plus this step's: a scan on a search screen filters and never opens a sheet (§1).
+
+**Block complete.** Sequence from here: Purchases + Suppliers (prompt written, mockups awaited) → Customers + Returns → Day-close + Prints → production cutover.
