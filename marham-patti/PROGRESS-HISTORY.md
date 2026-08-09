@@ -10116,3 +10116,119 @@ Verified 229 §2's rebuild actually lands on the phone: `Panel` puts `className=
 Over-limit picker flag is an icon, not a text pill (226 §4); the sale-date picker has no Clear, that instance only (226 §4); headroom = limit + advance − due (227 §2.3); a walk-in leaving money owing is captured with name and phone, never refused and never anonymous (226 §3); long pickers are server-paged (228 §1); the alerts screen lives under Inventory (229 §4). Plus this step's: a scan on a search screen filters and never opens a sheet (§1).
 
 **Block complete.** Sequence from here: Purchases + Suppliers (prompt written, mockups awaited) → Customers + Returns → Day-close + Prints → production cutover.
+
+## 231 — production-boot-write-policy — DONE (2026-08-09)
+Branch: `fix/231-production-boot-write-policy`. WORK TYPE: FIX. No schema change, no migration, no RLS change, no endpoint or business-logic change. Spec: /specs/231-production-boot-write-policy.md.
+
+**Principle encoded (§0).** A production deploy ships CODE, not DATA. Boot may INSERT a system definition the newly-shipped code declares (permission key, flag key); it must never create operational data, modify/delete an existing row, or resurrect a managed row the operator deleted.
+
+**§1 audit outcome.** `permissions.module` and `flags.module` boot reconciles KEPT on production (system definitions — additive only; gating them would ship features whose key is missing from the DB). `vendor.module` bootstrap left as built (already env+absence gated). `seed.ts` already gated off production.
+
+**§2 packages are seed-once.** Removed `SubscriptionRepo.upsertPackageByKey` (per-key insert-if-absent — exactly what resurrected a deleted package on every boot) and replaced it with `SubscriptionRepo.seedPackagesIfEmpty(inputs)`: a single `subscriptionPackage.count()` + `createMany` inside ONE `runWithPlatformScope` transaction, so two API instances booting together cannot double-seed. Any existing package — active, inactive or archived — means boot writes nothing at all. `SubscriptionService.onBoot` now maps SEED_PACKAGES once and calls it; the ceiling-resolver registration is unchanged. `FakeSubscriptionRepo` mirrors the same guard.
+
+**§3 vendor bootstrap documented.** `.env.example` now carries a LIFECYCLE block beside `VENDOR_BOOTSTRAP_EMAIL`/`_PASSWORD`: set for the first login only, blank both and restart once the admin exists, otherwise the admin is re-created if ever deleted. No code change to the hook.
+
+**§4 one shared guard.** New `packages/db/src/boot-write-policy.ts` exporting `isProductionBoot()` (APP_ENV, never NODE_ENV — deploy.sh pins NODE_ENV=production on both environments) and `skipOperationalBootWrite(context)` (returns true when the write must be skipped, logging one line so a skipped seed is visible). Re-exported from `@mp/db`. `prisma/seed.ts`'s ad-hoc `APP_ENV === 'production'` check now routes through it, so there is one mechanism and one documented convention for any future boot hook.
+
+**Tests added.** `packages/db/src/boot-write-policy.spec.ts` (production skips + logs; staging/development/unset allow; APP_ENV wins over NODE_ENV). `apps/api/src/subscriptions/package-seed-once.spec.ts` (empty catalogue seeds the starter set; a deleted package stays deleted across repeated restarts; edited stays edited and archived stays archived; ONE surviving package stops the seed entirely — the regression the per-key reconcile caused). `apps/api/src/flags/boot-system-definitions.spec.ts` (with APP_ENV=production the flag catalog sync still inserts every code-declared key and never removes a stray — pins the deliberate exception against a future blanket "no writes on production" sweep).
+
+**Files:** packages/db/src/boot-write-policy.ts (new), packages/db/src/boot-write-policy.spec.ts (new), packages/db/src/index.ts, packages/db/prisma/seed.ts, apps/api/src/subscriptions/subscriptions.repository.ts, apps/api/src/subscriptions/subscription.service.ts, apps/api/src/subscriptions/__fakes__.ts, apps/api/src/subscriptions/package-seed-once.spec.ts (new), apps/api/src/flags/boot-system-definitions.spec.ts (new), .env.example, PROGRESS.md.
+
+**Gates:** `pnpm lint` clean (one pre-existing unrelated warning in doctor-portal.repositories.ts) and `pnpm typecheck` clean, both run once at the end. Suites/build left to the controller per AGENT.md.
+
+**Note on §5 acceptance:** the live-system checks (restart the production API and diff row counts; delete a package in the console and restart) are operator/deploy verifications — the behaviour they check is pinned by the unit suites above.
+
+---
+
+## 232 — package-nav-gating-and-identity-fixes — DONE (2026-08-09)
+
+**Branch:** `fix/232-package-nav-gating-and-identity-fixes` · **Spec:** `/specs/232-package-nav-gating-and-identity-fixes.md` · **Schema:** none, no migration, RLS unchanged, no stored row written.
+
+Found on production on the first real tenant (package `pharmacy`). Fixed on staging first; presentation + gating only.
+
+### §1 A pharmacy-only tenant was shown clinic menus
+
+The gating engine was never wrong — three entries in `apps/web/lib/nav.ts` simply predated the existence of a single-module tenant:
+
+- `/patients` — had `patients.view` and no flag. Now `requiredFlag: 'customers.medicalRecord'` (the flag ARCHITECTURE §4 uses to distinguish a full medical record from the pharmacy's light customer view). Off ⇒ the row is absent and pharmacy customers are reached through Pharmacy → Customers.
+- `/prescriptions` — had `rx.write` and no flag. Now `requiredFlag: 'clinic.consultation'`. **Which flag and why:** the module's own endpoints are present when EITHER `clinic.consultation` OR `pharmacy.pos` is on (spec 18 §3.2 — the counter reads prescriptions too). A single `requiredFlag` cannot express that OR, so the nav takes the CLINIC half: a tenant with no clinic capability is not offered a prescribing pad, while the counter's read path is untouched.
+- `/rx-desk` — kept its correct `pharmacy.pos` flag, moved from group `clinic` to `pharmacy`. Spec 122 §2.3 filed it under Clinic when every tenant was assumed to have both modules; a pharmacy-only tenant made that assumption visible as a Clinic heading holding one pharmacy row.
+
+Empty groups needed no change: `visibleNav`/`visibleNavTree` already drop a group with zero visible items. Now asserted for Clinic and Lab on the production tenant's exact session.
+
+### §1.3 Server-side audit — which endpoints already enforced the flag, and which did not
+
+- `/rx-desk` → `/online/ops/*`: **already enforced.** `@RequireFeature('pharmacy.online')` at the controller level (`online-pharmacy.controller.ts`), so all three ops controllers 404 for a tenant without the flag. No change.
+- `/prescriptions` → `/prescriptions`, `/medicines`, `/patients/:id/prescriptions`: **already enforced,** programmatically rather than by decorator — `PrescriptionsService.assertModulePresent` 404s FIRST for a tenant with neither `clinic.consultation` nor `pharmacy.pos`, then the `rx.write` permission is checked (flag before permission). No change. Deliberately NOT narrowed to `clinic.consultation`: that would break the pharmacy counter, which legitimately reads prescriptions.
+- `/patients`: **partly enforced — guard added.** Only the three ALLERGY routes carried `@RequireFeature('customers.medicalRecord')`. The clinical NOTES routes did not, although `patients.service` classes notes and allergies as the same MEDICAL timeline event and suppresses both together when the flag is off. `@RequireFeature(MEDICAL_RECORD_FLAG)` added to `GET`/`POST /patients/:id/notes`.
+
+**Decision (recorded, deliberate deviation from the literal reading of §1.3).** A blanket controller-level flag on `/patients` was implemented, then reverted after checking the callers. Search, detail, family, tags, credit and the timeline are the ONE shared customer store (spec 14 — one model, a flag-driven VIEW), and the pharmacy reaches them server-side for its own udhaar and billing: `pharmacy.e2e`, `billing.e2e`, `online-pharmacy.e2e`, `lab.e2e` and five more suites create and read patients on tenants that have no medical-record flag, and the live POS/billing paths do the same. Gating the whole controller would have forbidden a pharmacy its own customer records on a production tenant — the opposite of what §1 asks for. So the line is drawn where the flag's meaning actually falls: the MEDICAL surface (allergies + notes) is forbidden server-side, the shared customer store stays open, and the timeline already returns a purchase-only record rather than a 404 on the light plan.
+
+### §1.4 The durable guard
+
+`nav.ts` now exports two documented contracts, and `package-nav-gating-and-identity-fixes.spec.tsx` fails the build on either:
+
+- `VERTICAL_NAV_GROUPS = ['clinic','lab','pharmacy']` — every entry in a sold-capability group MUST declare a `requiredFlag`.
+- `UNGATED_NAV_HREFS` — the CLOSED list of entries allowed to carry none, pinned so it can only grow deliberately, and checked for rot (each href must still exist and still be flag-less).
+
+**Deviation from §1.4's literal wording, recorded.** The spec says "every nav entry outside the `core` group declares a `requiredFlag`". Taken literally that fails today for `/billing`, `/accounts` and ten `/admin/*` rows, none of which is a sold capability and none of which has a flag that could turn it off without locking an owner out of their own live tenant. Inventing flags for them was out of scope and would have been a production incident. The two-part contract above achieves the spec's stated goal — "a future entry cannot ship ungated" — without that: a new entry anywhere outside the closed list fails the build.
+
+### §2 An uploaded SVG logo did not render
+
+Cause confirmed as specified: every consumer sized its mark with `max-height` alone. A `max-height` constrains a height but never establishes one, so an SVG exported with only a `viewBox` laid out at ZERO height; a PNG carries intrinsic dimensions and so appeared to work. Not an upload defect.
+
+New `apps/web/components/brand/LockupMark.tsx` — the one place a resolved lockup asset becomes pixels. It pins an EXPLICIT height with `width: auto` (plus `max-width: 100%` so a wide lockup stays inside its card), and exports `LOCKUP_HEIGHT` with the sizes already specified: auth 40 (160), auth insignia 34 (165 §2), sidebar 34 (175), insignia slot 32. Deliberately not a client component, so the server-rendered auth card and the client sidebar can both mount it.
+
+Consumers rewired, and their own heights removed: `TenantLock` (AuthShell) — which the sign-in, reset, error pages (165 §3) and now the invite screen all render — and `SidebarBrand` (expanded horizontal, insignia+name, rail insignia). Two `globals.css` rules that re-declared the size were stripped to layout only: `.mp-shell-brand-logo` lost its `max-height`, `.mp-shell-brand-insignia img` lost `height: auto` (the exact declaration that made an intrinsic-size-less SVG vanish) and kept its width cap. No component sets a logo height any more.
+
+### §3 The invite screen joined the auth family
+
+`/invite` was in neither sweep — 153 was scoped to `(app)/`, 160 §4 to `(auth)` — which is exactly how it kept a switcher and the wrong mark. Rebuilt on the same parts as the sign-in and reset cards:
+
+- `page.tsx` now resolves the auth lockup SERVER-side via `authLockup(brand, serverTheme())` and the platform "Powered by" URL from config; the Vertical mark and `resolveBrandMark` are gone (Horizontal through the shared lockup, sized by §2).
+- `BrandedInviteScreen` renders `.mp-kit .mp-authroot--app .authpage .authcol .authcard` with `TenantLock` and `AuthPoweredBy`. The EN/اردو switcher, `LANGS`, `langHref`, `dir(lang)` and all `?lang=` plumbing are removed; English only.
+- `InviteForm` uses the kit anatomy: `.auth-head`, `.field` + `field__label`, lock-led `PasswordField` with placeholders and show/hide, `.btn--primary.btn--lg` submit swapping to a `.spinner`. Errors stay toasts; no inline banner and no `role="alert"` anywhere.
+- Terminal states (used / expired / invalid / no-token) keep their exact wording and now render in the mockup's `.auth-done` treatment; the success state keeps "Your password is set" and gains the ring + "Go to sign in" button.
+- Token, expiry, consumed/invalid classification and password rules untouched. The submit gate is the same both-fields-at-minimum rule it always was, now reading `PASSWORD_MIN_LENGTH` from `@mp/shared` instead of repeating `8`. The deliberately-omitted piece is the reset card's live requirement checklist: §3 does not ask for it, and the invite's server-side policy is the shared one, not the reset card's stricter display copy.
+
+### §4 2FA enrol spacing
+
+`.mp-qr` carried `margin: 0 auto 1rem` — a bottom margin and no top one, so the QR sat flush against the prompt above it. Now `margin: 1rem auto`, the same 16px the mockup gives its QR block via the card body's padding (`settings-desktop.html .setcard__body{padding:16px 18px}` around `.qrbox`). Enrolment, secret generation and verification untouched. `.mp-qr` belongs to the staff panel alone — the vendor console's 2FA panel does not use it and is unchanged. The settings-screen enrol row already carried the mockup's spacing and needed nothing.
+
+### §5 Desktop PWA icon
+
+Two causes, both in `manifestIcons` (`@mp/ui/pwa`):
+
+- the `maskable` entry existed only at 512; desktop reads the 192. Both `any` and `maskable` are now emitted at every size in `PWA_ICON_SIZES` (192 and 512).
+- the scalable entry declared `type: image/svg+xml` for whatever sat in `svgIcon`, which since 158 §3.6 is the tenant's uploaded App Icon verbatim — very often a PNG or a `data:` URI. A mistyped icon at the head of the list is discarded. New `isScalableIcon` emits that entry only when the href really is an SVG; the generated PNGs are composed from the same upload, so a tenant never loses its mark. `data:` URIs are excluded (never valid as a manifest icon src).
+
+`name`, `short_name`, `background_color`, `theme_color` still resolve per tenant. The vendor console's manifest is asserted byte-for-byte unchanged (it is `platformOnly`, so its icon is always the platform `/icon-vendor.svg`).
+
+### Tests
+
+`packages/ui/src/lib/package-nav-gating-and-identity-fixes.spec.tsx` — 28 cases, all passing, importing the REAL nav registry rather than a fixture copy: the §1.4 guard (three cases), the owner's screenshot as a test (pharmacy-only session ⇒ no Patients/Prescriptions, Rx Desk under Pharmacy, no Clinic or Lab heading at all), a clinic session unaffected, the §2 explicit-height contract plus "no consumer sizes a lockup itself" across AuthShell/SidebarBrand/globals.css, the §3 invite anatomy and its removed switcher, §4's margin, and §5's icon matrix including the vendor byte-for-byte check.
+
+`apps/api/src/patients/patients.e2e.spec.ts` — the flag-OFF case extended to prove the NOTES routes 404 alongside allergies, while keeping the purchase-only timeline and `medicalRecordEnabled: false` assertions that document the light plan.
+
+### Gates
+
+`pnpm lint` clean (the one `@mp/api` warning is a pre-existing unused eslint-disable in `doctor-portal.repositories.ts`, untouched here); design-drift, token-integrity, tenant-english-only, tenant-search-select and tenant-page-titles all pass. `pnpm typecheck` clean across all 29 tasks. Targeted jest runs: the new suite 28/28, `lib/pwa.spec` 27/27. Vendor console untouched. No schema change, no migration, no stored row written.
+
+## Gate fix (2026-08-09) — `pnpm test:unit`, 4 failures in @mp/ui
+
+Both failures were assertions left behind by step 230, not product regressions.
+
+- `packages/ui/src/components/toast.tsx` — 230 §3's own explanatory comment quoted the class
+  it had just removed (`min-h-touch`), and the test for that removal is a source grep. Reworded
+  the comment to name the utility in prose; the markup (28px box + `before:size-11` target) is
+  untouched.
+- `packages/ui/src/lib/stock-alerts-screen-polish.spec.ts` — 217 §3/§4 grep the alerts client
+  for `.mpos-search` markup, which 230 §1 lifted into the shared
+  `apps/web/components/pharmacy/MobileScanSearch.tsx` (consumed by POS, Inventory and Alerts).
+  The three stale assertions now ask the same claims one level up: the anatomy
+  (`.mpos-search`, leading glyph, `.kb` spinner slot) of the shared component, and exactly one
+  `<MobileScanSearch>` mount inside `<MobilePageChrome>` on the alerts phone branch. Same
+  intent — one search field, in the chrome, identical to Inventory's — asserted against where
+  the markup actually lives. No product code changed for this one.
+
+Gates re-run: `pnpm lint` clean, `pnpm typecheck` clean.

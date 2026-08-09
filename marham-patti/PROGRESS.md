@@ -6,15 +6,17 @@
 
 ## Current Status
 - **Project:** Marham Patti — multi-tenant white-label healthcare platform.
-- **Phase:** **PHASE 21** — POS credit UX, advance balances, picker performance, polish. 225–230 built; block complete.
-- **Last completed:** **230 — mobile-and-global-polish**.
-- **Next:** none — awaiting next spec block `[HUMAN_REQUIRED]`
-- **After this block:** Purchases + Suppliers (mockups awaited), then Customers + Returns, Day-close + Prints, production cutover.
+- **Phase:** **PHASE 21** — production LIVE; first tenant onboarded; first production test round.
+- **Last completed:** **232 — package-nav-gating-and-identity-fixes**.
+- **Next:** none — awaiting next spec block [HUMAN_REQUIRED]
+- **Branches:** through 231 on staging + production; 232 on fix/232-package-nav-gating-and-identity-fixes.
+- **Production note:** deploys change CODE only; no operational data is written on boot. Fix on staging, verify, then promote.
+- **Ahead:** Purchases + Suppliers (mockups awaited), then Customers + Returns, Day-close + Prints.
 - **Parked:** printing (raw ESC/POS — Bluetooth + wired); per-page menu permissions; deferred shortcut bindings.
 
 ### Recent steps
-- **230 — mobile-and-global-polish** — DONE (2026-08-08) — scan button on every mobile search, swipe the calendar by month, tidier toasts.
-- **229 — inventory-desktop-polish-r2** — DONE (2026-08-08) — low stock moves under Inventory in the menu; shared toolbar, tidier warnings.
-- **228 — picker-performance-server-search** — DONE (2026-08-08) — long pickers ask the server for a page instead of downloading the shop.
+- **232 — package-nav-gating-and-identity-fixes** — DONE (2026-08-09) — a pharmacy sees only pharmacy menus; SVG logos render; invite joins the auth family.
+- **231 — production-boot-write-policy** — DONE (2026-08-09).
+- **225–230** — DONE (POS credit UX, advances, picker performance, polish).
 
 > Older steps in PROGRESS-HISTORY.md
