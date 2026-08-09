@@ -10381,3 +10381,297 @@ they are INDISTINGUISHABLE.
 Open `kind=icon` 192/512, `kind=maskable` 192/512 and `kind=favicon` directly and confirm a
 visible image; then a FRESH desktop Chrome install (a cached install masks the fix — 120 §7 / 168)
 showing the tenant icon, with the mobile install unchanged.
+
+## 234 — payment-allocation-and-app-icon — PARTIAL (2026-08-09)
+
+**Branch:** `feature/234-payment-allocation-and-app-icon`. **Schema:** none. **RLS:** unchanged.
+**Outcome: §3.1 and §4 built and gated green. §1, §2 and §3.3 NOT built — the spec's own mockup
+gate fired. §3.2 investigated and deliberately not "fixed" — see below.**
+
+### The gate that fired
+The spec makes the recommitted `specs/mockups/pharmacy/pos-desktop.html` / `pos-mobile.html`
+authoritative for this round's anatomy and states the gate literally: *"if `.alloc` or
+`.credblk--overnow` is absent from the committed file, STOP with [HUMAN_REQUIRED] — never compose
+the anatomy from prose."* The committed files were never recommitted. Verified, not assumed:
+
+* `grep -c alloc` → **0** in both files; `grep -c 'credblk--overnow'` → **0** repo-wide.
+* `grep -c 'mpay__sumline'` → **0**; the mobile file carries only `mpay__hd|__due|__body|__foot`.
+* `grep -o 'credblk--[a-z]*'` → `--nolimit`, `--over`, `--walkin` only. No `--overnow`.
+* `git log -- specs/mockups/pharmacy/pos-desktop.html` → last touched at **225**, not this round.
+
+So §1 (the four-destination allocation block and every `.alloc*` atom), §2 (`--overnow`) and §3.3
+are blocked at their design source. They are the majority of the round by value and none of them
+was guessed at. `splitPaymentSummary` and `pharmacy-payment.ts` were **not opened and not touched**
+— §1.5's frozen boundary is trivially intact, and no day-close figure moved, because no payment
+arithmetic changed.
+
+§3.3 deserves its own note: it is blocked for a subtler reason than the other two. The app's
+`.mpay__due` rule at `apps/web/app/globals.css:11650` is already **byte-identical** to the
+committed file's rule at `pos-mobile.html:2332` — both `align-items:baseline`. The spec says
+"bring both to the file's alignment", and the app is already at the file's alignment. The change
+the owner is asking for therefore lives in the *recommitted* file (presumably `center`), and
+inventing it here would be exactly the prose-composition the gate forbids.
+
+### §4 — the app icon renders at full size (BUILT)
+`apps/web/app/pwa/asset/route.tsx`. `markFraction` was `0.82` for icon/favicon and `0.6` for
+maskable; it is now `isSplash ? 0.4 : 1`, with `fullBleed = !isSplash` driving three things at
+once so they cannot drift apart:
+
+* the container background — `transparent = fullBleed`, so icon/favicon/maskable composite **no**
+  tenant colour and the uploaded artwork is the whole image;
+* the `<img>` — `width/height` become the full canvas and `objectFit` becomes `cover`. **`cover`,
+  not `contain`, is the decision worth recording:** `contain` would letterbox any upload that is
+  not perfectly square into transparent bands, which is the very inset §4 removes. The cost is
+  that a non-square upload is cropped, which is why the helper text now asks for a square;
+* the no-upload fallback — the initial tile becomes `100%`/`100%` with `borderRadius: 0`.
+
+That last one is the load-bearing part. 233 §3.3 existed because this route once answered with a
+valid but blank PNG, and removing the composited background walks straight back toward that
+failure. At full bleed the initial tile *is* the canvas, filled with the tenant primary, so
+"no icon uploaded" cannot resolve to a transparent PNG by construction rather than by luck.
+`splash` is untouched at `0.4` on the tenant colour — a launch screen is a different thing.
+
+Helper text: `setgBrandSlotAppIconHint` in `packages/i18n/src/messages/{en,ur}.json`, replacing the
+old copy that promised the phone would supply the backdrop — the exact claim §4 reverses. The
+field already read this key (`BrandingSection.tsx:107`), so no component change was needed.
+
+**Not verified:** the fresh-install check on desktop Chrome and a real device (§4's last bullet).
+That is a deploy-and-device step, not a code step, and the round is not deployable as it stands.
+
+### §3.1 — Take Payment width (BUILT)
+`PosClient.tsx:2403` — `max-w-[414px]` → `max-w-[500px]`. The 414 was the phone-sheet width
+borrowed for the desktop box. The value is stated numerically in the spec prose, so this needed no
+anatomy from the missing file.
+
+### §3.2 — the nested-dialog close: investigated, NOT changed, and why
+The spec asserts a cause ("a shared layer/escape handler that dismisses more than the topmost
+layer") and asks for a fix in the shared machinery. I could not reproduce the defect, and I am not
+willing to rewrite `layer-history.ts` — which 195 §3, 198 §1, 203 §2 and 216 §2 all fought over —
+on an unreproduced theory. What was actually done:
+
+* Read the machinery. Topmost is determined by **one module-scope `stack` in
+  `packages/ui/src/lib/layer-history.ts`**, pushed in `useLayerHistory`'s effect, topmost LAST;
+  `topLayerId()`/`isTopLayer()` (216 §2) are the shared answer to "is this gesture mine".
+  `handlePop` pops exactly one layer; `closeLayer` splices exactly one and consumes its history
+  entry behind the `suppressed` counter.
+* Wrote a throwaway jest reproduction (`packages/ui/src/lib/repro-nested.spec.tsx`, since deleted)
+  and drove every close path against the two pairings the POS actually builds:
+  **Dialog-over-Dialog** (desktop: `payDialog` + `addCustomerDialog`, both `LayerDialogRoot`) and
+  **page-layer-over-MobileSheet** (mobile: `PaymentPanel layout="page"`, which is a layer via
+  `useLayerHistory` at `PaymentPanel.tsx:179`, + `addCustomerSheet`).
+* Results, all correct: Escape closes only the inner and leaves the outer mounted (layer count
+  2→1); the close control likewise; a `popstate` closes only the inner; closing the inner and
+  *then* pressing back closes the outer rather than the route (so the history entries are not
+  drifting). Tap-out was inconclusive — jsdom does not drive Radix's pointer-down-outside
+  faithfully — and is the one path a browser still has to answer for.
+* Also checked for a POS-level handler that could reach past the top layer: `PosClient.tsx:1883`
+  (Esc → focus search) is guarded by both `modalOpen` and `closest('[role="dialog"]')`;
+  `modalOpen` (line 1846) includes `phase === 'pay'`, so the global shortcut map is down while
+  Take Payment is open; `closeAddCustomer` sets only `addOpen`/`addDuplicate`; the only three
+  `setPhase('cart')` sites are `newSale`, the panel's `onCancel` and the pay dialog's own
+  `onOpenChange`. Nothing found that closes the outer.
+
+One adjacent smell noted but deliberately **not** changed, because it is not this defect and not
+in scope: `PaymentPanel.tsx:515` binds a `window` keydown listener for the tender digit/`=`/`0`
+shortcuts that stays live while the add-customer layer is on top. Its `INPUT|TEXTAREA|SELECT`
+guard makes it harmless today (the capture's fields are all inputs). If §3.2 is ever reproduced,
+this is the shape to look at first, and `isTopLayer` is the shared answer it should use.
+
+### Tests
+`packages/ui/src/lib/payment-allocation-and-app-icon.spec.ts` — 7 cases, all passing locally
+(`npx jest`), declaring in its own header that it covers §3.1 and §4 only and why. It pins the
+inset removal, the absent composited background, `cover` over `contain`, the surviving splash, the
+full-canvas fallback (the 233 §3.3 regression guard) and both languages of the helper text.
+Re-ran `invite-security-and-pwa-asset-fixes.spec.ts` (233's suite, which reads the same route
+source): 27/27 green.
+
+### Gates
+`pnpm lint` — 16/16 clean, including the design-drift, token-integrity and tenant-search-select
+checks. `pnpm typecheck` — 29/29 clean. No schema change, so no `prisma generate`.
+
+### What the next session must do
+The mockups are the blocker and no agent can author them. Once `pos-desktop.html` /
+`pos-mobile.html` are recommitted carrying `.alloc*`, `.credblk--overnow` and `.mpay__sumline`,
+resume 234 on this same branch for §1, §2, §3.3 — and re-attempt §3.2 with a browser, not jsdom.
+
+---
+
+## 234 — payment-allocation-and-app-icon — DONE (2026-08-09)
+
+**Branch:** `feature/234-payment-allocation-and-app-icon` · WORK TYPE: FEATURE
+**Spec:** /specs/234-payment-allocation-and-app-icon.md · no CODEREF · **no schema change, no migration, RLS unchanged**
+
+### Where this step started
+The previous session recorded 234 as **PARTIAL**: §3.1 (500px Take Payment) and §4 (full-bleed app
+icon) were built and committed in ffb7b78, and §1/§2/§3.3 were stopped at the spec's own gate —
+the recommitted mockups did not yet carry `.alloc` or `.credblk--overnow`. They do now
+(`.alloc*` ×75 desktop / ×77 mobile, `.credblk--overnow` ×11 in both), so the gate opens and this
+session built the remainder. Nothing already DONE was rebuilt.
+
+### §1 — payment allocation, and the frozen boundary
+
+**The claim the whole round rests on:** money directed to old credit or to advance is NOT a tender
+on this sale. The pot being split is `summary.changeDue` — cash the customer handed over that the
+sale's own tenders never claimed, because the CASH leg's `amount` has been capped at what it owes
+since 210 §2.1. It was already outside `applied` before the allocation existed. Therefore:
+
+* **`splitPaymentSummary` is byte-identical** — not one line changed. Verified by reading the
+  function body in the test: the string `alloc` does not occur between `export function
+  splitPaymentSummary` and `export interface PaymentPolicyContext`.
+* `paymentPolicyError`'s exact-sum rule (Σ amount === grandTotal) is untouched, and the sale's
+  own `byMethod` split reaching day-close and every report is the frozen summary's.
+* A sale can never record a payment larger than its own total — §1.5's stated failure mode is
+  structurally unreachable, not merely avoided.
+
+**New pure arithmetic:** `allocateOverpayment(pot, outstanding, edits?)` in
+`packages/shared/src/pharmacy-payment.ts`, exported through `@mp/shared`, used by BOTH the panel
+preview and the server clamp so the two cannot disagree. Returns `{oldCredit, change, advance,
+collected, allocated, variance, reconciled}`. `collected = oldCredit + advance` is what stays in
+the drawer. Defaults are the spec's order: this sale → old credit (capped at what is owed) → the
+whole remainder to advance. Nothing is silently balanced: an allocation that does not add up
+reports `variance` and `reconciled: false`.
+
+**Panel (`PaymentPanel.tsx`).** `allocationActive = registered customer && allowCredit !== false
+&& overpay > 0.001`. The `.alloc` block renders in the body on BOTH layouts with the file's own
+anatomy (`__hd/__ttl/__recv/__row/__lbl/__amt/__fld/__split/__splith/__sum/__sumlbl/__flag/
+__sumamt`, `is-zero`, `--err`). The three editable rows are coupled as §1.2 states — change and
+advance share the remainder, raising one lowers the other — while old credit is independent, so
+the mismatch state is genuinely reachable and `canPay` gains `!allocBlocked`. `statusBlock`'s
+change-due line is suppressed while the block is up, so there is never a second, contradictory
+answer to "where did the money go". The phone's foot additionally carries the file's
+`.mpay__sumline` restating change and advance over the money button.
+
+**Server (`pharmacy.service.ts` / `.dto.ts` / `.controller.ts`).** New optional
+`allocation: {oldCredit, advance}` on the commit body. The customer row is now fetched whenever an
+allocation is posted (previously only when `creditAmount > 0`, so a fully-paid sale would have
+clamped against the browser's stale balance). Clamps: `oldCredit ≤ min(owed, surplus)` and
+`collected ≤ surplus` — a wrong figure from the browser can never book money nobody handed over.
+The cash-only refusal was re-keyed to `payment.creditAmount > 0`, because merely fetching the row
+for an allocation must not start refusing fully-paid cash sales to a cash-only customer.
+
+**One ledger movement, not two.** Old credit and advance are recorded as a SINGLE
+`createCustomerPayment` of `collected`, method CASH, reference `sale:{number}`, inside the
+idempotency seam (a replay collects nothing twice). A payment runs the balance straight through
+zero, so 3,000 owed less 15,000 collected IS an advance of 12,000 — 227's mechanism, no new
+movement type. §1.4's acceptance arithmetic is asserted against `buildCustomerLedger`, not the
+screen: opening 3,000, one payment of 15,000 → **balance −12,000 = Advance Rs 12,000**.
+
+**DAY-CLOSE, verified against a mixed allocation (spec asks for this explicitly).**
+Owner's case: bill 2,000, tendered 17,000, allocation 3,000 old credit + 12,000 advance.
+* The sale's own split is unchanged: `byMethod.CASH = 2,000`, `CREDIT = 0`, `applied = 2,000`.
+* The drawer physically holds 17,000, so the counter accrues
+  `cash: byMethod.CASH + collected = 2,000 + 15,000 = 17,000`; `card` and `credit` accrue exactly
+  as before. The surplus can only ever be cash — it is `changeDue`, which no non-cash tender
+  contributes to — so it accrues nowhere else and no double-count is possible.
+* Cross-check the other way: with 500 moved to change, `collected = 14,500`, accrued cash
+  `16,500`, and 500 left the drawer — the till still reconciles to what is in it.
+* Reports that read the SALE are untouched (they read `byMethod`/`creditAmount`); only the
+  counter's expected cash grows, by the amount the counter actually holds.
+* The receipt prints `changeDue − collected`, so the slip states the money that actually crossed
+  the counter rather than 15,000 nobody counted out.
+* `publishCustomerBalance` now fires for a collection too, so pickers and the customers list see
+  the cleared tab / new advance without a refresh.
+* New audit row `pharmacy.pos.sale.collection` (actor, saleNo, customer, collected, oldCredit,
+  advance), skipped on replay. It is separate from `pharmacy.pos.sale.credit` because a
+  fully-paid sale writes no credit row at all, and "I paid you 17,000" against an invoice reading
+  2,000 must be reconstructable.
+
+**Two recorded decisions where the spec and the file differ.**
+1. *Old credit is EDITABLE.* The mockup draws that row with the static `.alloc__amt`; §1.2's table
+   says editable **yes**, and §1.1's second case (Rs 300 to old credit, Rs 500 back) is
+   unreachable without it. Editability follows the spec; the anatomy follows the file — the row
+   uses `.alloc__row--edit` + `.alloc__fld`, which the file provides for exactly this purpose.
+2. *Underpayment keeps the existing "To account" row.* §1.2 says underpayment is unchanged and
+   shown as the existing row, so the block is offered only when there is money OVER
+   (`overpay > 0.001`) and 210 §3.2's `.paychange--acct` still states the shortfall. The file's
+   `.alloc__owed` treatment is ported to CSS so the per-selector diff is clean and the row has a
+   home the day it moves in, but nothing renders it today.
+
+### §2 — the warning reflects current standing
+`headroomNow = creditHeadroom(creditLimit, currentBalance)` (the same 227 §2.3 rule the projection
+uses, so the two can never disagree about where the ceiling is) and
+`alreadyOver = customer && hasCeiling && headroomNow < 0`. `--overnow` is evaluated BEFORE the
+`creditAmount <= 0` test that used to gate the whole block, which is the defect: a customer paying
+exactly this sale adds no credit, so `--over` could never fire and the block never rendered at
+all. `--overnow` outranks `--over` (already-over is the stronger, current fact). Both warn,
+neither blocks — asserted by slicing `canPay` and checking it names no credit state. The
+outstanding cell takes the file's `credblk__m--now`; the file's `--after` rules are ported
+verbatim and the app's `--head` (headroom) cell is given the same danger tone, since our grid
+names that fourth cell as §2 does (limit · outstanding · headroom · this sale's credit portion).
+
+### §3 — the two dialog defects
+* **§3.1** 500px — built in the previous session (ffb7b78), unchanged here. The file's
+  `.paymod__body .credblk__grid` pairing is now ported too: four metrics on one row clip at 500px.
+* **§3.2 how "topmost" is determined and which nested pairs were checked.** Topmost is the shared
+  layer stack in `packages/ui/src/lib/layer-history.ts` — `isTopLayer(id)`, the same answer the
+  device back button has used since 195 §3 and the drag since 216 §2. Rather than chase which
+  primitive was leaking the dismissal, the rule is enforced POSITIVELY in the kit: `LayerDialogRoot`
+  drops any Radix-raised close (`Escape`, tap-out, focus-out, the close control) while this dialog
+  is not the layer in front, and `MobileSheet` routes its header control, scrim, `Escape` and drag
+  through one guarded `dismiss()`. Two paths deliberately bypass the guard: the DEVICE BACK close
+  (`handlePop` already popped this layer precisely because it was top — re-asking would drop its
+  own close) and any PROGRAMMATIC close (a controlled caller flipping `open` never reaches the
+  gate, so a screen closing its own dialog from code still works). Pairs checked: POS Take Payment
+  → add-customer (the report, desktop dialog-over-dialog and phone page-under-sheet), held-sales
+  window → discard confirm (209 §2's pair), Adjust Stock sheet → picker (216 §2's pair), any
+  dialog → SearchSelect panel, More sheet → nav. A lone layer is always top, so the guard costs
+  nothing anywhere else. Same family, also fixed: `PaymentPanel`'s WINDOW-level key map was still
+  answering under the capture dialog — `Enter` in the name field committed the sale out from under
+  it — so the handler now stands down when the event's `[role="dialog"]` owner is not the panel's
+  own layer (MobileSheet's 209 §2 containment rule, applied to keys).
+* **§3.3** `.mpay__due` was `align-items:baseline`, sitting an 11px uppercase label low against a
+  26px numeral. Centred per the file, with `line-height:1` on both children — which is what
+  actually makes those two type sizes share a centre line.
+
+### §4 — app icon
+Built in the previous session (ffb7b78): `markFraction` is `isSplash ? 0.4 : 1`, no composited
+background for icon/favicon/maskable, `object-fit: cover` at full bleed, splash unchanged, and the
+no-upload initial tile still covers the canvas so the produced PNG is never transparent (the 233
+§3.3 failure mode this change walks back towards). Upload helper text updated in en + ur.
+
+### Files
+`packages/shared/src/pharmacy-payment.ts` (+`allocateOverpayment`, summary untouched) ·
+`apps/web/app/(app)/pharmacy/pos/PaymentPanel.tsx` · `.../PosClient.tsx` ·
+`packages/ui/src/components/dialog.tsx` · `packages/ui/src/components/mobile-sheet.tsx` ·
+`apps/api/src/pharmacy/pharmacy.{dto,service,controller}.ts` ·
+`apps/web/app/globals.css` · `packages/i18n/src/messages/{en,ur}.json` (new `pharmacyPos.v15`,
+17 keys each) · `packages/ui/src/lib/payment-allocation-and-app-icon.spec.tsx` (renamed from
+`.spec.ts`; the "PARTIAL BY DECLARATION" header is gone and §1/§2/§3.2/§3.3 are asserted) ·
+`packages/ui/src/lib/client-nav-and-layer-gestures.spec.tsx` (drag now fed the guarded dismiss) ·
+`specs/mockups/pharmacy/pos-{desktop,mobile}.html` (recommitted with this round).
+
+### Gates
+`pnpm typecheck` — 29/29 clean. `pnpm lint` — 16/16, 0 errors; the single warning is a
+pre-existing unused eslint-disable in `doctor-portal.repositories.ts`, untouched by this step.
+`pnpm test:unit` / `test:e2e` / `build` not run per the standing rule (controller runs them).
+Design self-check by inspection: every `.alloc*`, `.credblk--overnow`, `.mpay__sumline` and
+`.mpay__due` declaration was ported per-selector from the recommitted files, both tiers, both
+themes (all colour goes through the theme tokens — no literal hex except the file's own `#fff` on
+the danger chip, which matches `--over`'s existing treatment).
+
+## GATE FIX — `pnpm test:unit` after 234 (2026-08-09)
+
+Two suites, 7 tests, all fallout from step 234 touching code that earlier steps pin by exact source string.
+
+**Code fixes (behaviour unchanged, structure restored):**
+- `apps/web/app/(app)/pharmacy/pos/PaymentPanel.tsx` — 234 §1.2 had folded the allocation gate into the
+  change-due branch head (`!allocationActive && summary.changeDue > 0`), breaking 227's pin on the
+  `autoCredit` / `changeDue` mutual exclusion. The gate now sits INSIDE the branch
+  (`) : summary.changeDue > 0 ? (allocationActive ? null : <div/>)`), so the exclusion reads as written and
+  the rendered output is identical in every state.
+- `apps/api/src/pharmacy/pharmacy.service.ts` — same shape: `if (payment.creditAmount > 0 || (allocation &&
+  allocation.collected > 0))` split back into `if (creditAmount > 0) … else if (allocation.collected > 0) …`.
+  One publish per commit either way; 210's pin on the credit-gated publish holds again.
+- `apps/web/app/globals.css` — `.mp-pos2 .mpay__body` was missing `min-height:0`, which the recommitted
+  pos-mobile.html carries. Real drift: without it the scrolling body can be compressed by its own children.
+
+**Stale assertions updated (234's spec is authoritative over 226's snapshots):**
+- Take Payment dialog `max-w-[414px]` → `max-w-[500px]` (234 §3, copied from the recommitted mockup).
+- `creditState` union and the `.credblk--*` scope loop now carry `overnow` (234 §2 — already over the limit
+  BEFORE this sale; the four states could not express it). Both scopes' CSS was already present.
+- `canPay` exact-string pin → per-term check plus "no `creditCheck` in the gate", which is what the test is
+  actually for; 234 §1.2 added `!allocBlocked` (received money that does not reconcile must not commit).
+- The fully-paid-walk-in pin is a regex now, since `overnow` sits between `walkin` and the `null` arm.
+
+Gates: `pnpm lint` clean (one pre-existing unrelated warning in doctor-portal), `pnpm typecheck` clean,
+the two suites 87/87 green. No new features, no scope change.
