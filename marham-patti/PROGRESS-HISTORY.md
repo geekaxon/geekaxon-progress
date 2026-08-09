@@ -10232,3 +10232,152 @@ Both failures were assertions left behind by step 230, not product regressions.
   the markup actually lives. No product code changed for this one.
 
 Gates re-run: `pnpm lint` clean, `pnpm typecheck` clean.
+
+---
+
+## 233 — invite-security-and-pwa-asset-fixes — DONE (2026-08-09)
+
+**Branch:** `fix/233-invite-security-and-pwa-asset-fixes` · **Spec:** `/specs/233-invite-security-and-pwa-asset-fixes.md` · no schema change, no migration, no RLS change, no stored row written. Vendor console untouched.
+
+### §1 — DIAGNOSIS BEFORE THE FIX (captured, not inferred)
+
+Captured locally against the repo's own `jsonwebtoken@9.0.3`: an invite token is a JWT
+(`{sub,tid,typ:'vendor_invite'}`, signed HS256 with `JWT_REFRESH_SECRET`,
+`vendor-token.service.ts`). Every mutilation was rejected by `jwt.verify` — last char removed,
+five removed, middle removed, signature dropped, lower-cased, whitespace appended: `invalid
+signature` / `invalid token` / `jwt malformed`. Grepped the whole API for a loose lookup
+(`startsWith`, `LIKE '<t>%'`, `contains:`, `mode:'insensitive'`, a truncated column, a sliced
+comparison): **none exists on any token path.** So the HMAC match was already whole-token.
+
+**Actual cause, in one sentence:** the `/invite` screen never validated the token at all — it
+checked only that a `token` QUERY PARAMETER WAS PRESENT (`page.tsx`: `sp.token.length > 0`) and
+rendered the password form regardless, deferring the only real check to submit; so a truncated
+token was still offered a password box (and, for §2, so was an already-spent link).
+
+Fixed on both halves: the page now resolves the link SERVER-side via a new public
+`GET /vendor/invite/check?token=` before deciding to draw a form, and the accept path was
+hardened as below.
+
+### §1/§2 — what changed on the server
+
+- `verifyInvite` collapses EVERY failure to one 401 with one message. It used to answer 410 for
+  expired, 401 for invalid, and `acceptInvite` added 409 for consumed — three distinguishable
+  answers tell a prober that a token was well-formed and real but stale (the 143 non-enumeration
+  rule). Same status, same body, always.
+- **Single-use by construction, not "in effect".** No schema was available, so the link is bound
+  to the password STATE it was issued against: `passwordStateDigest()` (new, `auth.crypto.ts`) =
+  `sha256('pwstate:v1:' + (hash ?? ''))`, compared with the existing constant-time `safeEqualHex`
+  — never `===` on a credential, and never the hash itself inside a token. The write is a
+  COMPARE-AND-SET (`updateMany … where password_hash = <expected>`), so the first use consumes
+  the link in the SAME statement that sets the password and a concurrent second use matches zero
+  rows. Asserted by a `Promise.allSettled` double-submit test: exactly one succeeds.
+- **Audit.** `vendor.invite.accepted` / `vendor.invite.rejected` (with a reason: `token_invalid_or_expired`,
+  `no_such_user`, `already_used`) into `vendor_audit_logs` — a partial-token probe is invisible on
+  the wire and plainly visible afterwards.
+- **A second, undiscovered defect on the same path (the 149/150/208/209 pattern).** `/invite`
+  accepted only `typ:'vendor_invite'`, but the tenant console mints STAFF invites as `reset` step
+  tokens (`AdminUserService.inviteLink`, 223 §2) and `buildInviteUrl` points them at `/invite`.
+  Every staff invite link the console has ever produced would have been refused by the screen it
+  points at — invisible only because Ganatra has not added staff yet. `INVITE_TOKEN_TYPES` now
+  accepts both mints (same secret, same claim shape); anything else is still refused.
+
+### §1.4 — every token-bearing link in the app, and its verdict
+
+| flow | token | verdict |
+|---|---|---|
+| Tenant-owner invite (`/invite`, spec 50) | JWT `vendor_invite`, refresh secret, 3d | whole + constant-time already; **now** single-use (CAS) + audited + non-enumerating |
+| Tenant STAFF invite (`/invite`, 223 §2) | JWT `reset` step, refresh secret, 30m | was REJECTED outright by the accept endpoint; **now** accepted, single-use, audited |
+| Staff password reset (`/reset`, spec 60) | JWT `reset` step, refresh secret, 30m | whole + constant-time already; was REPLAYABLE for its whole TTL — **now** carries `pv` (the password-state digest) and confirms with a CAS, so completing it consumes it |
+| Staff refresh / vendor refresh / platform refresh | opaque 256-bit, SHA-256 **hashed at rest**, unique-indexed lookup | already whole-value; rotation + reuse-detection burns the family. No change |
+| Vendor MFA step token | JWT `vendor_mfa`, access secret, short | whole; single-purpose, short TTL. No change |
+| Staff MFA step token | JWT `mfa`, access secret, short | as above. No change |
+| Patient OTP | 6 digits, argon2id-hashed, attempt-capped | low-entropy by design, protected by hashing + attempt cap. No change |
+| Branding asset URL (`/api/branding/o/<ref>?v=`) | capability URL: unguessable tenant-scoped key + content checksum | not a credential; a stale/forged checksum 404s. No change |
+| Patient app invite (`patient_invites.token`) | opaque, `@unique` | exact lookup on a unique column. No change |
+| Domain-verification token, unsub token, single-use download token | exact / hashed unique lookups | No change |
+
+Note: outstanding reset links minted before this step carry no `pv` and are therefore treated as
+invite-semantics (first-password only) — they break for accounts that already have a password.
+Deliberate: TTL is 30 minutes and it is a security improvement.
+
+### §3 — the transparent PWA asset: diagnosis and fix
+
+Captured from source rather than guessed. `AssetStore.BRANDING_SERVE_PATH = '/api/branding/o/'`,
+and that `/api` prefix belongs to the REVERSE PROXY (it strips it before forwarding; the API
+mounts no such prefix — `API_INTERNAL_URL=http://localhost:4000/…` with no `/api`). `markDataUri`
+resolved the tenant's App-Icon URL with `new URL(src, origin)` against the **Next app's own
+origin**, which serves no `/api/branding/o` route → 404 → `!res.ok` → `null`. The second failure
+that had to coincide: `resolvePwaAssetSource` returned `initial: null` *precisely when an asset
+had resolved*, so with the mark unfetchable there was nothing to draw and the ImageResponse
+composed an empty transparent PNG at every size and kind. This is 158's `API_INTERNAL_URL` class
+of defect meeting 161's empty-favicon class of defect.
+
+Fixes: new pure `serverAssetUrl(src, origin, apiBase)` in `@mp/ui/pwa` rewrites a proxy-prefixed
+path onto the internal API base (data URIs, absolute URLs and genuinely Next-served paths like
+`/icon.svg` pass through unchanged; with no internal base configured the old behaviour stands);
+`markDataUri` now logs a warning naming the URL and the HTTP status (or the thrown message, or a
+zero-byte body) and still never throws; and `PwaAssetSource.initial` is non-nullable — the
+tenant's letter in its own palette, the platform's letter when no tenant resolved — so the
+composition always has something to draw. Recorded decision: the "never fully transparent"
+guarantee is asserted structurally (the fallback cannot be absent) rather than by rasterising a
+PNG in a unit test — running `next/og`'s resvg WASM in vitest is slow and brittle, and the
+invariant it would check is the one enforced in source.
+
+### §4 — the invite lockup
+
+Already the shared chain after 232 (`authLockup(getTenantBrand(), mode)` → `TenantLock`, the same
+two calls `login/page.tsx` and `reset/page.tsx` make; `authLockup` reads `assetsStrict`, so the
+three conditions are evaluated entirely within the current theme, 166). Pinned by tests: parity
+with sign-in, no logo logic in `BrandedInviteScreen` (`resolveBrandMark` / `assetsStrict` /
+`platformLogo` all absent), and exactly one `<TenantLock>` / one `.auth-brand` node.
+
+### §5 — manifest
+
+- `short_name` truncates at a WORD boundary within a 12-char budget ("Ganatra Clinic" → "Ganatra",
+  no longer "Ganatra Clin"); a single word too long to fit is still cut, since there is no boundary
+  to find. `pwaNames` gained an optional tenant-set short name that wins when present.
+- `description` is now OMITTED on a tenant host (the per-audience line describes the PLATFORM).
+  Decision: omit rather than invent a description for someone else's clinic.
+- `shortcuts` are derived from the tenant's enabled modules. New `PUBLIC_SURFACE_FLAGS`
+  (`patient.app`, `lab.homeCollection`, `pharmacy.online`) in `@mp/shared`; the public
+  host-branding response carries `installFlags` (only those, only when ON, from the same
+  `FlagService.getEffectiveFlagsFor` every server-side gate uses); `buildManifest` filters
+  `ROOT_SHORTCUTS` by them. No tenant (platform apex / vendor) → all four, byte-for-byte as before.
+  A tenant whose flags could not be resolved gets none — a missing shortcut beats a broken one.
+- Static manifests under `apps/web/public/`: `manifest.webmanifest` plus `-patient`, `-phlebo`,
+  `-platform`, `-rider`, `-staff`, `-vendor`. **Nothing links to any of them** — every surface uses
+  `pwaManifestHref` → `/pwa/manifest`. The only remaining reference is the `middleware.ts` matcher
+  bypass naming `manifest.webmanifest`. All seven are candidates for retirement in a later spec.
+
+### §6 — sync indicator (OWNER DECISION, recorded so a later diff does not undo it either way)
+
+Renders nothing when online with an empty queue; appears for `offline` / `syncing` / `error` or
+whenever `pending > 0` / `pendingNetwork > 0`. The component and its logic are NOT deleted — it is
+the only control that tells a cashier their completed sales have not reached the server.
+
+### Files
+
+`apps/api/src/auth/{auth.crypto,token.service,auth.service,auth.repositories,__fakes__,auth.service.spec}.ts`;
+`apps/api/src/vendor/{vendor-token.service,vendor-admin.service,vendor.repositories,vendor-auth.controller,vendor-invite-branding.service,__fakes__,vendor.spec,vendor-invite-branding.spec}.ts`;
+`apps/web/app/invite/{page,BrandedInviteScreen,InviteForm}.tsx`; `apps/web/app/pwa/asset/route.tsx`;
+`apps/web/app/offline-indicator.tsx`; `apps/web/lib/{pwa,tenant-branding}.ts`;
+`packages/ui/src/lib/{pwa.ts,invite-security-and-pwa-asset-fixes.spec.ts,package-nav-gating-and-identity-fixes.spec.tsx}`;
+`packages/shared/src/flags.ts`; `packages/i18n/src/messages/{en,ur}.json`.
+
+### Superseded prior assertions
+
+232 §3's guard required four distinct terminal invite messages and the 409/410 classification;
+233 §1.3 forbids exactly that, so the test was rewritten to assert the single non-enumerating
+state. Spec 71 item 6's "distinguishes consumed / expired / invalid" test likewise now asserts
+they are INDISTINGUISHABLE.
+
+### Gates
+
+`pnpm lint` clean (one pre-existing unrelated warning in `doctor-portal.repositories.ts`);
+`pnpm typecheck` clean across all 29 tasks. Unit/e2e/build left to the controller per AGENT.md.
+
+### Still to verify BY HAND on staging (not code-verifiable here)
+
+Open `kind=icon` 192/512, `kind=maskable` 192/512 and `kind=favicon` directly and confirm a
+visible image; then a FRESH desktop Chrome install (a cached install masks the fix — 120 §7 / 168)
+showing the tenant icon, with the mobile install unchanged.
