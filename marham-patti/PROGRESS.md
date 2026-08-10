@@ -7,9 +7,9 @@
 ## Current Status
 - **Project:** Marham Patti — multi-tenant white-label health platform.
 - **Phase:** **PHASE 21** — production LIVE; Purchases and Suppliers testing.
-- **Last completed:** **247 — suppliers-card-view-and-desktop-r3**.
-- **Next:** specs/248-purchases-suppliers-mobile-r3.md
-- **Group order:** 247 → 248. One step only, then stop at the checkpoint.
+- **Last completed:** **248 — purchases-suppliers-mobile-r3**.
+- **Next:** none — awaiting next spec block [HUMAN_REQUIRED]
+- **Group order:** complete. Purchases and Suppliers are done, desktop and mobile.
 - **BRANCH RULE:** switch to the spec's own branch BEFORE any commit.
 - **VERIFICATION RULE:** a fix is accepted on the DEPLOYED page, never on a unit test.
 - **Numbering is continuous — never skip a number.**
@@ -18,7 +18,7 @@
 - **Parked:** purchases import; server-side export; per-page menu perms.
 
 ### Recent steps
+- **248 — purchases-suppliers-mobile-r3** — DONE (2026-08-10) — cards no longer hide behind the glass; the redrawn search-and-range row
 - **247 — suppliers-card-view-and-desktop-r3** — DONE (2026-08-10) — the redrawn supplier card; the desktop file diffed whole
-- **246 — demo-seed-repair-and-repeat-failures** — DONE (2026-08-10) — seed numbers from the till counter; band, retry, picker, import.
 
 > Older steps in PROGRESS-HISTORY.md

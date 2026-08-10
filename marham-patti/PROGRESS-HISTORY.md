@@ -12132,3 +12132,164 @@ tenant-page-titles all pass; one pre-existing unrelated warning in `doctor-porta
 `apps/api/src/pharmacy/purchases-suppliers-desktop-r3.spec.ts`.
 Mobile and vendor untouched. Supplier balances, purchase totals, batch creation, stock movement and
 unit conversion byte-identical (105/106/185 frozen — nothing on this branch computes money).
+
+---
+
+## 248 — purchases-suppliers-mobile-r3 — DONE (2026-08-10)
+
+**Work type:** FIX (presentation and layering). **Branch:** `fix/248-purchases-suppliers-mobile-r3`.
+**Schema:** none. **RLS / auth / permissions / feature flags:** unchanged. **Endpoints:** none added or changed.
+**Money:** every figure byte-identical — no reading, no total and no balance is computed differently by this step.
+
+**Mockup gate (spec preamble).** `specs/mockups/pharmacy/purchases-suppliers-mobile.html` carries `.mfiltrow`
+(4 occurrences) and `.segctl` (8). Gate passes; no `[HUMAN_REQUIRED]` on that account. No CODEREF companion
+covers 248 (the highest committed range is 113-121).
+
+### §1 — cards scrolling BEHIND the chrome. The actual defect.
+
+The suppliers screen claims `data-page-chrome='suppliers'` and the purchases screen `'purchases'`, and both mount
+`MobilePageChrome` with a search row — i.e. the very same 117px object the POS and Inventory mount. But the CSS rule
+that reserves that height listed only `pos`, `inventory` and `inventory-alerts` by name, so both screens fell through
+to the shell's generic `.mp-shell[data-mobile-chrome='true']` reservation of **84px** — the title row ALONE. 117 − 84 =
+33px of card living under fixed glass, which is exactly the clipped top edge in the owner's screenshot. This was never
+a token that failed to resolve; it was a screen that was never added to the list, and the spec's guess ("built before
+the search row was added to the chrome") is right about the mechanism.
+
+Fixed by naming both screens in that group, and — so this cannot recur — by moving the `--mchrome:117px` / `--mgap:14px`
+declaration UP to the `html:has(.mp-shell[data-page-chrome=…])` rule and deleting it from the body rule. The body now
+inherits the number instead of restating it, so the padding and the `scroll-padding-top` beside it read ONE token; the
+scroll expression no longer hardcodes `117px` either. A chrome that grows a row changes one value and both reservations
+move together.
+
+**Judgement call — the reservation stays CONSTANT.** §1 asks for a reservation that "follows the chrome as it collapses".
+It is not built that way, deliberately. 194 §2 already tried the shrinking form on the POS and it is recorded here as a
+defect: the chrome is `position:fixed` glass, so it occupies no flow space to give back, and a padding that shrank with
+`--mp-chrome-c` moved 142px of content for 84px of finger — the "instant/snapping" collapse the owner reported then.
+A constant reservation cut at the EXPANDED chrome height satisfies what §1 actually requires (the first card fully
+visible at rest AND throughout the collapse) without reintroducing that. The other half of §1 — "computed from the same
+`--mchrome` variant tokens rather than a hardcoded number" — is honoured literally, and is the half that prevents the
+silent reintroduction §1 is worried about.
+
+**Bottom clearance.** The file gives a surface carrying the floating dock `--mfoot:104px`; the shell's generic
+reservation was 96px, 8px short, so the last card met the dock rather than clearing it. Raised to
+`calc(104px + env(safe-area-inset-bottom, 0px))` on the page-chrome group only — the inset is added, never substituted.
+
+### §2 — `.mfiltrow`, and why the range is `.mcycle` and not `.segctl`
+
+The spec heads §2 "`.mfiltrow` + `.segctl`" and then itemises `.segctl`'s anatomy. The committed file composes the row
+differently: `.mfiltrow` holds the kit search field and a **`.mcycle`** — one button that cycles the range in place —
+and the file states its own reasoning in a comment ("a segmented control would eat half the row on a 360px screen").
+The `.segctl` §2 itemises is the file's `.segctl` block verbatim, which the file uses for the sheet's Ledger /
+Purchases / Payments tabs immediately above the row. Since the spec says the mockup governs composition and the
+reference governs anatomy, both readings are satisfied: the row is built as the file draws it, and `.segctl`'s anatomy
+was corrected to the numbers §2 lists (see below). No invention either way.
+
+- **`.mfiltrow`** — `display:flex; align-items:center; gap:8px; min-width:0`, with `.mpos-search { flex:1; min-width:0 }`.
+- **`.mcycle`** — the file's rule verbatim: 46px tall, `padding:0 8px 0 11px`, `border-radius:15px`, hairline border,
+  `--surface-card`, `--shadow-xs`, 13px `--fw-semibold`, `white-space:nowrap`, plus its 16px leading glyph and 14px
+  `.mcycle__hint` stepper and its hover/active states. The `140ms cubic-bezier(.2,0,0,1)` transition the file writes as a
+  literal is expressed as `var(--dur-fast) var(--ease-standard)` — the same numbers, through the token layer, because a
+  hex/timing literal outside the token block is what the design bar forbids.
+- **Wrap guard.** The file gives `.mcycle` `flex:none`; at 360px with the Urdu label ("تمام اندراجات") that would push
+  the row past the viewport and reintroduce the horizontal scroll 195 §2 forbids. Inside the row it is `flex:0 1 auto;
+  min-width:0` and its label ellipsises. The row still never breaks to a second line, which is what §2 asks for.
+- **RTL.** `.mcycle`'s padding is physical in the file; mirrored in the existing `html[dir='rtl']` block rather than
+  rewritten as a logical property, so the base declaration stays a byte-for-byte read of the committed file.
+- **Touch targets.** Both controls in the row are 46px by design, so nothing is resized against the file. For a plain
+  30px `.segctl` segment the 44px is reached by an invisible `::after` pad around the control (the pattern the file
+  itself uses on `.disc__seg button`). It grows VERTICALLY only: a segment narrower than 44px that also grew sideways
+  would swallow the taps meant for its neighbour, which is a worse defect than the miss it prevents. The sheet's
+  full-width segments keep the `min-height:44px` 244 gave them.
+- **One component, two mounts.** `MobileFilterRow` in `SuppliersClient.tsx` is mounted in the Suppliers chrome (where
+  the file puts this screen's search, and where it survives the collapse) and inside the supplier detail sheet. That is
+  what §2's "so the two match" means, and two implementations are exactly how surfaces on this project have drifted
+  before (150 / 208 / 209). The list still has exactly ONE search field — the row replaced the bare `.mpos-search`, it
+  did not join it — and the chrome's height is unchanged, which is what lets §1's single 117px reservation cover this
+  screen and the POS alike.
+- **244's `.mledbar` is retired**, markup and CSS, rather than left as dead rules.
+
+**Judgement call — the range on the Suppliers list.** §5 requires the range to apply "to the list and to the active
+sheet tab". A supplier row carries exactly one date, `lastPurchaseAt`, so that is what the window reads; a supplier
+never purchased from has no date and appears only under "all entries", which is the DEFAULT — so the list opens exactly
+as it did and nothing moves until the user asks. The KPI strip and the chip counts stay on the whole book on purpose:
+they answer "what do I owe", and a date window must not silently re-answer that. An empty list caused by the range says
+"nothing matched" and offers Clear filters (which now resets the range too), not "no suppliers yet".
+
+**Judgement call — four ranges, not three.** The file's caption abbreviates three (All / 30d / 90d); the desk menu
+offers four (0 / 30 / 90 / 365). The cycle keeps all four. Dropping a range the desk has would be a capability
+regression smuggled into a presentation round, and the button states the range currently applied either way. The
+spoken label also names the range a tap moves to — a cycling control whose next state is invisible is a guessing game
+for a screen-reader user.
+
+### §3 — the full-file diff
+
+The recommitted file was diffed against the built screens mechanically: every class used inside its phone frames
+(158, excluding the spec-sheet's own frame chrome) was resolved to its EFFECTIVE mockup declarations (later rules in the
+file override the shared reference stylesheet pasted above them) and compared property-by-property with the effective
+rules in `globals.css`, scope prefixes normalised. **The complete list of families that differed, and what was done:**
+
+- `.mfiltrow` — **absent. Added.**
+- `.mcycle`, `.mcycle > svg`, `.mcycle .mcycle__hint`, `.mcycle:hover`, `.mcycle:active` — **absent. Added.**
+- `.segctl button` — live `height:32px; padding:0 12px`, file and `component-reference.html` both `30px / 0 14px`.
+  **Corrected** in the `.mp-mobile` scope (the `.mp-inv2` copy was already right, which is why the sheet looked correct
+  and the More/account sheets did not). Its additive `inline-flex`/`gap:6px` icon layout is kept — the reference's
+  segment carries a label only, and the live one carries icon+label on other screens.
+- Everything else came back clean: `.pcard*`, `.minv*`, `.mkpi*`, `.mkpis`, `.mchips`/`.filterchip*`, `.mviewrow`,
+  `.viewtoggle`, `.miconacts`, `.mquickacts`, `.msig*`, `.bal*`, `.balhead*`, `.mledger`/`.mledrow*`, `.ledtag*`,
+  `.mfacts*`, `.supmark*`, `.typetag`, `.pill*`, `.emptystate*`, `.infload`, `.mpos-search*`, `.mlabel`/`.mfeed`/`.mrow*`,
+  `.mdock*`, `.sheet*`, `.plinecard*`, `.mtotalbar*`, `.amt`, `.cap`, `.num`, `.run`.
+
+**Deliberate non-changes, recorded so a later diff does not re-raise them:**
+- `.mchrome`, `.mdock`, `.mtotalbar` background/border/shadow — live uses the `--glass-*` token family (124/214); the
+  file uses a flat `color-mix` approximation because a spec sheet has no real backdrop to blur. The token layer wins.
+- `.mtotalbar { position:fixed }` vs the file's `absolute` — the file positions inside a phone frame; the live PWA has
+  no frame to be absolute within.
+- `.mscroll` and `.mapp:has(…)` — these do not exist in the live app at all: the shell's `.mp-shell-main` is the
+  scroller, which is why §1's reservation lives where it does. Their `--mfoot:104px` is the one number carried across.
+- `.minv { padding:13px 14px; gap:11px }` — that is the REFERENCE's `.minv`, a card with `.minv__top`/`.minv__nm`
+  children. This screen's `.minv` is the row list (`.minv__row`), a different component that happens to share the name;
+  padding it would inset rows that 241/244 established flush inside `.minv--shell`. Left at 0.
+- `.mled__end .bal` — the `.mled` family belongs to POS / Recent sales, not to either screen in this round.
+
+### §4 — carried forward, re-verified by inspection
+
+Avatar through `initialsOf(me?.name ?? '')` on the shared `MobilePageChrome` (pass); no in-body title band (pass);
+Add/Edit supplier and the detail sheet on the shared `MobileSheet` family with its single dismissal and drag-to-close
+(pass); detail sheet header on the `lead` mark with the Ledger / Purchases / Payments tabs, search and range applying to
+the active tab (pass, and the row is the one §2 redrew); record payment as 246 §5 left it (pass); import and export
+icons present, supplier import live and purchases import still absent (pass, unchanged and still parked); the touch
+date picker as 246 §4 left it (pass); terms pill one dot — asserted over every `<StatusPill>` in the file (pass);
+infinite scroll with `.infload` and the callback-ref sentinel (pass); zero scrollbars and no horizontal scroll at 360 —
+the new row is `min-width:0` throughout and its one `nowrap` control is shrinkable (pass).
+
+### Files
+
+- `apps/web/app/globals.css` — the §1 reservation group, `.segctl` segment anatomy, the `.mfiltrow`/`.mcycle` block
+  (replacing `.mledbar`), the segment hit-area pad, the RTL mirror.
+- `apps/web/app/(app)/pharmacy/suppliers/SuppliersClient.tsx` — `MobileFilterRow` and `rangeWords`; the chrome mount;
+  the sheet mount replacing `.mledbar`; `listDays` and its use in `rows`, `filtered` and Clear filters; `SearchSelect`
+  and the duplicated `rangeLabel` retired.
+- `packages/i18n/src/messages/{en,ur}.json` — `pdMRangeCycle`, EN + UR, parity kept.
+- `packages/ui/src/lib/purchases-suppliers-mobile-r3.spec.tsx` — new guard suite (mockup gate, §1 reservation incl. the
+  constant-padding and single-token guards, §2 row anatomy / wrap / segment size / hit area / one-component-two-mounts,
+  §5 range semantics and the untouched KPI strip, §3-§4 carried-forward guards).
+- `packages/ui/src/lib/purchases-suppliers-mobile-r2.spec.tsx` — 244's `.mledbar` assertions re-pointed at the row that
+  superseded it; what they guarded (the sheet HAS both controls, both feed every tab) is unchanged.
+- `packages/ui/src/lib/stock-alerts-screen-polish.spec.ts` — the reservation-group literal updated for the widened
+  group and the moved token; what it guards (this screen reserves 117px through the POS's tokens) is unchanged.
+
+### Gates
+
+`pnpm lint` and `pnpm typecheck` run once at the end, both clean (including the web design-drift, token-integrity,
+tenant-english-only, search-select and page-title checks). Tests written, not run, per AGENT.md §4A. This repo has no
+Playwright harness (`test:e2e` is not a script here), so the screen's proof is the guard suite in the house style.
+Desktop and vendor untouched: every CSS rule added is scoped under `.mp-mobile`, `.mp-pur2` or a mobile `@media`
+block, and the only shared-component edit is inside the phone branch of `SuppliersClient`.
+
+### End of block
+
+Purchases and Suppliers are complete, desktop and mobile, against the recommitted mockups. Next per the owner:
+thermal printing (raw ESC/POS, Bluetooth and wired), then keyboard shortcuts, then the whole-app consistency audit,
+then Customers → Returns → Recent Sales → Settings → Day-close → Prints → Dashboard. Parked, unchanged: a purchases
+import endpoint, a server-side export, per-page menu visibility by permission, the deferred shortcut bindings.
+No step 249 is authored; PROGRESS.md `Next` is set to the spec's dictated sentinel.
