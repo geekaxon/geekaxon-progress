@@ -10993,3 +10993,127 @@ were re-pointed at what 236 actually shipped, keeping each test's original inten
 
 Gates: `pnpm lint` clean (one pre-existing unrelated warning in `@mp/api`), `pnpm typecheck`
 clean, and the five specs pass locally (143 tests).
+
+---
+
+## 237 — recent-sales — DONE (2026-08-10)
+
+**Work type:** FEATURE. **Branch:** `feature/237-recent-sales`. **Spec:** `specs/237-recent-sales.md`.
+**Mockup gate:** both `specs/mockups/pharmacy/recent-sales-desktop.html` and `recent-sales-mobile.html` present.
+**Schema:** NONE (as the spec requires — no migration, no Prisma change). **RLS:** unchanged; tenant-scoped reads only.
+
+### Problem
+A counter reprints receipts constantly — a customer loses a slip, a total is disputed, a shift
+supervisor checks a figure — and until now there was no way to see a completed sale at all.
+
+### What shipped
+- **Two permissions, in the catalog and editable in the tenant role editor.** `sales.recent.view`
+  (last 24 hours) and `sales.history.view` (any range), both TENANT-scoped and both mapped to the
+  `pharmacy.pos` flag in `PERMISSION_FLAG_REQUIREMENTS` (flag FIRST, then permission). Seed defaults:
+  SALESMAN / CASHIER / PHARMACIST get `recent`; MANAGER and ADMIN get `history`; TENANT_OWNER gets
+  both through `permissionKeysByScope('TENANT')`.
+- **The implication, resolved in ONE place.** New `PERMISSION_IMPLICATIONS` +
+  `expandPermissionKeys()` in `@mp/shared`, applied at the API's `PermissionService.permissionsFor`
+  choke point. That single call feeds the guard, `GET /auth/me`, the nav filter and the client
+  `<Can>` gate, so "history implies recent" cannot disagree with itself across three enforcers. It
+  deliberately does NOT change what a role STORES — the editor still grants the two keys separately.
+- **Endpoints** (`PharmacyRecentSalesController`, `pharmacy/recent-sales`, `@RequireFeature('pharmacy.pos')`
+  + `@RequirePermission('sales.recent.view')`): `GET /` (window + KPIs + chip counts), `GET /:id`
+  (drawer detail), `@Sse('stream')` (live feed), `POST /:id/reprint` (audited).
+- **The window is a SERVER rule.** `resolveRecentSalesRange` in `@mp/shared`; a caller without
+  `sales.history.view` who asks for an older range gets a **403 with the rule stated**, not a quietly
+  trimmed answer. Proven by calling the service directly in the suite, not by a missing control.
+- **Realtime** — a FIFTH scope (`sale.completed`) on the SAME spec-112 per-tenant bus that already
+  carries `stock.updated`, `heldSale.updated` and `customer.balance.updated`. Its own SSE endpoint
+  rather than the POS's merged stream ONLY because the two are gated differently (`pharmacy.sell` vs
+  `sales.recent.view`); merging them would have made the sales feed reachable by whoever can reach
+  the till. Published outside the idempotency seam and guarded on `replayed`, so a retried offline
+  commit announces once.
+- **Screen** `/pharmacy/recent-sales` (server shell + client island), desktop table + card view and
+  the mobile `.mhdr` chrome with infinite scroll, detail through the shared `<Panel>` (520px drawer /
+  bottom sheet), reprint through the existing `<ThermalReceipt>`.
+- **Nav** — one line in the single registry (163), so sidebar, mobile More sheet and global search all
+  get it with no further code, and it disappears for a user holding neither key.
+- **i18n** — ~70 new EN+UR keys at parity, plus `pharmacyPos.receipt.reprint`.
+
+### Judgement calls (recorded here because I decide rather than escalate)
+
+1. **The payment pill is NOT Cash / Card / Online.** The mockup draws one pill per tender kind, and
+   the spec's own §Schema line asserts "payments … all exist". They do not: the POS settles through
+   `splitPaymentSummary`, accrues the split onto the COUNTER'S day-close (110 §2.1), and persists on
+   the sale row only `total` and `creditAmount` — which is exactly why the 102 reprint path has
+   always printed a slip with no method lines (the comment on `posReceipt` says so).
+   Two options: change the schema (the spec forbids it, in bold) or fabricate. Painting "Cash" on
+   every non-credit sale would be the invented figure the design bar forbids ("no data means —,
+   never a number"), and on THIS screen it would be quoted back in a refund dispute.
+   **Decision:** state what the record holds — `SETTLED` / `PART_CREDIT` / `CREDIT` / `RETURNED` —
+   in the pill and in the chips, with a plain-English footnote in the drawer saying the tender split
+   is not stored on a sale. **Follow-up for a later spec:** persisting the per-sale tender split
+   (a `SalePayment` table or three Decimal columns on `Sale`) would restore the mockup's Cash /
+   Card / Online exactly; it needs a migration and a backfill decision for pre-existing sales, so it
+   is a schema step of its own.
+2. **KPI wording.** "Cash taken" became **"Settled at counter"** (`total − creditAmount`) for the
+   same reason: only "cash + card + online, undifferentiated" is knowable. "Credit given" is the
+   sales' own `creditAmount`, which IS the figure `accrueDayClose` posts as `creditSales`, so the
+   screen and day-close agree by construction rather than by two implementations matching. A
+   RETURNED sale is counted and stated but never counted as money taken.
+3. **The rolling window has NO upper bound in the query.** `now` is resolved in the app while
+   `createdAt` is stamped at the write, so a `to = now` ceiling drops a sale committed three
+   milliseconds later — the just-arrived sale the screen exists to show. `ResolvedRecentSalesRange`
+   carries `openEnded`, and the repo applies a ceiling only for a range the user actually picked.
+   (Found by the suite, not by review.)
+4. **Scope classes: `.mp-inv2 .mp-rsales`.** `.mp-inv2` is no longer "inventory's stylesheet" — 212
+   built the tenant LIST KIT under it (table shell + toolbar, stat-card row, filter chips, empty
+   state, pager, mobile twins) and 215/229/235 have reused it since. Re-declaring 487 rules under a
+   private prefix so this screen could own a second copy of a table is the drift this repo keeps
+   deleting. `.mp-rsales` carries only the mockup's NEW COMPONENT pieces.
+5. **Nav gates on `sales.recent.view` alone.** The registry contract is one permission per row;
+   teaching it "either of two" would have been a second gating mechanism. The implication (call 2
+   above) makes an owner holding only `sales.history.view` match the row anyway.
+6. **Reprint is a POST.** Precisely so it can be `@Audited` with actor, invoice number and time —
+   a reproduced slip can be used to claim a refund twice. The slip itself is marked REPRINT on the
+   paper (`ThermalReceiptInput.reprint`, rendered above the invoice line, EN+UR).
+
+### Shared-part extractions (drift removal, done as part of this step)
+- `components/pharmacy/KpiTiles.tsx` — `<KpiTile>` / `<MKpiTile>` were private to
+  `PharmacyInventoryClient`; both screens now consume the one component and the private copies are
+  deleted.
+- `<Panel>` gained `sheetClassName` — the mobile sheet is portalled to the document root, so it
+  leaves the page's scope behind and a second consumer's sheet would have rendered unstyled.
+  Inventory's `mp-inv2-sheet` stays the default; `inventory-desktop-polish-r2.spec.tsx`'s assertion
+  was updated to follow the default rather than the literal.
+- `.mp-inv2 .statcard__icon--success` added — the fourth tint the KPI row needs.
+
+### Files
+`packages/shared/src/pharmacy-recent-sales.ts` (new), `permissions.ts`, `pharmacy-payment.ts`,
+`index.ts`; `apps/api/src/pharmacy/pharmacy.sale-events.ts` (new), `pharmacy.controller.ts`,
+`pharmacy.service.ts`, `pharmacy.repositories.ts`, `pharmacy.dto.ts`, `pharmacy.constants.ts`,
+`pharmacy.module.ts`, `__fakes__.ts`; `apps/api/src/notifications/notifications.realtime.bus.ts`;
+`apps/api/src/permissions/permission.service.ts`;
+`apps/web/app/(app)/pharmacy/recent-sales/{page.tsx,RecentSalesClient.tsx}` (new),
+`apps/web/components/pharmacy/KpiTiles.tsx` (new), `Panel.tsx`,
+`apps/web/app/(app)/pharmacy/inventory/PharmacyInventoryClient.tsx`,
+`apps/web/app/(app)/pharmacy/pos/ThermalReceipt.tsx`, `apps/web/lib/nav.ts`,
+`apps/web/app/globals.css`; `packages/i18n/src/messages/{en,ur}.json`.
+
+### Tests written
+`apps/api/src/pharmacy/recent-sales.spec.ts` (25) — the two permissions and their scope/flag/defaults,
+the implication (and that it does not run backwards), the server-side window refusal, the payment
+classification, the KPI reconciliation, RLS isolation, the realtime payload shape + replay
+suppression, and that a reprint writes nothing.
+`packages/ui/src/lib/recent-sales-screen.spec.tsx` (36) — nav registration, shared-part composition,
+the read-only promise (the only non-GET is the reprint), every mockup selector family declared with
+no hex literal, both-theme reduced-motion answers, and EN/UR parity for every `prs*` key used.
+
+### Notes
+- No browser harness exists in this repo (a standing open item), so there is no Playwright test;
+  the screen-side suite asserts structure instead.
+- Printing transport stays parked, as §5 requires — reprint uses the current browser-print path.
+- Self-checks by inspection: i18n parity ✅, isolation ✅ (window query and feed are both
+  tenant-channel scoped), flag gate ✅ (`pharmacy.pos` on the controller class + the nav row),
+  design ✅ (mockup selectors, tokens only, both themes, skeleton + empty state), white-label ✅
+  (the reprint letterhead resolves from `@mp/brand`), accountability ✅ (reprint audited), offline ➖
+  (a read-only reporting screen is not a critical offline path).
+
+### Gates
+`pnpm lint` ✅ · `pnpm typecheck` ✅ (the controller runs the full suites).
