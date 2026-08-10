@@ -11996,3 +11996,139 @@ Vendor untouched; no production data path altered.
 - §2, §3 and §4 are accepted on the DEPLOYED page per §8 and have NOT been so verified here.
 - The §1 seeder fix is likewise unproven against the real staging box; the reproduction test needs a
   reachable `DATABASE_URL`.
+
+## 247 — suppliers-card-view-and-desktop-r3 — DONE (2026-08-10)
+
+**Branch:** `fix/247-suppliers-card-view-and-desktop-r3` (cut from the 246 head before any commit).
+**Spec:** `specs/247-suppliers-card-view-and-desktop-r3.md`. WORK TYPE: FIX. No schema, no endpoint, no arithmetic.
+
+**Mockup gate (spec preamble).** `specs/mockups/pharmacy/purchases-suppliers-desktop.html` was re-read
+live: `.scards` present (1 rule), `.scard__anchor` present (14 occurrences across CSS + markup). Gate
+passed, so the anatomy was copied declaration for declaration from the committed file, never composed
+from the spec's prose.
+
+### §1 — the `.scard` family (NEW)
+
+`globals.css`, appended to the `.mp-pur2` block. Every declaration is the file's, transcribed:
+
+`.scards` (grid `repeat(auto-fill,minmax(276px,1fr))`, gap 14px, padding 16px) · `.scard` (column flex,
+`--surface-card`, hairline, radius 16px, `--shadow-xs`, the file's 160ms shadow+border transition) ·
+`.scard:hover,.scard:focus-within` · `.scard__hd` · `.scard__hd .supmark` (36px / radius 11px / 12.5px —
+overrides the kit's 30px mark) · `.scard__t` · `.scard__t b` · `.scard__t small` · `.scard__t small .who`
+· `.scard__t small svg` · `.scard__t small .num` · `.scard__terms` · `.scard__loc` · `.scard__anchor` ·
+`.scard__amt` · `.scard__amt .cap` · `.scard__amt b` · `.scard__note` · `.scard__note svg` ·
+`.scard--owing .scard__amt b` · `.scard--overdue .scard__amt b` · `.scard--overdue .scard__anchor` ·
+`.scard--overdue .scard__note` · `.scard--settled .scard__amt b` · `.scard--settled .scard__note` ·
+`.scard__ft` · `.scard__ft small` · `.scard__acts` · `.scard__acts .iconbtn` · `.scard__acts .iconbtn svg`
+· `.scard:hover .scard__acts,.scard:focus-within .scard__acts` · `@media (hover:none) .scard__acts`.
+
+**Deliberately NOT built: `.scard.is-hovered`** (and `.scard.is-hovered .scard__acts`). The file itself
+labels it "spec-sheet only: pins one card in its hover state so the footer actions are visible in a
+static capture". A class whose whole purpose is to fake a pointer state has no place in a running screen.
+
+`SuppliersClient.tsx` — the desktop card branch was rebuilt on the new anatomy, replacing the borrowed
+`.pcard` (a purchase-INVOICE card, which is why the view read flat: its balance sat mid-card with no
+anchor, and its actions were three full-width `Button`s rather than the file's footer icon cluster).
+
+- **Identity mark.** `.scard__hd .supmark` is what the committed file targets, so the card carries the
+  same `.supmark` the list row, the picker and the drawer header carry — one mark per screen. Suppliers
+  hold no uploaded artwork, so 140's resolution order lands on the initial in every case anyway.
+- **One data source, no second calculation path (§1, §4).** The card reads `readingOf(id)` — the same
+  oldest-unpaid-invoice map the table row reads — and no longer `purchaseCardReading`, which was a
+  second reader over the same inputs. A new memoised `invoiceCounts` map replaces the table's inline
+  `purchases.filter(...).length`; the list row now reads it too, so list and grid cannot disagree on
+  how many invoices a supplier has. Money is `money(Math.max(0, r.outstanding))` in both.
+- **Tone → class:** `overdue → scard--overdue`, `owed → scard--owing`, `settled → scard--settled`.
+- **The six §1 states.** owing (`Due 4 Sep`) · overdue (`⚠ N days late`, the whole anchor repainted
+  `--danger-soft` with a danger-tinted top border) · settled (`✓ Settled`, figure demoted to 17px
+  tertiary, Pay disabled) · opening-balance-only (owed with `dueAt === null` → `file-clock` +
+  "Opening balance"; no due date is invented) · a long name (`.scard__t b` truncates, `title` carries
+  the full name) · no contact person (`.who` falls to the `pdMNone` em dash, the phone glyph and number
+  drop out entirely rather than leaving a dangling separator).
+- **`.scard__loc`.** The file draws "Lahore · 24 invoices" but the record holds ONE free-text address.
+  New `locality()` helper takes the LAST comma-separated segment (a Pakistani address ends on its city)
+  and only when it is ≤ 24 chars — otherwise the slot carries the invoice count alone. Recorded as a
+  deliberate narrowing: the alternative is a slot that prints a street into a city's place.
+- **Terms pill:** one dot (243 §7 — `StatusPill dot={false}`, `.pill::before` draws the only one);
+  `pill--pending` when terms are set, `pill--archived` + `pdNoTerms` when they are not, as the file draws.
+- **New i18n key** `pdSupLastPurchase` ("Last purchase {date}" / "آخری خریداری {date}") in en + ur —
+  the file's footer says "Last purchase 28 Jul" where the phone's `pdMLastPurchase` says only "Last".
+
+### §2 — the full-file diff, per selector family
+
+The whole `<style>` block of the recommitted file was parsed and diffed declaration-by-declaration
+against every `.mp-pur2`-scoped rule in `globals.css` (55 selectors differed). Triaged as follows.
+
+**CHANGED to match the file:**
+- `.balhead--settled > span > b` — **added**; the file colours a zero running balance `--success` and
+  the drawer had no settled variant at all, so it printed neutral ink. Both drawer headlines
+  (`SupplierLedgerDrawer` and the mobile ledger sheet) now emit the modifier.
+- `.alert--success` — border-color 28% → **26%**.
+- `.switchrow` — background `--surface-sunken` → **`--surface-card`**, padding 12/14 → **11/13**.
+- `.switchrow .t b` — `--fw-semibold` → **`--fw-medium`**.
+- `.switchrow .t small` — margin-top 2px → **1px**.
+- `table.tbl th.num, table.tbl td.num` — **added `font-feature-settings:"tnum"`**.
+- `table.tbl td .muted, .muted` — `--text-tertiary` → **`--text-secondary`**.
+- `.msig svg` — 11px → **12px** (the phone kit was already 12px; the desk had drifted).
+- `.lineitems` — **dropped `box-shadow:var(--shadow-sm)`**; the file gives it a border only.
+- `.pdrawer__hd` — padding `20px 22px 16px` → **`16px 20px`**.
+- `.pdrawer__body` — padding `18px 22px` → **`18px 20px`**.
+- `.pdrawer__foot` — padding `16px 22px 20px` → **`14px 20px`**.
+
+**Diffed and found already correct — no change:** `.pcards` (the desk grid lives at
+`.tbl-wrap .pcards`, already `minmax(268px,1fr)`/14px/16px; the flat `.pcards` the diff flagged is the
+phone's stacked column, 241) · `.pghead` (`.mp-inv2 .pghead` is already `align-items:center`, which IS
+the file's `.pghead--compact`, so the modifier would be a no-op class) · `.pdrawer--wide` (the drawer is
+`.mp-pur2-drawer`, already `width:640px`) · `.crumb` family (semantic tokens, legible in both themes) ·
+`.field__label` (`.mp-inv2` already matches; the `.mp-pur2` override reaches the same layout through
+`.opt{margin-inline-start:auto}`) · `.mpick__row .t` (owned by `.mp-pos2`, already `flex:1`) ·
+`.pill--archived` · `.balhead` base, `--owed`, `--overdue` · `.tbl-toolbar`, `.segctl`, `.viewtoggle`,
+`.pager`, `.emptystate`, `.searchbusy`, `.filterchip`, `.pkpi`, `.ledtbl`, `.supmark`, `.supcell`,
+`.bal`, `.tabs-underline` (the app's logical `inset-inline-*` is kept over the file's `left/right`:
+same geometry, RTL-correct).
+
+**Diffed and deliberately NOT aligned, with the reason:**
+- `.ptop`, `.ptop__title`, `.ptop__sub`, `.ptop__tag` — the file still draws a mock topbar inside its
+  own frame; the app moved the subtitle, month badge and owed chip into the REAL topbar (246 §2) and
+  the in-body title band is gone. Aligning these would rebuild the band the last round removed.
+- `.mtotalbar` — `position:absolute` in the file because it sits inside a phone frame; `fixed` in the
+  app, above the real bottom nav. Mobile anyway (248).
+- `.pskel__b` — the app's `animation:none` is inside `prefers-reduced-motion`.
+- `.pcard__id b/small`, `.plinecard__hd small`, `.mledrow__hd b` — the app adds truncation the file
+  omits; a name that overflows its row is not a fidelity win.
+- Spec-sheet chrome that is not app surface at all: `.specpage`, `.specwrap`, `.spechead`, `.specsec`,
+  `.ref*`, `.cl-*`, `.win*`, `.frame-*`, `.deskwrap`, `.pscrim`, `.navspec`, `.topspec`, `.refstage`.
+- Other screens' families carried in the same kit file (POS `.keypad*`/`.cart__*`/`.pnav*`, console
+  `.tcard*`, dashboard `.chart*`/`.donut*`, returns `.retline*`) and the mobile-only `.mfiltrow`,
+  `.mcycle`, `.mfield`, `.minput`, `.mtoolbar`, `.mgnbadge` — those are 248's.
+
+### §3 — carried forward, re-verified
+
+Topbar subtitle + tag + owed/overdue badge via `TopbarPublish`, no in-body title band (246 §2) — pass ·
+breadcrumb on `--accent`/`--text-tertiary`, both themes — pass · drawer Ledger/Purchases/Payments tabs
+with counts, the range filter, and the deliberate "All entries" default (243 §5, kept: a pre-narrowed
+range lists rows that do not add to the headline) — pass · record payment: coloured outstanding, today
+pre-selected, no "Pay in full", Notes, amount with icon + placeholder, Method with no icon (246 §5) —
+pass · add/edit supplier as a centred `.cxdialog` with opening balance icon + placeholder — pass ·
+supplier import with dry-run and error report present, purchases import button absent (246 §6) — pass ·
+search across every visible column, 250ms debounce, "Searching N items…" card — pass · the dialog date
+picker opening centred and not flipping on month change (246 §4) — pass.
+
+### Tests
+
+`apps/api/src/pharmacy/purchases-suppliers-desktop-r3.spec.ts` — the invariant the round rests on: the
+six §1 states resolved through the SHARED `balanceTone`/`overdueDays`/`purchaseDueAt`/
+`creditDaysFromTerms` readers, the `owed → scard--owing` mapping, and the assertion that identical
+inputs produce identical tones on both surfaces (no second calculation path).
+
+### Gates
+
+`pnpm lint` — clean (design-drift, token-integrity, tenant-english-only, tenant-search-select,
+tenant-page-titles all pass; one pre-existing unrelated warning in `doctor-portal.repositories.ts`).
+`pnpm typecheck` — clean. `test:unit`/`e2e`/`build` left to the controller per AGENT.md.
+
+**Files:** `apps/web/app/globals.css`, `apps/web/app/(app)/pharmacy/suppliers/SuppliersClient.tsx`,
+`packages/i18n/src/messages/en.json`, `packages/i18n/src/messages/ur.json`,
+`apps/api/src/pharmacy/purchases-suppliers-desktop-r3.spec.ts`.
+Mobile and vendor untouched. Supplier balances, purchase totals, batch creation, stock movement and
+unit conversion byte-identical (105/106/185 frozen — nothing on this branch computes money).
