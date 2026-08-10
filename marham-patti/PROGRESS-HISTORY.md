@@ -11363,3 +11363,158 @@ are toasts · skeletons on load · `.env.example` unchanged (no new config).
 ### Gates
 `pnpm lint` ✅ (one pre-existing warning in `doctor-portal.repositories.ts`, unrelated) ·
 `pnpm typecheck` ✅ · unit / build / e2e left to the controller per AGENT.md §4A.
+
+---
+
+## 241 — purchases-suppliers-mobile — DONE (2026-08-10)
+
+**Branch:** `fix/241-purchases-suppliers-mobile` · **WORK TYPE:** FIX (presentation + interaction; no schema, no business-logic change)
+**Spec:** `/specs/241-purchases-suppliers-mobile.md` · **Mockup:** `specs/mockups/pharmacy/purchases-suppliers-mobile.html`
+**Gate:** mockup present and carries `.plinecard*` (65 hits), `.mledger` (5) and `.mledrow` (31) — proceeded.
+**No CODEREF exists for 241** (`specs/` has none covering it), so file placement was decided against the live sources.
+
+### What changed
+
+**Scope classes.** Both phone screens moved from the private 128-era `.mp-inv .mp-pur` / `.mp-inv .mp-sup`
+onto the SAME `.mp-inv2 .mp-pur2` the desks wear. Almost everything the mobile file draws was already
+built — `.mkpis`/`.mkpi`, `.mquickacts`, `.mchips`, `.mviewrow`, `.miconacts`, `.minv--shell`/`.minv__row`,
+`.infload`, the chrome, the dock, the sheet family — so the phone CONSUMES the 214 mobile list kit instead
+of keeping a second copy of it. Skeletons and notices moved onto the one scope too.
+
+**New shared primitives** — `packages/shared/src/pharmacy-purchase-mobile.ts`, re-exported from the barrel:
+`PURCHASE_MOBILE_PAGE` (12, deliberately NOT one of `PURCHASE_DESK_PAGE_SIZES` — an infinite-scroll window
+is not a pager preference), `purchaseCardReading` (tone + lateness + whether Pay is offered, folded from
+240's `balanceTone`/`overdueDays`), `purchaseEntryProgress` (what `.mtotalbar` states; defers to the frozen
+`canSaveEntry`/`entryLineIssues`), `activeEntryLine` (which line card stands open — the first BROKEN line
+wins over a merely later one). All pure; no money is computed anywhere in them.
+
+**Purchases mobile.** Chrome portalled through the shell slot as `MobilePageChrome` with exactly two `.mic`
+controls and the file's plain `.mpos-search` (no scan button — the file draws none; a barcode does not name
+an invoice). KPI strip, two `.mquickacts`, All/Unpaid/Partial/Paid chips, `.mviewrow` with the shared
+`ViewToggle`, then list (`.minv__row`) or card (`.pcard`) view, infinite scroll with the 218 §2 callback
+sentinel and a retryable `.infload` foot. Detail is a `MobileSheet` with `.mfacts` + a stacked `.mledger` of
+the lines + the `.totals` block. Pay is offered only where money is owed.
+
+**Purchase entry became a per-line card flow** (`.plinecard`): sub-page chrome with a back `.mic`, a supplier
+field whose picker opens FULL-SCREEN (`mobileKind="long"`, 218 §3), an invoice-number field, a read-only
+`.mfacts` grid (supplier · date · terms · due · lines), then one card per line. A finished card collapses to
+its own one-line summary ("12 carton × Rs 9,800 · 2,400 tablet · exp 03/28"); exactly one card stands open,
+chosen by `activeEntryLine`. Unit selection is a BOTTOM SHEET (`mobileKind="short"` — the POS cart's control,
+200 §5). Expiry is the touch `DatePicker` (196) and stays optional. No keypad anywhere (199); quantities are
+integer, money fields take decimals (239). An invalid line paints `.is-invalid`, states `.field__err`, and
+blocks save. `.mtotalbar` is pinned above the dock with the running total and "N lines · M needs attention";
+its Review action opens the totals + payment as a sheet.
+
+**Suppliers mobile.** Same chrome/KPI/chips/view-row/infinite-list composition. Detail is a `MobileSheet`
+carrying `.balhead`, a read-only `.mfacts` (with `.mfacts__hd`), a Ledger/Invoices/Payments `.segctl`, and
+the stacked `.mledger`/`.mledrow` — date and reference on one line, amount and running balance on the next,
+debit and credit distinguished by the SAME `.ledtag--*`/`.led-*` inks the desk uses. Entries are shown
+newest-first; the running balance on each row is the server's, untouched.
+
+**One record-payment surface.** `RecordPaymentModal` moved verbatim out of `SuppliersClient` into
+`components/pharmacy/RecordSupplierPayment.tsx` so Purchases — whose file draws Pay on every unsettled card
+— opens the SAME sheet instead of growing a second one. `NewSupplierDrawer` became `NewSupplierPanel` on the
+shared `<Panel>`, so the phone gets the bottom sheet the file draws instead of a desktop drawer.
+
+**Two new browser helpers** — `apps/web/lib/mobile-desk.ts`: `moneyShort` (the KPI abbreviation Inventory and
+Recent sales had each grown privately) and `csvDownload` (BOM-led, so Urdu supplier names survive Excel).
+
+### Decisions recorded (no approval gate; noted here per CLAUDE.md)
+
+1. **`.miconacts` carries EXPORT only, not import.** The file draws both icons, but there is no purchases or
+   suppliers import endpoint in this product and inventing one would be the API change a presentation step
+   forbids. Export is a client-side CSV of the rows already on screen — no API, no new figure. A control that
+   does nothing is worse than a control that is not there; the omission is deliberate and stated.
+2. **The phone's Pay states the SUPPLIER's outstanding, not the invoice's.** A payment is recorded against a
+   supplier (106), so the Purchases screen reads `/pharmacy/purchase/suppliers/summary` — the same endpoint
+   the Suppliers desk already uses — but ONLY on the phone, so the desk's behaviour is byte-identical. It
+   falls back to the invoice's own balance if the summary has not landed.
+3. **The supplier picker is a field on the entry, not a pre-step.** The file opens the entry ON the picker;
+   `SearchSelect` has no programmatic open and hand-rolling one would rebuild what 218 §3 already shares, so
+   the picker is the entry's first field and opens full-screen on tap. Same destination, kit control.
+4. **The sheet's call control moved into `.mfacts`.** §4 forbids re-implementing the sheet header, and
+   `MobileSheet` owns that anatomy, so the phone number is a `tel:` link occupying a whole fact cell (≥44px)
+   rather than a bespoke second header.
+5. **Purchase date stays stated, not picked** — unchanged from 240: `createPurchase` dates a purchase by when
+   it is recorded, and giving it a date would be the business-logic change this spec forbids.
+
+### Money and behaviour
+
+Untouched. Batch creation, stock movement, supplier balances, FEFO and unit conversion all still run through
+`purchaseEntryTotals` → the frozen `purchaseTotals`, `entryLineIssues`/`canSaveEntry` and
+`purchaseLineConversion`. The phone posts the identical request body the desk does, idempotency key and all.
+
+### Files
+
+`packages/shared/src/pharmacy-purchase-mobile.ts` (new), `packages/shared/src/index.ts`,
+`apps/web/lib/mobile-desk.ts` (new), `apps/web/components/pharmacy/RecordSupplierPayment.tsx` (new),
+`apps/web/app/(app)/pharmacy/purchase/PharmacyPurchaseClient.tsx`,
+`apps/web/app/(app)/pharmacy/suppliers/SuppliersClient.tsx`, `apps/web/app/globals.css`,
+`packages/i18n/src/messages/en.json` + `ur.json` (56 keys each, parity + placeholder-parity verified),
+`apps/api/src/pharmacy/purchases-suppliers-mobile.spec.ts` (new).
+
+### Gates
+
+`pnpm lint` — clean for `@mp/web` (design-drift, token-integrity, tenant-english-only, tenant-search-select
+and tenant-page-titles checks all pass). One PRE-EXISTING warning remains in `@mp/api`
+(`doctor-portal.repositories.ts:220`, an unused eslint-disable), untouched by this step.
+`pnpm typecheck` — 29/29 tasks successful.
+`pnpm test:unit` / `pnpm build` not run by the agent, per CLAUDE.md — the controller runs them.
+
+### Note for the controller
+
+Spec 241 is block-final and its STOP INSTRUCTION sets `Next:` to
+`none — awaiting next spec block [HUMAN_REQUIRED]`, which is written into PROGRESS.md exactly. Step 241
+itself is complete and needed no human, so the session terminates on `[CHECKPOINT]` per the task message;
+the missing-242 fact is carried in the `Next:` line where the controller reads it.
+
+## 242 — layer-dismissal-and-error-recovery — DONE (2026-08-10)
+
+**Branch:** `fix/242-layer-dismissal-and-error-recovery` (WORK TYPE: FIX). No schema, no migration, no RLS change, no stored row touched. Spec: `specs/242-layer-dismissal-and-error-recovery.md`.
+
+### §1 — one dismissal contract, and the close-control audit
+
+239 §1 landed the kit convergence (`LayerDialogRoot` publishes ONE gated `dismiss`; `DialogClose` takes it from that provider; `Escape` and the overlay reach the same function) and the two POS surfaces (customer picker, payment page). What it never reached is every surface built AFTER it — which is why the owner's round-6 screenshot showed the defect on stacked DRAWERS. `layer-history.ts` untouched, as the spec requires.
+
+Full audit of every close control in the tenant app, with what each was wired to:
+
+WRONGLY WIRED — a ✕ inside a kit layer calling the PARENT's callback, straight past the layer stack (all fixed to the layer's own gated dismissal):
+- `components/pharmacy/Panel.tsx` drawer head ✕ → `onClose` prop. This is the shared frame behind Inventory detail / add-edit / adjust / import, the alerts import, and Record payment — one file, six surfaces.
+- `pharmacy/suppliers/SuppliersClient.tsx` LedgerDrawer ✕ → `setLedger(null)`.
+- `pharmacy/suppliers/SuppliersClient.tsx` SupplierForm drawer ✕ → `setForm(null)`. This form opens ON TOP of the ledger drawer via `onEdit` — the exact stacked pair the owner photographed.
+- `pharmacy/purchase/PharmacyPurchaseClient.tsx` PurchaseDetailDrawer ✕ → `onClose` prop.
+- `components/pharmacy/BarcodeScanner.tsx` viewfinder ✕ AND its `Escape` handler AND the camera-failure "back to search" button → `onClose` raw, while the scanner registers itself as a layer. Now a gated `dismiss()` (`isTopLayer`), matching MobileSheet / the POS picker.
+
+ALREADY CORRECT (verified, unchanged): every `DialogClose` / `DrawerClose` consumer (`ModalHead`, PaymentPanel's `.paydlg__x`, PosClient's three `cxdialog__x`, ShortcutsHelp, UiShowcase); `MobileSheet`'s own header ✕ + scrim + Escape + drag (gated since 234 §3.2); the POS customer picker's back control and PaymentPanel's page back control (gated in 239); `AppShell`'s nav layer.
+
+NOT LAYER CONTROLS (listed so a future audit does not re-open them): `.tbl-toolbar__x` clear-search buttons (Suppliers, Purchase, Inventory, Recent sales); `.plinecard__x` remove-line; POS `heldpill__x` / `hsrow__x` discard-hold, `cart__rm` / `mline__rm` remove-line, `pos-sel__x` clear-customer; ZReport's print-overlay Close (a `<Button>`, not a layer); the entrance install overlay; the hand-rolled invoice/print overlays in Purchase and Returns (no layer registration, no stacking).
+
+DELIBERATELY LEFT RAW: footer `Cancel` / `Close` `<Button>`s. A surface closing its own layer from code is the PROGRAMMATIC path 234 §3.2 explicitly exempts, and PaymentPanel already records that decision.
+
+Assertions (new suite `packages/ui/src/lib/layer-dismissal-and-error-recovery.spec.tsx`): drawer-over-drawer, dialog-over-drawer, dialog-over-sheet and (already in `dialog.spec.tsx`) dialog-over-dialog — ✕ closes exactly one layer, the layer beneath keeps its typed state, and `Escape` raised for a layer that is not on top is refused. Plus a source guard: no raw labelled `<button>` in `apps/web/app/(app)` or `apps/web/components` may carry `onClick={onClose}` / `onClick={onCancel}`, so the shape cannot return.
+
+### §2 — error pages that actually recover
+
+New pure module `packages/ui/src/lib/error-recovery.ts`: `probeUrl` (same route + a fresh nonce, query and fragment preserved), `recoveryOutcome` (a 5xx is NOT a recovery; for the offline mode ANY response proves the connection; a probe that never completed reports offline only when the platform agrees), `recoveryBusyLabel`, `recoveryNotice`. New client seam `apps/web/lib/error-recovery.ts` (`useRecovery`): probe with an 8s abort, then — `reload` — run Next's `reset()` and, 400ms later if this boundary is still standing, `location.replace(href)` for a genuinely fresh load; the timer is cleared by unmount, which IS the signal that `reset()` recovered. `connectivity` replaces to the origin on success. The probe is a plain `fetch`, never a navigation, because `sw.js` only intercepts navigations and would answer the offline fallback while the network is dead.
+
+Wired into `components/error/ErrorState.tsx` (the surface `error.tsx`, both `not-found.tsx` boundaries, the vendor boundary and the offline page all render) and, separately, into `app/global-error.tsx`, which may not use that component. Spinner + busy label while trying, `disabled`/`aria-busy`, and a `role="status"` line when it failed again; the old `onReset ?? window.location.reload()` no-op path is gone. New `.mps-spin` / `.mps-retry` / `.mps-btn[disabled]` rules in `globals.css`. `useRecovery` imports react + `@mp/ui` and nothing else — asserted — so a recovery physically cannot reach the offline queue (spec 10).
+
+### §3 — the identity survives the API
+
+Cause recorded: branding resolves from the API per request, so when the API is what is down, `getTenantBrand()` fails and the page falls back to the platform mark. New pure `packages/ui/src/lib/brand-cache.ts` (`encodeBrandCache` / `decodeBrandCache` / `cachedLockup` / `cachedVars`): the entry carries the HOST it was resolved for and decoding refuses a mismatch, plus the lockup for BOTH themes (the 161/166 chain is theme-strict, so light and dark are two different answers), both palettes, and the live theme. Browser seam `apps/web/lib/brand-cache.tsx` uses `localStorage`, not a cookie, because `global-error` replaces the layout and may not depend on providers or server data.
+
+`app/layout.tsx` mounts `<TenantIdentityCache>` with the identity it already resolved, so every successful load refreshes it; a load that resolved no tenant leaves the store alone (an API outage resolves no tenant either). `AppErrorState` fallback order is now server lockup → cached lockup for this theme → the light client snapshot → the platform mark, and it applies the cached palette when there is no server-resolved one. `global-error` reads the cache after mount and draws the four lockup conditions with plain elements, stamps `dark` on `<html>` from the cached theme, and titles the tab with the cached tenant name. States 7/8 (no-clinic, suspended) are `branding: 'platform'` by construction and those hosts never wrote an entry, so they still show the platform lockup.
+
+### §4 — the in-body title, removed app-wide
+
+`<h1 className="mp-title">` + its `<p className="mp-subtitle">` removed from 36 tenant screens under `app/(app)` (every one built before 213 §1 fixed Inventory alone — including Purchases and Suppliers, the two the owner named), plus the dashboard's now-empty `.mp-dash-head` wrapper and the imports the removal orphaned. Section headings (`h2`/`h3` `.mp-subtitle`) are untouched — they are not page titles. The topbar has owned the title and hint since 176 and the body opens with the `.crumb` trail. Guard test: no `<h1>` in any `app/(app)` screen (print-document template literals and comments excluded), so a screen built later cannot reintroduce one. Vendor console untouched, as the acceptance requires.
+
+### Pre-existing gate failures, fixed (§0)
+
+`pnpm test:unit` was NOT green when this branch started, and both failures pre-date it — 240/241 renamed things out from under two guards and merged anyway:
+- `mobile-picker-and-list-fixes.spec.tsx` read `ppurLineMedicine`, a key 240 renamed to `pdLineProduct`. The rule still holds (that chooser is `mobileKind="long"`); the guard was reading a key that no longer exists. Guard updated.
+- `take-payment-redesign-and-udhaar-wording.spec.tsx` banned "outstanding" in tenant copy, exempting the supplier-payables prefix `psup*`. 240/241 gave payables a second prefix (`pd*`), so six supplier keys tripped a rule that was never about them. Exemption extended to the supplier-payable keys, with the reasoning in the test; customer-facing keys (`pcus*`, `pharmacyPos.*`, `acct*`) stay guarded.
+
+### Gates
+
+`pnpm lint` clean (including the design-drift, token-integrity, tenant-english-only, search-select and page-title checks). `pnpm typecheck` clean. The `@mp/ui` jest suite was run to close §0's requirement: 80 suites / 1409 tests, the two pre-existing failures above fixed, and the new 30-test suite green. `pnpm build` / `test:e2e` remain the controller's, per AGENT.md §4A.
