@@ -11518,3 +11518,481 @@ Cause recorded: branding resolves from the API per request, so when the API is w
 ### Gates
 
 `pnpm lint` clean (including the design-drift, token-integrity, tenant-english-only, search-select and page-title checks). `pnpm typecheck` clean. The `@mp/ui` jest suite was run to close §0's requirement: 80 suites / 1409 tests, the two pre-existing failures above fixed, and the new 30-test suite green. `pnpm build` / `test:e2e` remain the controller's, per AGENT.md §4A.
+
+---
+
+## 243 — purchases-suppliers-desktop-r2 — DONE (2026-08-10)
+
+**Work type:** FIX (presentation to mockup). **Branch:** `fix/243-purchases-suppliers-desktop-r2`.
+**Spec:** `/specs/243-purchases-suppliers-desktop-r2.md`. **Mockup:** `specs/mockups/pharmacy/purchases-suppliers-desktop.html`.
+**Schema:** none. **RLS:** unchanged. No CODEREF covers 243 (the set stops at 113-121).
+
+**Mockup gate (spec §Mockup) — PASSED.** The file carries all three required pieces: the Add-supplier
+`.cxdialog` (3654-3676), the three-tab drawer `.tabs-underline` with Ledger/Purchases/Payments (3882),
+and the last-days filter `.tbl-toolbar__mini` "Last 90 days" (3887).
+
+### §1 Headers
+- Nav-registry subtitles corrected in both message files: `pharmacyPurchase` → "Purchases, batches and
+  supplier payments", `pharmacySuppliers` → "Who you buy from, and what you owe them"; `pdSupSub` matched
+  to the same words so the topbar hint and the page cannot disagree.
+- `.ptop__tag`: Purchases already carried the month; Suppliers carried a bare row count and now carries
+  the file's own "N active" (`pdSupTagActive`), which is a different fact from the KPI below it.
+- In-body title block was already gone (242 §4 app-wide). The Suppliers breadcrumb gained the middle
+  Purchases crumb the file draws — with the h3 gone that trail is the only statement of the relationship.
+
+### §2 Import and export
+- New shared `components/pharmacy/PurchaseHeadActions.tsx` → `<ImportExportActions>`, the `.iconbtn--44`
+  pair Inventory's `CatalogueHeadActions` draws, added to BOTH desks' `.pghead__acts`.
+- `exportCsv` was written INSIDE the phone branch on both screens (241), so the desks had nothing to call.
+  Hoisted to component scope on both; one implementation, two tiers.
+- **IMPORT — the 241 finding re-verified and upheld.** `ImportRegistry` (apps/api/src/import/import.registry.ts)
+  registers exactly ONE entity, `demo_supplier`, whose target is the demo table that proved the spec-12
+  engine — not the pharmacy supplier book. There is no purchases or suppliers importer. Per §2 the button is
+  DRAWN in the file's place, marked `aria-disabled` (not `disabled`, so the press still lands) and says why
+  on press: `pdImportUnavailable`. No endpoint was invented. **DECISION:** the spec's "stop with
+  [HUMAN_REQUIRED]" was NOT taken — CLAUDE.md rule 8 restricts [HUMAN_REQUIRED] to a missing spec or infra
+  the agent cannot do in code, and a missing endpoint is neither; halting would also have abandoned §1 and
+  §3–§8, which are complete. Import remains parked for its own spec.
+- **Recorded per §2:** the 241 export is a CLIENT-SIDE CSV of the rows the screen currently holds, filtered
+  and searched as the user left them. On the phone, which scrolls infinitely, that is what has been scrolled
+  to — not the whole set. Server-side export stays a future item.
+
+### §3 Suppliers card switcher (desktop)
+The desk passed `view="list"` with a no-op `onView` to `ListToolbarControls`, so the toggle rendered and did
+nothing while the phone's worked. Now wired to the same `useListViewPref(LIST_KEY)` both tiers read, so the
+choice persists per user per list (94 §3 / 213 §7) and a switch on one tier is a switch on the other. The
+desktop card grid reuses 241's `.pcard` anatomy verbatim; only the container differs, and that is one CSS
+rule (`.mp-pur2 .tbl-wrap .pcards` → auto-fill grid), so the phone's single column is byte-identical.
+
+### §4 Add / Edit supplier is now a DIALOG
+Rebuilt off the private `<Drawer>` onto the shared `<Panel frame="dialog">` — `.cxdialog__hd` head with the
+one `DialogClose` (242 §1 holds: opened on top of the ledger drawer, one ✕ closes only itself), `.modal__body`,
+`.modal__foot`; the phone gets the shared sheet from the same component. Fields moved onto the kit anatomy.
+Validation is on BLUR and SUBMIT, never on mount (132): a `touched` set starts empty, blur marks one field,
+submit marks both and reports the first fault.
+
+### §5 Supplier drawer — three tabs and a range
+- `.tabs-underline` Ledger · Purchases · Payments with live counts; opens on Ledger.
+- One `RangeMenu` (`.tbl-toolbar__mini` + shared `.menu`, Columns' own anatomy): All entries / 30 / 90 / 365,
+  applying to whichever tab is in front.
+- **DECISION — the range DEFAULTS to "All entries", not to the file's drawn "Last 90 days".** §5 also demands
+  the drawer's figures reconcile exactly with the supplier's balance; a drawer that opened pre-narrowed would
+  list rows that do not add up to the headline above them. Narrowing is the user's act.
+- Reconciliation is structural, not incidental: `closing` folds EVERY entry the server sent (never the
+  filtered view), the `.balhead` and the ledger foot both state the server's `outstanding`, and the two new
+  tabs read the SAME rows the ledger folds — the purchase list this screen already holds and the ledger's own
+  PAYMENT entries. No second calculation path exists.
+- The two standing "Recent purchases" / "Payments" `.histlist` blocks under the ledger were REMOVED — they are
+  the two new tabs now, over the same rows and the same range.
+- API: `SupplierLedgerRowView` gained a read-only `method` projection so the Payments tab can state the tender
+  the mockup draws. Keyed off (paidAt | rounded amount | reference) — the tuple `buildSupplierLedger` copies
+  through untouched — first wins on an exact tie. Nothing in an arithmetic path; null on every non-payment kind.
+
+### §6 Record payment dialog
+Outstanding now wears the danger emphasis in the header (new `subtitleNode` on `<Panel>`/`<ModalHead>`; the
+plain `subtitle` string stays the accessible name). Date defaults to TODAY in local time (never a UTC-shifted
+day). "Pay in full" REMOVED — owner decision, recorded in-code so a later diff reads it as deliberate. Notes
+field added. Amount keeps 239 §2–3 decimals and ±1 / Shift ±100 stepping; 106's arithmetic untouched.
+**DECISION — where the note is stored.** `SupplierPayment` has exactly ONE free-text column and 243 is
+`Schema: none`, so `parseSupplierPayment` COMPOSES `reference · notes` into the value the statement already
+shows rather than accepting the note and dropping it. Lossless, no migration, no second write path; a
+dedicated `notes` column is parked for its own spec.
+
+### §7 Terms pill — one dot
+`StatusPill` always drew its own dot, and a caller that also handed it the app's `.pill` class got a second
+one from `.mp-inv2 .pill::before` — the `● ● Net 45` the owner photographed. Fixed at the component: a new
+`dot` prop (default `true`, so every existing caller is byte-identical), passed `false` at the four callers
+that sit inside a `.pill` scope. The purchases-list status pills were checked and were never affected —
+`statusPill()` emits only the `pill--*` modifier, not the `pill` base.
+
+### §8 Field styling and advanced search
+- **Finding recorded, as §8 asked.** These two screens had NO kit field anatomy: bare `<Input>`s in `.field`
+  wrappers, no leading glyph, no placeholder, no helper line. The `.input-wrap` / `.opt` / `.field__help` /
+  `.field.is-invalid` anatomy existed only under `.mp-kit` and `.mp-set`. Declared once for `.mp-pur2` and
+  every field on both screens moved onto it.
+- `SearchSelect` gained an optional `icon` prop (the mockups draw a glyph on every `.pos-sel__trigger` — the
+  clock on terms, the landmark on a method), so a select can wear the same anatomy as the text inputs beside it.
+- Advanced search on BOTH lists: each row is folded into the text the table draws — every visible column, each
+  figure raw AND rendered — so "215280", "Rs 215,280", "28 Jul 2026" and "Unpaid" all find the same row. Same
+  behaviour Inventory got in 212 §6 and the item picker in 235 §3. The 250ms debounce, the in-field spinner and
+  the "Searching N items…" card were already in place and are unchanged. The drawer's own search now reads all
+  three tabs, not the ledger alone.
+
+### Files
+`apps/api/src/pharmacy/pharmacy.dto.ts`, `apps/api/src/pharmacy/pharmacy.service.ts`,
+`apps/api/src/pharmacy/purchases-suppliers-desktop-r2.spec.ts` (new),
+`apps/web/app/(app)/pharmacy/suppliers/SuppliersClient.tsx`,
+`apps/web/app/(app)/pharmacy/purchase/PharmacyPurchaseClient.tsx`,
+`apps/web/components/pharmacy/PurchaseHeadActions.tsx` (new),
+`apps/web/components/pharmacy/Panel.tsx`, `apps/web/components/pharmacy/RecordSupplierPayment.tsx`,
+`apps/web/components/shell/ModalHead.tsx`, `apps/web/app/globals.css`,
+`packages/ui/src/components/status-pill.tsx`, `packages/ui/src/components/search-select.tsx`,
+`packages/i18n/src/messages/en.json`, `packages/i18n/src/messages/ur.json`.
+
+### Tests
+`purchases-suppliers-desktop-r2.spec.ts` — the note composes into the one free-text column and changes no
+figure; the tender set 106 accepts is still refused outside CASH/CARD/ONLINE; the ledger runs to the
+supplier's own outstanding; the closing debits/credits are folded over EVERY entry so a 90-day view lists
+fewer rows and owes exactly the same money; the three tabs partition the ledger without inventing a row.
+
+### Gates
+`pnpm typecheck` — clean (29/29). `pnpm lint` — clean; the single warning is a pre-existing unused
+eslint-disable in `doctor-portal.repositories.ts`, untouched by this step. Design-drift, token-integrity,
+tenant-english-only, tenant-search-select and tenant-page-titles checks all pass. Per AGENT.md the agent did
+not run `test:unit` / `test:e2e` / `build`. Vendor untouched.
+
+## 244 — purchases-suppliers-mobile-r2 — DONE (2026-08-10)
+
+**Branch:** `fix/244-purchases-suppliers-mobile-r2` · WORK TYPE: FIX · no schema, no RLS, no
+business-logic change. Mobile only; supplier balances and every money figure byte-identical —
+nothing in this step computes a balance, and the one piece of arithmetic added anywhere is the
+`Math.max(0, …)` floor a display already used so a settled supplier never renders a negative.
+
+### §1 — the topbar avatar, and the audit the spec asked to be recorded
+
+**Finding: neither screen mounts avatar markup of its own.** `MobilePageChrome` (shared since
+214 §1) owns the single `.mic--avatar` control every phone header draws, and `initialsOf` is the
+single derivation behind it — there is no per-screen copy to delete. What had diverged was the
+ARGUMENT. Inventory, the POS, Recent sales and Stock alerts all pass `initialsOf(me?.name ?? '')`
+from `useSession()`; Suppliers and Purchases passed `initialsOf('')`, so the shared component
+faithfully rendered its documented nobody mark, "·". Fixed at all three call sites in the module
+(`SuppliersClient`, the Purchases list header, and `MobilePurchaseEntry`'s sub-page header, which
+draws no avatar at all but is no longer left handing the chrome an empty person). One cached
+`/auth/me` read is shared by every consumer, so this costs no extra request.
+
+Secondary observation, NOT acted on: `initialsOf` in `MobilePageChrome` and `deriveInitials`
+inside `IdentityMark` (140/151) are two implementations of the same two-letter rule. They agree
+today (first + last word, one word → first two letters). The chrome's avatar is a text mark in a
+`.mic` button, not an `IdentityMark` frame — converging them means giving the chrome the photo /
+insignia / palette resolution path, which is a capability change and belongs in its own step.
+Recorded here so a later round reads this as a decision, not an oversight.
+
+### §2 — the in-body title block
+
+Nothing to do: 242 §4 removed it app-wide and the phone branch has never drawn one. Verified by
+inspection; the body opens on the KPI strip exactly as the mockup draws it.
+
+### §3 — add / edit supplier as a bottom sheet
+
+Already correct as of 243 §4 and confirmed rather than rebuilt: the phone branch renders
+`<SupplierForm mobile …>`, which is the shared `<Panel>`, whose `mobile` branch IS `<MobileSheet>`.
+Grip, header anatomy, internally-scrolling body, footer row, the reduced-motion slide (191), the
+195 §1 drag physics, the 216 §2 "only the topmost layer drags" rule, root-portalled dialogs
+(209 §2), `closeForNavigation()` (203) and the 242 §1 one-dismissal-per-✕ all come from that one
+component. The screen mounts exactly ONE `<MobileSheet>` of its own — the supplier detail sheet —
+and the guard suite pins that count.
+
+### §4 — import and export
+
+Both icons now render in the phone's `.miconacts`, from `ImportExportActions` — the SAME component
+the desk cluster uses, so the two tiers cannot drift. 241 had drawn export alone on the reasoning
+that a control which does nothing is worse than no control; 243 §2 settled that question the other
+way for the desk and this step carries it to the phone.
+
+**Import stays inert, and this is a deliberate non-invention.** There is still no purchases or
+suppliers import endpoint: `ImportRegistry` registers one entity, the `demo_supplier` sample that
+proved the engine in spec 12, and it writes to a demo target, not to the pharmacy supplier book.
+The button is drawn where the file puts it, marked `aria-disabled`, and says why when pressed.
+NOT ended with `[HUMAN_REQUIRED]`: 243 §2 already answered this exact question for this exact
+scope and shipped, and CLAUDE.md reserves that marker for a missing spec or infra the agent
+cannot do in code. Supplier import remains parked as its own capability.
+
+### §5 — the supplier detail sheet
+
+**The header defect, diagnosed.** The `.supmark--lg` medallion was handed to `MobileSheet` as
+`icon`, which is the `.sheet__hdic` slot: a 34px accent-soft tile sized for a 16px glyph. A 44px
+mark nested inside a 34px tile is precisely the owner's "the initials, heading and description
+spacing is wrong" — the mark was squeezed to the wrapper, and the head's 12px gap fell between the
+WRAPPER and the title rather than between the mark and the title.
+
+Fix: `MobileSheet` gains one optional prop, `lead`, rendered as the head's own first child in
+place of the medallion (`lead ?? icon-in-.sheet__hdic`). Purely additive — a glyph still gets its
+medallion, and every existing sheet is byte-identical. Per-selector, `.sheet__hd` is now
+mark → `.t` (b + small) → dismissal, which is what `purchases-suppliers-mobile.html` draws.
+
+**The tabs are now the DESK's tabs.** 241 gave the phone `'ledger' | 'invoices' | 'payments'`,
+which were three FILTERS over one list — "invoices" meant "the ledger without the payments", so
+the middle tab on a phone and the middle tab on a desk answered different questions about the
+same supplier. `type SheetTab = DrawerTab` now, over `[...DRAWER_TABS]`: Ledger is the book,
+Purchases is this supplier's own invoices with their pay status, Payments is what has been paid.
+Same three sources 243 §5 gave the drawer, so no tab can contradict another. Drawn on the file's
+own `.segctl segctl--full`, opening on Ledger, with `role="tab"`/`aria-controls` panel wiring.
+
+**Search and the last-days range**, both applying to whichever tab is in front, in a new
+`.mledbar` row: the field on the global kit anatomy (`.field` + `.input-wrap` + leading glyph)
+and the range on the shared bounded picker (`SearchSelect`, `searchable={false}`), which on this
+tier opens as its own small sheet above this one per 218 §3 rather than a desk dropdown. It opens
+over the WHOLE book (`days = 0`), same as the drawer, so the list always reconciles with the
+headline above it; narrowing is the user's act. The bar is NOT `.ledtbl__bar` reused — that is the
+desk's 30px toolbar pair, and both targets here are raised to 44px, which is the reason for the
+new class. Every row in all three tabs keeps `.mledger` / `.mledrow` with date and reference on
+one line and amount over running balance on the next, debits and credits distinct through the same
+`.ledtag--*` / `.led-*` inks the desk uses.
+
+`.mfacts` KEPT in the sheet, deliberately, though the mockup does not draw it in this frame: it
+carries the only tap-to-call affordance on the phone (`tel:`), which is what the mockup's header
+call `.mic` means on a device that can place the call, plus the terms and last-purchase facts. The
+affordance is drawn once, and it is drawn there rather than growing a second control into the
+shared header.
+
+### §6 — consistency carried from the other mobile screens
+
+One real gap found and closed: the "Searching N items…" card existed only on the desk, so for the
+250ms debounce the phone showed the PREVIOUS result with nothing saying so — the one moment a
+thumb-typed search looks like it matched the wrong thing. It now says the desk's own sentence over
+the same count. Everything else was already in place and was verified by inspection: exactly two
+`.mic` controls with the compositor-driven collapse, advanced search across every visible field,
+no on-screen keypad, the touch date picker with record-payment defaulting to today (243 §6, shared
+component so both tiers got it at once), the Notes field, no "Pay in full", infinite scroll with a
+re-observed sentinel, toasts not banners, skeletons, the one-dot terms pill and the udhaar wording.
+
+### Files
+
+- `packages/ui/src/components/mobile-sheet.tsx` — the additive `lead` head slot.
+- `apps/web/app/(app)/pharmacy/suppliers/SuppliersClient.tsx` — avatar, `.miconacts` pair, the
+  searching card, and the rebuilt supplier sheet (header, three tabs, search, range).
+- `apps/web/app/(app)/pharmacy/purchase/PharmacyPurchaseClient.tsx` — the same avatar defect, both
+  headers in that file.
+- `apps/web/app/globals.css` — `.mledbar` and its 44px targets; the 44px floor on
+  `.segctl--full` segments below the breakpoint; the purchase row's status pill.
+- `packages/ui/src/lib/purchases-suppliers-mobile-r2.spec.tsx` — NEW, 20 tests.
+
+### Gates
+
+`pnpm lint` clean (including the design-drift, token-integrity, tenant-english-only,
+tenant-search-select and tenant-page-titles checks). `pnpm typecheck` clean across all 29 tasks.
+The new suite passes 20/20, and the five existing sheet/layer/picker suites most exposed to the
+`MobileSheet` change were re-run and pass 129/129. `pnpm test:unit`, `pnpm build` and e2e left to
+the controller per CLAUDE.md §6.
+
+## 245 — date-picker-portal-and-staging-seed — DONE (2026-08-10)
+
+**Branch:** `fix/245-date-picker-portal-and-staging-seed` · WORK TYPE: FIX · no schema change, no migration, RLS unchanged.
+
+### §1 — the date picker is portalled
+
+**Decision (recorded).** The owner weighed a centred-dialog variant for use inside dialogs and chose the PORTAL, so the control behaves identically on a page, in a dialog, in a drawer and in a sheet.
+
+**Second decision, made during the build.** The first implementation was a hand-rolled `createPortal` onto `document.body` with its own placement maths and the shared `useDismissOnOutside` contract widened to take a LIST of regions. It was abandoned before it shipped, and the reason is worth recording because it is not obvious: Radix's dialog wraps its content in a FocusScope, and a panel mounted outside that scope loses focus the instant it takes it — the scope's `focusin` handler pulls focus back into the dialog, and that returning focus is "outside" the picker, so the shared contract's `focusin` half would dismiss the picker on open. A picker that closes itself the moment it opens inside a dialog is worse than the clipping it was meant to fix. Radix's own `FocusScope` stack PAUSES the scopes beneath it, which is exactly why the searchable select (213 §2) has worked inside dialogs all along.
+
+So the picker was moved onto the SAME primitive, with the same configuration:
+- `packages/ui/src/components/date-picker.tsx` — the desktop popover is now `Popover.Root` / `Popover.Anchor asChild` (the `.dp-anchor` div itself, so every consumer's layout CSS is untouched) / `Popover.Portal` / `Popover.Content` with `align="start"`, `sideOffset={DPOP_GAP_PX}` (6, the reference's `calc(100% + 6px)`), `avoidCollisions`, `collisionPadding={DPOP_VIEWPORT_PAD_PX}` (8) and `updatePositionStrategy="always"` (the optimized default lets a panel drift off its trigger inside a scrolling dialog body). `onOpenAutoFocus` is prevented and the focused DAY is focused instead, so the keyboard walk is byte-identical. The component now returns a fragment; the sheet framing is a sibling of the anchor rather than its child.
+- `useLayerHistory(open && mode === 'popover', …)` — an open picker is a LAYER, which is what makes Escape / ✕ / outside-click close ONLY the picker: `LayerDialogRoot`'s `isTopLayer` gate drops the dialog's own dismissal while the picker is in front (242 §1). The sheet framing does NOT register here — `MobileSheet` already does, and two entries for one surface take two back presses.
+- `apps/web/app/globals.css` — new `.dpop--portal { position:relative; top:auto; inset-inline:auto; margin:0; z-index:80; }`. The anchored rule's offsets must be released or the panel is pushed a trigger-height down inside the popper wrapper; the z-index is the shared popover layer (above the dialog family at 70, below the toast rail at 100 and the PIN lock at 200) and is READ off this rule by the popper wrapper. `.dpop` itself is untouched, so the 196 §3 per-selector CSS diff against `component-reference.html` still passes.
+- `apps/web/lib/use-dismiss.ts` — unchanged behaviour; its doc block now records that it is NOT for a portalled panel and why (the `contains()` trap).
+
+**The grep, recorded (§1 "one implementation").** `packages/ui/src/components/date-picker.tsx` is the only calendar in the repo — no second date picker, no bespoke month grid, no `react-day-picker`. `apps/web/app/(app)/purchase/PurchaseClient.tsx` already routes its `type="date"` field through the kit picker. Native `<input type="date">` survives only on NON-tenant surfaces (patient portal ×1, platform directory-consent ×1, vendor console ×3), which 196 deliberately scoped out and `date-picker-adoption.spec` still guards. A new test walks `apps/web/app`, `apps/web/components` and `packages/ui` and fails on any second month grid.
+
+**Tests.** New `packages/ui/src/lib/date-picker-portal.spec.tsx` (17): portalled out of the anchor on a page, out of a DIALOG and out of a DRAWER; the primitive + its collision/scroll/offset configuration; the `.dpop--portal` layer rule; a press on the panel's own controls does NOT dismiss (the 213 §2 trap); an outside press does; Escape closes the picker and leaves the dialog open WITH ITS STATE and the layer count going 2 → 1; one layer per open; the keyboard walk; the touch framing still in the sheet, not portalled, one layer; the one-implementation grep. `date-picker.spec.tsx` updated to read the popover off `document` rather than the render container (it is no longer a descendant). Ran green alongside adoption / mobile-and-global-polish / pos-final-fixes / pos-credit-ux / credit-render / mobile-picker / layer-dismissal / purchases-suppliers-mobile-r2 — 268 + 35 passing.
+
+### §2 — staging demo data for purchases and suppliers
+
+**The finding that shaped it.** The 41 seeder writes the 98 `PurchaseOrder → POItem → GRN → GRNItem` chain. The desks the owner is testing (105, rebuilt over 240–244) read a DIFFERENT shape entirely — `PurchaseOrder` + `PurchaseItem` with the invoice money encoded on the order's `note` (`p105`) — and not one row of it existed. That is why every purchases screen opened empty on staging and why no state (overdue, partial, an undated lot, a carton-entered line) was reachable.
+
+**New `packages/db/src/demo/purchase-book.ts`** — pure, no DB, no clock of its own, deterministic (no RNG): every choice is a function of the supplier's position, the invoice index and the line index, so a re-run computes byte-identical rows and the id-keyed upserts are idempotent by construction (the 54 pattern). It emits `productUnit`, `purchaseOrder`, `purchaseItem`, `batch`, `stockMovement`, `supplierPayment` and balanced journal entries, plus a `SupplierFact` per supplier. It ASSERTS before returning and throws rather than hand back impossible data: balance == opening + purchases − payments, no negative balance, each scripted state actually demonstrated by its numbers, batches holding exactly the base units their lines received, every journal balanced.
+
+- Money mirrors the server exactly: base qty = entered qty × what the level holds, per-base cost = pack cost ÷ that, line total = entered qty × pack cost, grand total = subtotal − discount + tax, owed = grand total − paid, due at = date + the credit window the terms imply. Pack costs are derived from the catalog's base cost so every per-base cost divides to the paisa.
+- `SUPPLIERS` widened 5 → 12 in `demo/data.ts`, each carrying a contact person, an address, optional notes (the 243 form's fields) and a SCRIPT. Coverage: terms Net 15 / Net 30 / Net 45 / Advance-COD; states settled (united, zafa, searle, barrett), owing (muller, getz), overdue (ibl, highnoon), opening-balance-only (premier, ferozsons, macter, hilton). Arrears are stated POSITIONALLY (offset from the newest invoice) because the position is the meaning — the same arrears on the newest invoices read "owing" and on the oldest read "overdue", and a cycling pattern would decide which by accident.
+- 51 invoices across ten weeks, 2–4 lines each (~140 lines), spanning PAID / PARTIAL / CREDIT, discounts on some and 17% GST on others, cash / card / online tenders. A payment row per settled invoice with the app's own `po:<id>` reference, plus an opening-balance settlement where the script asks for one.
+- Lines walk the unit chain — carton (syrups, ×24), box (×100) and strip (×10) on tablets/capsules, and bare BASE-unit lines (single-form products: creams, injections), which is the "nothing to convert" case the entry screen must also draw. Every fifth line takes an UNDATED lot (`expiry: null`, legal since 183 decision 4), which FEFO allocates last.
+- The catalog pool is chosen BY DOSAGE FORM, not by position: the form decides the chain, and a pool drawn off the top of the catalog would be all tablets, so the carton line the owner asked to see converted would never appear.
+
+**Reconciliation bug found and fixed during the build.** §12's legacy GRN chain part-settles Muller with a `SupplierPayment`. The pharmacy suppliers desk reads EVERY `SupplierPayment` a supplier has but takes its charges only from `PurchaseItem` purchases — so that payment is a credit the screen shows with no matching debit, and Muller's seeded balance would have been ~Rs 11,958 higher than the desk's. Rather than paper over it, the script gained `externalPaid`: the plan hands §12's actual `payAmt` to §12b, the book COUNTS it without re-emitting the row, and the fact matches the screen. Caught by the reconciliation test, not by reading.
+
+**Plan/seeder wiring.**
+- `plan.ts` — new §12b; new `productUnits` / `purchaseItems` accumulators; `productUnit` added to `DEMO_TENANT_TABLE_ORDER` after `medicine`, `purchaseItem` after `pOItem` (both FK-safe forward, and correctly ordered for the sweeper's reverse delete); `DemoPlan` now publishes `supplierFacts`; stats gained suppliers / purchases / purchaseLines / supplierPayments.
+- `prisma/seed-demo.ts` — `persistProductUnits` upserts on the REAL `(medicineId, level)` unique (the 192 §4 catalog pass owns those slots with cuid ids on any previously-seeded DB, so an id-keyed upsert would take the CREATE path and trip P2002), records demoId → actual id, and the purchase lines' `productUnitId` (a soft reference, no FK) are remapped through it — the same treatment `account`/`journalLine` already get. `barcode` is deliberately excluded from the update: the catalog pass owns the scannable pack codes and `(tenantId, barcode)` is itself unique.
+
+**Production is unreachable, and it is now asserted.** `assertGate` was replaced by a PURE `demoSeedGate(env)` that returns every reason it refuses. The production test is FIRST and independent: `APP_ENV=production` refuses whatever `SEED_DEMO` is set to, reading through spec 231's shared `isProductionBoot()` rather than re-testing `APP_ENV` by hand. `SEED_DEMO_COMMAND` is exported and printed on both the refusal and the success path. New `packages/db/src/demo-seed-gate.spec.ts` walks eight env combinations, pins production-first ordering, and asserts `deploy.sh` contains neither `seed:demo` nor `SEED_DEMO`.
+
+**The seeder's own output** now ends with the supplier book — a row per supplier with its terms, its state, its invoice count, its outstanding and its overdue — then the exact command and both required env values, and the line that it is idempotent. So the next person testing the desks knows which supplier demonstrates which state without opening the code.
+
+**Tests.** New `packages/db/src/demo/purchase-book.spec.ts` (17) re-derives every number from the EMITTED ROWS — decoding the order note the way `decodePurchaseMeta` does — rather than trusting the book: terms/state coverage, each state demonstrated in its numbers, per-supplier ledger reconciliation, one payment per settled invoice with the app's reference, volume and date spread for pagination/infinite-scroll/last-days, all three settlement states each consistent with its own money, `p105` meta with a discount and a tax present, ≥2 lines per invoice, exact pack↔base conversion on every pack line with base-unit lines present and `box`/`strip`/`carton` all reachable, dated AND undated lots with the batch matching its line, stock == batches in base units, byte-identical re-build (the idempotency the upserts rely on), FK-safe table order, and the guard throwing on a book whose numbers cannot be true. `demo-seed.spec.ts` and `unit-chains.spec.ts` re-run green.
+
+### Gates
+`pnpm lint` clean (16/16). `pnpm typecheck` clean (29/29). Targeted jest runs: db 46 passing (purchase-book 17, gate 12, demo-seed + unit-chains 29 — note gate/demo overlap counted per suite), ui 303 passing across the date-picker and related suites. `pnpm test:unit` / `test:e2e` / `build` deliberately not run (controller runs the full gates). Vendor untouched; no schema change, no migration.
+
+### Notes
+- The 245 §4 rule now has a third control behind it: any floating panel — a select's results, a date picker, a menu, a tooltip — starts PORTALLED and on the shared popover primitive, because a transformed ancestor creates a stacking context no `z-index` escapes AND because a hand-rolled portal has to solve the focus-scope problem that primitive already solves.
+- The clinic-side `/purchase` (98/GRN) supplier ledger and the pharmacy suppliers desk (105) compute from different tables and cannot both be fully coherent on a supplier that has rows in both shapes. `externalPaid` makes the pharmacy desk — the one under test — exact. A future step that retires the 98 GRN chain would remove the ambiguity entirely.
+
+---
+
+## 246 — demo-seed-repair-and-repeat-failures — DONE (2026-08-10)
+
+**WORK TYPE:** FIX — branch `fix/246-demo-seed-repair-and-repeat-failures`. No schema change, no migration, RLS unchanged.
+
+### §1 The demo seeder against a used database
+
+**The captured P2002, named.** `modelName: 'Sale', target: null` after ~29 model groups. `target: null`
+is Prisma failing to name the constraint back; the constraint is `sales_tenant_id_number_key`, the
+UNIQUE INDEX the 213 §5.1 migration (`20260807000000_sale_numbers`) puts on `("tenant_id","number")`.
+The group count corroborates it: `sale` is the 31st plan table and `persist()` logs nothing for an
+empty group, so "29 groups then a throw" lands exactly there.
+
+**Cause.** `buildDemoPlan` hand-built its numbers (`number: saleSeq`, 1..15). That is fine on an empty
+database and guaranteed to collide on a used one: staging holds 40 real sales, so 1–40 are taken. The
+demo sale ids (`d_sale_*`) did not exist yet, so the id-keyed upsert took the CREATE path straight onto
+the occupied numbers. Idempotency had only ever been proven against an EMPTY database, where a
+fixed-id upsert IS idempotent; against a database holding real rows it is not.
+
+**Fix.** New `persistSales()` in the seeder, beside the existing `persistAccounts` / `persistProductUnits`
+/ `persistTokens` special cases. A demo sale that already exists keeps the number it claimed and is
+updated in place (nothing renumbered, nothing burned). Fresh ones claim a BLOCK from the tenant's own
+`sale_number_sequences` under `SALE_NUMBER_LOCK_NAMESPACE` + `TENANT_ADVISORY_XACT_LOCK_SQL` — the same
+counter and the same lock the till takes, imported from `@mp/db`'s `advisory-locks` rather than
+re-written. The claim is floored at `max(number)+1`, so a counter lagging its book (restored/backfilled
+outside the app) still yields free numbers; it only ever moves the counter forward, so the live path is
+unaffected. The plan keeps a placeholder `number` (it must stay a valid Prisma create input) which is
+destructured away before the row reaches the database.
+
+**The rest of the class, found by looking.** `Stock` has the same shape: real unique
+`(tenantId, branchId, medicineId)`, id-keyed demo upsert, and FOUR app paths (`applyStockDelta` in
+pharmacy, purchase, transfer, pharmacy-inventory) that create that row with their own cuid. On a box
+where a human sold or received against a demo medicine it would have thrown next. New `persistStock()`
+upserts on the real unique. Nothing soft-references `stock.id`, so no remap.
+
+**Transaction scope — a deliberate divergence from §1.2, recorded.** The bullet asks for "one
+transaction". The seeder is chunk-per-transaction BY DESIGN (each table's chunk its own RLS tx) because
+a single interactive transaction over ~60 tables and thousands of rows trips Prisma's interactive-tx
+timeout — that is why the design is what it is. What §1.2 is actually protecting is honoured: the
+number claim and the sale inserts are in ONE transaction (a failure burns no numbers and leaves no
+half-numbered sales), and every other write is an idempotent upsert, so a partial run is simply
+re-runnable to completion rather than a corrupted state. Widening this to one global transaction would
+trade a real regression for a formality; flagged rather than done silently.
+
+**Gates re-asserted:** `APP_ENV=staging` AND `SEED_DEMO=1`, production refused first and independently
+(231), `deploy.sh` never invokes it — all still asserted by `demo-seed-gate.spec.ts`.
+
+**Tests.** `demo-seed-idempotency.spec.ts` gains the reproduction: it clears the demo's own sales,
+plants live-shaped (cuid) sales on numbers 1–3, pushes the sequence back to 1, and re-seeds. That threw
+P2002 before; it must now succeed, land every seeded sale above the planted ones, keep numbers unique,
+leave the counter above the highest, and change nothing on a second run. Real-DB only (skips with a
+warning where no `DATABASE_URL` is reachable), so `demo-seed-gate.spec.ts` also carries a structural
+guard that runs in the plain gate.
+
+### §2 The in-body title band
+
+**Screens that still carried one — the enumeration §2 asks for.** Exactly three, all `<div className="ptop">`:
+Purchases desk (list view), Purchases entry view, Suppliers desk. No other tenant screen has one; the
+`<h3 className="mp-title">` in Appointments and `<h2 className="mp-title">` in Patients are entity names
+inside cards, not page bands, and were left alone.
+
+**Why the 242 guard passed while the defect was on the owner's screen.** It looked for a page-level
+`<h1>` and for `<h1 className="mp-title">`. These bands contain NO heading element at all — they are
+`<span className="ptop__title">` inside `<div className="ptop">`, i.e. the shell's topbar anatomy
+rendered a second time in the body. A guard written against the ELEMENT rather than the THING was one
+refactor away from useless, and this was that refactor.
+
+**Demonstrated failing before, passing after.** Both predicates were run over `git show HEAD:<file>` and
+the fixed files:
+
+    PharmacyPurchaseClient.tsx  BEFORE: 242=false 246=true   AFTER: 242=false 246=false
+    SuppliersClient.tsx         BEFORE: 242=false 246=true   AFTER: 242=false 246=false
+
+The 242 predicate never fired — before or after. The new one fired on both files before and on neither
+after. The demonstration is also made DURABLE: the pre-fix markup is held as a fixture in the new spec
+and both predicates are run against it, so the reason the old guard missed it is itself a test.
+
+**The fix.** New `components/shell/topbar-slot.tsx` — a slot in the same shape as the existing mobile
+chrome slot. A screen publishes `{tag, badge}` as PRIMITIVES (never a ReactNode: a node is a fresh
+object every render and would re-render the shell on every keystroke in a search box), the shell draws
+them in its own `.ptop`, and the icon and tone stay the shell's so two screens cannot drift into two
+different-looking badges. `TopbarPublish` is a render-nothing component so the diff reads as "the band
+moved". `sameTopbarExtras` swallows a no-op republish. `.ptop__badge` styles restated unscoped in
+`globals.css` (they were under `.mp-pur2`, and the shell is outside the page's class).
+
+### §3 Try again / Retry
+
+**Diagnosed before anything was changed, and it is NOT the "handler was never wired" case.** The click
+reaches the handler and `reset()` IS called. The dead line was the CANCELLATION. `useRecovery` held the
+fallback-navigation timer in a `useRef` cleared by the effect cleanup, on the reasoning that "`reset()`
+recovered and took this boundary off the screen". That is only half true, and the wrong half: `reset()`
+re-renders the failed subtree, and if the cause is still there — which is why someone is pressing the
+button — it throws AGAIN and React re-mounts the boundary's child. A re-mount runs the previous
+instance's cleanup. So the FAILURE path cancelled its own recovery, and the fresh instance came back
+`phase: 'idle'` — no spinner, no notice, no navigation. Press, flicker, nothing. Exactly the report,
+twice.
+
+**Fix.** The timer is module-scoped (`pendingNavigation` + `cancelPendingRecovery`), so it outlives the
+re-mount; the unmount cleanup no longer touches it. If `reset()` genuinely recovered, the navigation
+reloads a page that now works — a cheap reload on the good path is the price of never being dead on the
+bad one, which is the trade §8 of the spec makes explicit. The probe, the honest failure notice, the
+spinner and busy label, and the offline connectivity path are unchanged.
+
+**Every error component, grepped and enumerated** (asserted file-by-file in the new spec, because 150
+records this class of fix failing twice for want of exactly this list): `app/error.tsx`,
+`app/global-error.tsx`, `app/not-found.tsx`, `app/(app)/not-found.tsx`, `app/(vendor)/error.tsx`,
+`app/(vendor)/not-found.tsx`, `app/offline/page.tsx`, `app/no-access/page.tsx`,
+`app/session-expired/page.tsx`, `app/tenant-gate/page.tsx`, `components/error/ErrorState.tsx`,
+`components/error/AppErrorState.tsx`, `components/error/marks.tsx`. Every reset button in the app is
+bound in exactly two places — `ErrorState`'s `ActionButton` and `global-error`'s inlined markup — and
+both call `recovery.attempt`.
+
+**NOT verified on the deployed page.** §3 and §7 require pressing the button with the API genuinely
+broken on staging. That needs a deploy and a live break; this session has neither. Flagged, not claimed.
+
+### §4 Date picker placement
+
+`resolveFraming` is untouched (device: panel family vs bottom sheet). New `resolvePresentation` adds the
+second, orthogonal question — is the field inside a layer — and returns `'popover' | 'sheet' | 'modal'`.
+`isInsideLayer` walks up for `[role="dialog"], [role="alertdialog"], .sheet, .drawer`; it takes the
+element so it is provable against a hand-built tree. The layer rule applies to an explicit
+`framing="popover"` too: `framing` picks the FAMILY, and a caller that pinned the family did not thereby
+ask for the flip.
+
+The centred framing is built on `LayerDialogRoot` — the app's own dialog root — not a second hand-rolled
+overlay. That is what makes "close only the picker" true by construction: it registers on the shared
+layer stack (195 §3) and refuses any dismissal raised for a layer that is not in front (234 §3.2 /
+239 §1). New `.dpop--modal` / `.dpop__scrim` / `.dpop__x` CSS; the panel carries no inline positioning,
+so a taller month cannot reposition it (asserted). Mobile `.dpop--touch` with its swipe is untouched;
+the keyboard still lands on the focused day in both framings.
+
+Three cases in `date-picker-portal.spec.tsx` asserted 245 §1's now-superseded behaviour (a field inside a
+dialog/drawer opening the ANCHORED portalled panel). Rewritten in place with the supersession recorded,
+not deleted. Note the nested picker is a real modal, so it `aria-hidden`s the surface behind it while
+open — correct, and the reason the rewritten outside-press case now clicks the picker's own scrim.
+
+### §5 Field anatomy
+
+Record payment → Amount and Add/Edit supplier → Opening balance gain `.input-wrap` + `<Banknote>` +
+placeholder (`pdPayAmountPh` / `pdSupOpeningPh`). Record payment → Method loses its `<Landmark>` icon —
+selects in this app carry none, only the chevron distinguishes a select from an input (spec 63). Both
+money fields keep `MoneyInput`, so 239's decimals and ±1 / Shift ±100 stepping are unchanged.
+
+### §6 Import
+
+**Suppliers: built.** `apps/api/src/purchase/supplier.importer.ts` — a real `supplier` entity on the
+spec-12 engine (columns: name, contact person, phone, terms, opening balance, notes; only name
+required). `purchase.manage`, the same permission the desk's create/edit needs, so an import is never a
+back door around the screen's authorisation. Natural key = trimmed, case-insensitive NAME: `Supplier`
+carries no unique constraint and this step changes no schema, and the name is the only column a human
+maintaining a spreadsheet repeats exactly. `PurchaseRepo.importSuppliers` / `listSuppliersForExport`
+added on the abstract seam, Prisma impl and the in-memory fake; the match-then-write happens inside one
+`runWithTenant` transaction, so RLS binds it. `active` is deliberately never written — deactivating a
+supplier is a desk decision a stale spreadsheet must not undo. Registered from `PurchaseModule`'s
+`onModuleInit` exactly as 18 registers the medicine importer; the sample `demo_supplier` importer is
+untouched. Upload and apply are `@Audited` by the engine's own controller.
+
+Web side: `CatalogueImportDialog` gained an `entity` prop (defaulting to the catalogue, so every existing
+caller is byte-identical) rather than growing a second copy, and now also offers the downloadable
+per-row error report the engine has always served but no desk exposed. Suppliers opens it on both tiers.
+
+**Purchases: removed.** `ImportExportActions` no longer knows how to draw a disabled control — Import is
+absent when a desk passes no `onImport`. The `pdImportUnavailable` string is deleted from both catalogs.
+The 244 §4 test that asserted the inert button is rewritten to assert the opposite, with the
+supersession recorded.
+
+### Gates
+
+`pnpm lint` clean (one pre-existing warning in `doctor-portal.repositories.ts`, untouched).
+`pnpm typecheck` clean, 29/29. Suites run directly rather than through `pnpm test:unit`:
+`@mp/ui` 83 suites / 1490 tests green, `@mp/api` 165 / 2014 green, `@mp/db` 64 / 444 green
+(the real-DB idempotency spec skips without `DATABASE_URL`, by design), `@mp/i18n` 4 / 28 green.
+Vendor untouched; no production data path altered.
+
+### Carried forward
+
+- §2, §3 and §4 are accepted on the DEPLOYED page per §8 and have NOT been so verified here.
+- The §1 seeder fix is likewise unproven against the real staging box; the reproduction test needs a
+  reachable `DATABASE_URL`.
