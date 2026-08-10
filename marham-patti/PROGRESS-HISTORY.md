@@ -11117,3 +11117,51 @@ no hex literal, both-theme reduced-motion answers, and EN/UR parity for every `p
 
 ### Gates
 `pnpm lint` ✅ · `pnpm typecheck` ✅ (the controller runs the full suites).
+
+## 238 — rx-desk-gating-and-pwa-focus — DONE (2026-08-10)
+
+**Type:** FIX. Branch `fix/238-rx-desk-gating-and-pwa-focus`. Spec `/specs/238-rx-desk-gating-and-pwa-focus.md`. No CODEREF in range. No schema, no migration, no RLS change, no stored row touched.
+
+### §1 — Rx Desk belongs to clinic + pharmacy
+
+232 §1.2 moved Rx Desk into the Pharmacy group (right) and gated it on `pharmacy.pos` alone (insufficient). Dispensing is pharmacy; the SUPPLY of prescriptions is clinic. With no clinic module nothing ever writes a prescription, so on the owner's pharmacy-only tenant the screen was a nav entry that could never hold a row.
+
+- `apps/web/lib/nav.ts`: new optional `NavItem.requiredFlags?: string[]` with **AND** semantics (all listed flags must be on). New exported `navItemFlags(item)` — the ONE reader of both the single- and multi-flag shape, so the filter and the 232 §1.4 guard can never disagree. `isNavItemVisible` now checks `navItemFlags(item).every(...)`; single-flag entries filter byte-for-byte as before. New `RX_DESK_FLAGS = ['clinic.consultation', 'pharmacy.pos']` and `canReachRxDesk(me)`, which answers off the registry entry itself.
+- The Rx Desk entry now declares `requiredFlags: [...RX_DESK_FLAGS]`. Because every surface is derived from the one registry, the sidebar, the sidebar tree, the mobile dock and the mobile More sheet all lose it together with no further code. Global search needed no change: `GET /search?q=` returns DATA entities, it has no module list.
+- Route refusal (`apps/web/app/(app)/rx-desk/RxDeskClient.tsx`): the screen now reads `GET /auth/me` via `useSession()` and asks `canReachRxDesk(me)` before anything else — fail-closed while the payload is in flight, `noaccess` (existing `rqNoaccess` copy, no new i18n keys) when either flag is off, and it never fetches the queue in that case. Hiding a link is not hiding a route; this closes the typeable URL.
+- Guard shape extended, server side: `RequireFeature` (apps/api/src/flags/flags.constants.ts) now takes rest args and stores a LIST; `FeatureGuard` (flag.guard.ts) normalises `string | string[]`, requires ALL keys, and still 404s without naming which key was missing. A bare string still works, so no existing route changed. Unit tests added to `flag.guard.spec.ts` (both halves held / either missing / single-key both forms / empty list = no gate).
+
+**DECISION, deliberate deviation, recorded per CLAUDE.md (no approval gate exists):** the spec's "its endpoints refuse a tenant lacking either flag" was NOT applied to `/online/ops/*`. That controller is spec 34's online-pharmacy vertical, gated on the separately-sold `pharmacy.online`, and it also serves rider assignment / order status / fulfilment. Rx Desk in code reviews ONLINE orders (not, as the spec assumes, clinic prescriptions routed to the counter by spec 18 — no such counter queue endpoint exists). Adding `clinic.consultation` there would have broken online prescription review for a Standard-package pharmacy WITHOUT a clinic — a working, sold capability — which §1's own "no business-logic change" forbids. What holds instead: the reporting tenant's flags are `pharmacy.pos` + `pharmacy.inventory`, so `pharmacy.online` is off and those endpoints ALREADY 404 for it; the data path was never reachable, only the shell around it was, and that is what the route guard closes. The multi-flag guard shipped and is proven by tests so the next module that genuinely needs a two-flag endpoint can state it in one line. This ties into the spec's own "deferred, not settled": Rx Desk gets a proper review when the Clinic module is built, and the mismatch between what the spec believes the screen does and what it does today should be settled there.
+
+### §2 — the installed app reloaded on refocus
+
+**TRIGGER, named before the fix (§2.1):** there was NO `location.reload()`, no `router.refresh()`, no stale-build check and no service-worker navigation. It was `apps/web/components/shell/PinGate.tsx`. The gate wraps `<AppShell>{children}</AppShell>`, and its `visibilitychange` handler called `evaluate()` on EVERY return to the foreground, which unconditionally set `outer = 'checking'`. That branch renders a bare spinner INSTEAD of `{children}`, so the entire app tree unmounted for the length of the `/auth/pin/state` round-trip and then remounted. Indistinguishable from a reload, and it destroyed every piece of in-progress state — a cart being built, an amount typed into Take Payment, an allocation mid-adjustment. It only ever happened in the INSTALLED app because `evaluate()` returns at the `isStandalone()` branch in a browser tab, which is exactly the shape of the owner's report (desktop install, alt-tab; same on mobile when switching apps).
+
+- Fix: a `decided` ref marks whether the gate has ever decided. Only the FIRST decision may show `'checking'` — a cold open, where nothing is mounted to lose. A foreground re-decision leaves the tree exactly as it is and refetches underneath it. Refresh the DATA, never the PAGE.
+- 178/179 unchanged: the state is still re-evaluated on every foreground transition, `pinGateNeeded(idleMinutes)` still raises `'gate'` on a qualifying open, a not-yet-enrolled user is still gated, and 201 §2's `Ctrl+Shift+L` on-demand lock still covers the screen without unmounting it.
+- `apps/web/public/sw.js`: dropped `self.skipWaiting()` from `install`. It forced a newly-installed worker past waiting into `activate`, where it claims open clients and deletes every older cache — applying a new build under someone mid-sale. The default lifecycle now applies: the new worker waits and takes over on the next natural start. Nothing goes stale meanwhile — navigations are network-first and no application code is cached, so a waiting worker only means the shell precache is a version behind. `clients.claim()` stays in `activate`, which is now only reached on a genuine takeover. Offline fallback, push and notificationclick untouched. Offline queue and sync untouched.
+
+### Tests
+
+New suite `packages/ui/src/lib/rx-desk-gating-and-pwa-focus.spec.tsx`: §1 — both flags stated once, entry still single and still in Pharmacy; absent for pharmacy-only AND for clinic-only; present for clinic+pharmacy; every other pharmacy row survives; sidebar tree, mobile dock and More sheet all lose it; the route refuses (source-pinned); the 232 §1.4 guard passes with a multi-flag entry; AND-not-OR proven three ways; single-flag entries unchanged. §2 — the diagnosis pinned in prose, the `visibilitychange` re-check still present, `'checking'` now conditional on the first decision, the unconditional form asserted absent, the 178 gate paths still present, no `location.reload` / `router.refresh` in PinGate or AppShell, and the service worker no longer skips waiting while keeping precache / claim / offline / push.
+
+Updated `packages/ui/src/lib/package-nav-gating-and-identity-fixes.spec.tsx`: the 232 guard now reads `navItemFlags` instead of the raw `requiredFlag` field, and the two 232 expectations that 238 supersedes (rx-desk gated on `pharmacy.pos`; pharmacy-only tenant REACHES Rx Desk) are inverted with the reason stated inline.
+
+### Gates
+
+`pnpm lint` clean (one pre-existing unrelated warning in doctor-portal.repositories.ts). `pnpm typecheck` clean. `pnpm prisma generate` not needed — schema untouched. Per CLAUDE.md the agent did not run test:unit / test:e2e / build; the controller runs the full gates.
+
+### Acceptance not verifiable here
+
+§3 requires a REAL installed app on desktop and mobile: alt-tab away and back with a cart holding lines and an amount typed into Take Payment, the live indicator (237 §4) recovering on its own, and the PIN gate still firing where 178/179 specify. No browser harness exists in the repo, so these are covered by source-level guards plus reasoning above and need the owner's device check.
+
+## 238 — rx-desk-gating-and-pwa-focus — gate fix (2026-08-10)
+`pnpm test:unit` failed in two @mp/ui suites, one root cause: the 238 §2 explanatory comment in
+`apps/web/components/shell/PinGate.tsx` contained the literal `location.reload()`. Both suites read
+shell sources as TEXT — `rx-desk-gating-and-pwa-focus.spec.tsx` asserts PinGate never contains
+`location.reload`, and `client-nav-and-layer-gestures.spec.tsx` sweeps `app/(app)` +
+`components/shell` for hard navigations and expects only `ImpersonationBanner.tsx`. Reworded the
+comment to "No hard page reload is involved"; behaviour untouched. A repo-wide re-grep of the swept
+dirs for `window.location.assign|replace`, `window.location.href =`, `location.reload(` and
+`router.refresh` now returns only the justified impersonation exit. `pnpm lint` and `pnpm typecheck`
+both pass.
