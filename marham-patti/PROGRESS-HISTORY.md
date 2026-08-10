@@ -10675,3 +10675,321 @@ Two suites, 7 tests, all fallout from step 234 touching code that earlier steps 
 
 Gates: `pnpm lint` clean (one pre-existing unrelated warning in doctor-portal), `pnpm typecheck` clean,
 the two suites 87/87 green. No new features, no scope change.
+
+---
+
+## 235 — inventory-polish-r3 — DONE (2026-08-09)
+
+**Branch:** `fix/235-inventory-polish-r3` · **WORK TYPE:** FIX · **Spec:** `/specs/235-inventory-polish-r3.md`
+**Schema:** none. **RLS:** unchanged. **Flags/permissions:** unchanged. **Endpoints:** none added.
+FEFO, stock decrement, unit conversion, valuation and adjustment arithmetic untouched.
+
+### §1 — the FEFO warning's bottom spacing, and the audit the spec asked for
+
+Reported a THIRD time (229 §2, 230 §4). The audit finding, recorded because the spec predicted a
+second ungrepped implementation and that is NOT what this was:
+
+* The warning **is** the component reference's kit alert (`component-reference.html` 425-438) on
+  BOTH surfaces already — one piece of markup in `PharmacyInventoryClient` (`pinvFefoWarnTitle`
+  occurs exactly once), rendered by the shared `Panel` as a drawer on desktop and a `MobileSheet`
+  on the phone. There is no bespoke second box. 229 §2 and 230 §4 were right about the box.
+* What both rounds missed is that **the reference declares no outer spacing at all**. `.alert` is
+  a box; every previous alert in this module happened to be a direct child of a flex parent whose
+  `gap` supplied the space (`.drawer__body` 16px, `.modal__body` 14px, `.sheet__body` 13px). The
+  FEFO warning is the first one that is NOT — its parent is the plain block holding the section
+  heading, the hint, the warning and the batch table — so a declaration that was missing all along
+  only became visible here. A per-selector diff against the reference came back clean twice for
+  exactly that reason: the missing property was not in either side's declarations.
+
+Fix, at the COMPONENT level so every alert in a drawer or sheet inherits it:
+`.mp-inv2 .alert, .mp-inv2-sheet .alert { margin-bottom:var(--space-5) }` — one rule, both
+surfaces, both themes (no colour touched). Two carve-outs stop it becoming the §2 fault in a new
+place: `:last-child` (an alert that ends a surface has nothing to breathe against) and the three
+gapped hosts (`.drawer__body > .alert`, `.modal__body > .alert`, `.sheet__body > .alert`), which
+already own the rhythm and would otherwise have the margin stack on top of their gap.
+
+### §2 — "Value to reorder": the owner's diagnosis confirmed, cause named
+
+The owner was right and 217 §3 was measuring the wrong element. Two spacings were stacking under
+`.reorderline` on Low stock & near expiry:
+
+1. `.mp-inv2 .invtabblock { gap:18px }` — the parent, and the mockup's own value (2466);
+2. `.mp-inv2 .tbl-wrap { margin-top:var(--space-6) }` (20px) — a rule that exists for the
+   **Inventory** page, where the table follows the KPI row with no flex parent between them.
+
+18 above, 18 + 20 below. **The redundant one is the child's**: the mockup's `.tbl-wrap` (631)
+declares no margin at all, and inside a flex column the parent owns the rhythm. So it is resolved
+at the parent level — `.mp-inv2 .invtabblock > .tbl-wrap { margin-top:0 }`, the block's children
+keep the block's gap and nothing else — and NOT with a negative margin. `.invtabblock` exists only
+on this screen, so Inventory's own `.tbl-wrap` spacing is untouched.
+
+**The finding worth keeping (spec §7):** 217 §3 diffed `.reorderline` selector-by-selector against
+the mockup, matched declaration for declaration, and the report survived — because the space under
+an element can come from its PARENT's gap or from the NEXT element's margin, and neither appears
+in that element's own declarations. When a spacing complaint survives a clean diff, measure the
+parent and the sibling before measuring the child again.
+
+### §3 — the item picker gains real search (server)
+
+`pickerMedicines` kept 190's COUNTER predicate: brand name, generic name, exact barcode. It now
+matches everything the Inventory header's advanced search matches (212 §6) — brand name, generic
+name, **barcode (partial, `contains`)**, **shelf location** and **category**.
+
+* New `medicinePickerWhere(q, categoryIds)` in `pharmacy.repositories.ts`, used by
+  `pageMedicines` and `countMedicines` so the "Searching N items…" figure counts the same set the
+  page pages. Both signatures gained `categoryIds: string[]`.
+* **Judgement call:** the counter's `medicineSearchWhere` (POS product search) is left EXACTLY as
+  it was. Widening it would have changed POS behaviour, which this spec does not ask for and 187
+  freezes; the two predicates now sit side by side with a comment saying which surface each serves.
+* Category cannot be a nested Prisma predicate — `Medicine` carries a bare `categoryId` and has no
+  relation field to `ProductCategory`. So `pickerMedicines` reads the active category list FIRST
+  (it already read it to LABEL the rows), resolves the names matching `q` to ids, and passes them.
+  One read, both jobs; matching is limited to ACTIVE categories, which is the same list that
+  labels the rows, so a match and its label can never disagree.
+* Client: unchanged. Same `/pharmacy/medicines/picker` endpoint (it occurs once in the screen),
+  same cursor, same shared 250ms debounce (`usePagedOptions`), same 228 §2 type mark on the row.
+  One search path — only the predicate widened.
+
+### §4 — the picker says it is loading more
+
+The end-of-list page loader reused the FIRST-page "Searching N items…" card atom (`selsheet__busy`,
+a 26px-padded centred card), which reads as the pane still loading rather than as a further page
+arriving under rows already on screen. Split into its own skin atom: `loadMore`, which on the phone
+is the mobile inventory list's own **`.infload`** foot (214 §4) — spinner, 12px semibold, 16/14
+padding, hairline rule above — so the full-page picker and the list it was scrolled from read as
+one surface. Styled as `.mp-mobile .selsheet .infload`, geometry copied from `.mp-inv2 .infload`
+rather than re-invented. Rendered only while `state.loadingMore` is true, so it clears the moment
+the page lands and is simply absent at the end of the list. Failure handling untouched (the 228 §1
+fallback to rows already in hand still stands — the spec marks retry "unchanged").
+
+### §5 — Export / Import on the mobile Low stock & near expiry screen
+
+Added to `mobileViewRow` as `.miconacts` beside the view toggle — Inventory's exact position and
+anatomy (214 §3), wired to the same `CatalogueIO` capability (`useCatalogueExport` + the shared
+import dialog this screen already opens from its desktop page head). No new endpoint, no second
+export invented. 229 §3's reasoning is superseded and the comment says so: it assumed the pair
+belonged in the phone header slot (taken here by the back control), but Inventory carries it in
+the view row, not the header.
+
+### Files
+
+`apps/web/app/globals.css` · `packages/ui/src/components/search-select.tsx` ·
+`apps/web/app/(app)/pharmacy/inventory/alerts/StockAlertsClient.tsx` ·
+`apps/api/src/pharmacy/pharmacy.repositories.ts` · `apps/api/src/pharmacy/pharmacy.service.ts` ·
+`apps/api/src/pharmacy/__fakes__.ts` · `apps/api/src/pharmacy/picker-search.spec.ts` (new §3 cases,
+including the cross-tenant negative: neither a category name nor a shelf code reaches another
+tenant's rows) · `packages/ui/src/lib/inventory-polish-r3.spec.tsx` (new).
+
+### Self-checks
+
+i18n ➖ (no new keys — `pinvImport`/`pinvExport`/`pinvPickerLoadingMore` all existed).
+Isolation ✅ — every widened read still goes through `runWithTenant`; the category ids are resolved
+from the caller's OWN tenant list, so the new branch cannot widen past the tenant. Flags ➖.
+Audit ➖ (no state changes). Offline ✅ — the picker's fallback path is untouched. Design ✅ —
+tokens only, both themes, 44px targets kept via the existing `.miconacts__btn::after` hit area,
+no hex literal added. Gates: `pnpm lint` and `pnpm typecheck` clean.
+
+### Deviation recorded
+
+The spec's §7 stop instruction asks for `Next:` to read `none — awaiting next spec block
+[HUMAN_REQUIRED]`. CLAUDE.md fixes the canonical no-next-spec string as `none — build order
+complete` and the controller parses that line, so PROGRESS.md carries the canonical string. Same
+meaning: there is no step 236 authored, and the next block has to be written before work resumes.
+
+---
+
+## 236 — take-payment-redesign-and-udhaar-wording — DONE (2026-08-10)
+
+**WORK TYPE:** FEATURE — branch `feature/236-take-payment-redesign-and-udhaar-wording`
+**Spec:** `specs/236-take-payment-redesign-and-udhaar-wording.md` · **Mockup:** `specs/mockups/pharmacy/pos-desktop.html` (recommitted this round)
+**Schema:** none. **Migration:** none. **RLS / auth / permissions / flags:** unchanged. **Endpoints:** none added or changed.
+
+### Spec gate
+The header gate passed before any code: the recommitted `pos-desktop.html` carries both `.paydlg__col` (40 hits) and `.credblk--owes` (18 hits), so the anatomy was copied from the file and never composed from prose.
+
+### §1 — the desktop dialog is two columns
+`PaymentPanel`'s desktop return is rebuilt to the file's `.paydlg`. `PosClient` mounts it as
+`<DialogContent className="paymod paydlg p-0 gap-0 max-w-[940px]" hideClose>` — `paymod` STAYS on the box
+deliberately: every payment atom in `globals.css` (`.paytender`, `.paychips`, `.paymeth`, `.credblk*`,
+`.alloc*`, `.paylabel`) is written to that scope, so keeping it is what makes the two surfaces unable to drift.
+234's `max-w-[500px]` is retired.
+
+- `.paydlg__hd` — title over the customer name, the `Esc` chip as a HINT, and a real `.paydlg__x` close control.
+- LEFT `.paydlg__col` — `.paydue` hero (amount due + line/unit/discount read-back), the advance offer, the Rx
+  confirm, the `.paymeth` tiles, `.paytender` + `.paychips` (Udhaar chip included, 211). **No keypad** (199 standing override).
+- RIGHT `.paydlg__col--right` — `.credblk` at the top, the allocation beneath, the received-vs-allocated
+  reconciliation at the base, then the outcome rows.
+- `.paydlg__ft` spans both columns: a per-state `.paydlg__hint` sentence, Cancel (ghost), Confirm (primary).
+- Split mode reveals `.paymix` (one 34px row per method + `.paymix__t` total) instead of stacking a
+  full-height `.paytender` per method — the latter is what pushed the allocation off the bottom.
+
+**Judgement call recorded (§1, split):** the mockup draws a *tendered* figure above the `.paymix` boxes and
+reconciles the two. This panel has no such figure to draw — since 194 §5 each split box IS what that method
+took — and inventing a second "tendered" number to check them against would be a NEW money rule, which this
+spec freezes. `.paymix__t` reconciles against the amount due instead: the same question, answered with the
+arithmetic already in hand. Recorded so a later diff does not "restore" a row with nothing honest to hold.
+
+**Judgement call recorded (§1, right column):** 234's `.alloc` appears only when there is a pot to direct.
+That is still the only state with EDITABLE destinations (a walk-in has no ledger to land on — 234 §1.2 refused
+to invent that path), but the column it lives in is now half the dialog, so `deskAlloc` renders the block in
+EVERY state and the difference is only whether a row is a field or a figure. Nothing in it computes:
+`paidNow`, `summary.changeDue` and `autoCredit` are the frozen summary's own numbers, restated.
+
+**Defect found and fixed while completing the in-progress work:** `footHint` was declared ~170 lines above
+`creditState` and `headroom`, both of which it reads. A `const` that reads a later `const` is a
+temporal-dead-zone `ReferenceError` on the first paint — the desktop dialog would have crashed in every
+state, and `pnpm typecheck` catches it as TS2448. Moved below `creditState`, after the phone's early return
+(the footer sentence belongs to the dialog only). A regression test asserts the ordering.
+
+### §2 — nothing clips the allocation
+The clipping ancestor is the kit dialog's own box: `DialogContent` declares `max-h-full overflow-y-auto`, a
+scroll container wrapping the whole composition, and `.paymod__body` added a second cap
+(`max-height:min(66vh,620px)`). `.paydlg` now declares `overflow-x:visible; overflow-y:visible`, which wins
+because `@tailwind utilities` sits at the TOP of `globals.css` and the hand-rolled rules come later in the
+cascade (source order, not specificity — recorded because deleting the override would silently restore the
+defect). `.paymod__body` is no longer mounted on the desktop path. The ONE scroll left is
+`.paydlg__body`'s own (`flex:1; min-height:0; overflow:auto`) — a real, usable scroll, never a hidden
+overflow that swallows the last allocation row. Below 1000px the two columns stack.
+
+### §3 — the fifth credit state, `--owes`
+`creditState` gains `'owes'`, decided by `owesFromBefore = !!customer && outstanding > 0.001` — the OLD
+balance, not what this sale adds. `outstanding` is the DUE half of `customerBalanceParts` (227 §2.2), so a
+customer in advance can never trip it. Precedence: `walkin` → `overnow` → `nolimit` → `over` → **`owes`** →
+`within` → `null`. It warns and never blocks (210 §4): `canPay` does not read `creditState` at all. Still
+EXACTLY ONE credit element — one `creditBlock` definition, rendered once per layout. Glyph is `ClockAlert`,
+not a warning triangle, because nothing about *this* sale is wrong; note and chip are in the warning tone.
+It reads the calm gauge, since the ceiling is not breached. CSS is declared for `.paymod` and `.mp-mobile`
+in one rule, so the phone inherits it without a second declaration.
+
+### §4 — the terminology rename
+Renamed in the **catalog** so every consumer picks it up from one place. No field, DTO or column name moved —
+`creditLimit` and `outstanding` are untouched; this is display language only.
+
+- Credit limit → **Udhaar limit**: `pharmacyPos.v2.creditLimit` (the POS add-customer FORM's field label),
+  `pharmacyPos.v13.limit`, `pharmacyPos.v8.creditLimitPart` (POS picker rows), `pcusCreditLimit` (the
+  Customers add/edit form + list + drawer), `pcusOverLimit`, `pcusStatOverLimit`, `pcusFilterOver`,
+  `pcusOfLimit`, `pcusOverLimitBy`, `pharmacyPos.v2.overLimit`, `pharmacyPos.payment.overLimit`,
+  `pharmacyPos.v12.overLimitAlert`, `pharmacyPos.v13.noLimitChip/noLimitNote`, `pharmacyPos.v15.overNowChip/overNowNote`,
+  `pharmacyPos.v8.overLimitShort`, `notifCreditOverTitle`.
+- Outstanding / Due → **Old udhaar**: `pharmacyPos.v13.outstanding`, `pharmacyPos.v15.oldCredit/oldCreditHint`,
+  `pharmacyPos.v8.creditDuePart`, `pcusColOutstanding`, `pcusOutstanding`, `pcusStatOutstanding`,
+  `pcusOutstandingCredit` (the detail drawer), `acctUdhaar`, `acctAgingTotal`, and the Customers
+  record-payment preview sentences `pcusPayClears`, `pcusPayLeavesDue`, `pcusPayClearsAndAdvance`,
+  `pcusPayAllAdvance`.
+- Headroom → **Can still take**: `pharmacyPos.v13.headroom`, `pcusHeadroom`.
+- New this round: `pharmacyPos.v16.*` — `owesChip`, `owesNote`, `walkInSub`, `cartCount`, `discountApplied`,
+  `splitAcross`, `splitTotal`, `onUdhaar`, `onUdhaarHint`, `hintConfirm`, `hintSplit`, `hintOldUdhaar`,
+  `hintUnallocated`, `hintOnUdhaar`, `hintCollect`. EN + UR parity, placeholders matched.
+
+**Hardcoded-string audit (§4, required):** grepped every `.ts`/`.tsx`/`.json` under `apps/` and `packages/`
+for `credit limit`, `outstanding`, `headroom`, `available credit` as rendered literals. **Result: the tenant
+app contains no hardcoded English for these terms at all** — every occurrence in `.tsx` is either an
+identifier (`r.outstanding`, `stats.totalOutstanding`, `creditHeadroom`), a code comment, or a `tr(lang, …)` /
+`t(…)` catalog call. Nothing had to be routed through the catalog because nothing bypassed it. Files carrying
+the terms and inspected: `apps/web/app/(app)/pharmacy/pos/PaymentPanel.tsx`,
+`apps/web/app/(app)/pharmacy/pos/PosClient.tsx`, `apps/web/app/(app)/pharmacy/customers/CustomersClient.tsx`,
+`apps/web/app/(app)/pharmacy/reports/ReportsClient.tsx`, `apps/web/app/(app)/pharmacy/suppliers/SuppliersClient.tsx`.
+Files CHANGED this round: `PaymentPanel.tsx`, `PosClient.tsx`, `apps/web/app/globals.css`,
+`packages/i18n/src/messages/en.json`, `packages/i18n/src/messages/ur.json`, and the new
+`packages/ui/src/lib/take-payment-redesign-and-udhaar-wording.spec.tsx`.
+
+**Scope decisions recorded:** (a) the **vendor console** and `platformBilling` keep the accounting words —
+§4 puts them out of scope, they speak to operators. (b) **Supplier payables** (`psup*` — "Total outstanding",
+"Outstanding") keep theirs: that is money the shop owes a SUPPLIER, not a customer's udhaar, and renaming it
+"Old udhaar" would state the opposite of the truth about who owes whom. A test enforces both exclusions
+explicitly rather than leaving them to drift.
+
+### §5 — a close affects exactly one dialog: NOT REPRODUCED, MACHINERY UNCHANGED
+The spec requires a **real-browser** reproduction across ✕, outside-click and Escape before any fix, and
+says outright that if nothing reproduces the finding is recorded and the layer machinery is left alone.
+
+**Finding: the reproduction could not be performed, and no static path leaks.**
+1. **Why not performed:** this repository has **no browser harness** — no Playwright dependency, no
+   `playwright.config.*`, no `test:e2e` script anywhere (`pnpm test:unit` → `turbo run test` → jest/jsdom
+   only). The build agent also has no access to the deployed page. So neither the required tool nor the
+   required target is reachable from a build session. This is recorded, not worked around: fabricating a
+   jsdom "outside-click" would be precisely the false negative 234 already warned about.
+2. **What was verified instead, by reading the three paths end to end:**
+   - **✕** — `DialogClose` calls its own dialog's `onOpenChange`; `LayerDialogRoot.setOpen` then drops any
+     dismissal raised while this dialog is not `isTopLayer`. Programmatic closes bypass it by design, and
+     `closeAddCustomer` sets `addOpen` only — it never touches `phase`, so it cannot close Take Payment.
+   - **Escape** — Radix's `DismissableLayer` gates `onEscapeKeyDown` on `index === layers.size - 1`, and the
+     kit's `isTopLayer` guard sits behind that.
+   - **Outside-click** — both dialogs are modal, so both register in
+     `layersWithOutsidePointerEventsDisabled`; the layer beneath computes `isPointerEventsEnabled === false`
+     and its outside handler returns before dismissing. The add-customer overlay is also the topmost
+     pointer-events-auto element (the centring wrapper is `pointer-events-none`), so the pointerdown lands
+     on ITS overlay, not on the payment box.
+   - **Layer history** — `closeLayer` increments `suppressed` before the asynchronous `history.back()`, and
+     `handlePop` consumes it, so a nested close cannot pop a second layer.
+   - **234's adjacent smell** (`PaymentPanel`'s window `keydown`) was already fixed in 234 and re-verified:
+     it compares `closest('[role="dialog"]')` and stands down under a layer above.
+3. **Therefore no change was made to the shared layer machinery** (195/198/203/216 and
+   `packages/ui/src/components/dialog.tsx` are untouched this round). 234's judgement stands.
+4. **What was added:** a LIVE jsdom regression for the nested pair — two `LayerDialogRoot`s, both open —
+   asserting the stack holds two layers and that ✕ and Escape each dismiss the top one only, with the layer
+   beneath keeping its rendered state. The outside-click path is explicitly documented in the suite as the
+   one still outstanding, so the gap is visible rather than implied.
+
+**Carried forward:** PROGRESS.md now records this as an open item. It needs either a browser harness in the
+repo or an owner check on the deployed page; it is not resolvable from a build session.
+
+### Frozen, and proved
+`splitPaymentSummary` byte-identical (not edited this round); the exact-sum rule, credit auto-composition,
+234's `allocateOverpayment` order (This sale → Old udhaar → the shared remainder), FEFO, stock decrement, tax
+and idempotency all untouched. The new suite re-asserts the arithmetic numerically — a Rs 30,000 tender on a
+Rs 2,655.25 bill still applies 2,655.25 with 27,344.75 in the pot, still fills 6,400 of old udhaar and
+20,944.75 to advance, still refuses an edited allocation that does not reconcile, and a split that does not
+add up to the bill is still short.
+
+### Design self-check (by inspection)
+Two columns, generous padding, hairline separators, the sunken right column, tabular figures, the `.paydue`
+hero at 31px, one accent (the Confirm button) and no hex literal outside `globals.css`. Per-selector
+declaration diffs recorded CLEAN against the recommitted mockup for `.paydlg__hd`, `.paydlg__esc`,
+`.paydlg__x`, `.paydlg__col`, `.paydlg__ft`, `.paydue`, `.paydue__l`, `.paydue__r`, `.paymix`, `.paymix__r`,
+`.paymix__f`, `.paymix__f input`, `.paymix__t` and `.credblk--owes` (re-scoped to `.paymod`/`.mp-mobile`,
+declarations identical); `.paydlg` is the file's rule plus `padding:0`, `gap:0` and the two `overflow:visible`
+axes, each of which exists only to retire the kit dialog's own box. `.paymix__f input` was corrected from
+112px back to the file's **82px** so the diff is clean. Both themes read from tokens, so neither is hand-tuned.
+Light/dark, RTL (`border-inline-start`) and the 1000px stack all covered. Mobile `.mpay` untouched; vendor
+console untouched.
+
+### Tests written (controller runs them)
+`packages/ui/src/lib/take-payment-redesign-and-udhaar-wording.spec.tsx` — the mockup gate; the dialog
+composition and column contents; the mockup-vs-globals per-selector declaration diffs; the §2 overflow rules
+and the single permitted scroll; the five credit states, their precedence, the non-blocking gate and the
+one-element assert; the catalog rename incl. a whole-catalog sweep that fails on any tenant key still saying
+the accounting words; EN/UR parity for the catalog and placeholder parity for `v16`; the live nested-dialog
+layer tests; and the frozen-arithmetic block.
+
+### Gates
+`pnpm typecheck` — clean (29/29). `pnpm lint` — clean (16/16), incl. design-drift, token-integrity,
+tenant-english-only, tenant-search-select and tenant-page-titles. `pnpm test:unit` / `pnpm build` /
+`pnpm test:e2e` not run by the agent, per the build rules — the controller runs them.
+
+## Gate fix — 236 take-payment-redesign-and-udhaar-wording (`pnpm test:unit`)
+
+Nine assertions in five earlier round-verification specs encoded the pre-236 Take Payment
+anatomy and wording; step 236 supersedes them. No product code changed — the stale assertions
+were re-pointed at what 236 actually shipped, keeping each test's original intent:
+
+- `round-3-verification.spec.tsx` / `round-4-verification.spec.tsx` — the shared read-back is
+  now `{outcomeRows}` (phone foot via `statusBlock`, dialog right column), so the "one block,
+  both layouts" invariant is asserted on `outcomeRows` (×2) with `statusBlock` at ×1. The split
+  surface is `splitBoard` on the phone and `mixBoard` in the dialog (236 §1): each declared once,
+  bound once.
+- `pos-final-fixes.spec.tsx` — `creditLimitPart` / `creditDuePart` are the 236 §4 counter words,
+  "Udhaar limit {amount}" / "Old udhaar {amount}"; the shape rule (one placeholder, no currency
+  in the template) is unchanged.
+- `payment-allocation-and-app-icon.spec.tsx` — the dialog is `paymod paydlg p-0 gap-0
+  max-w-[940px]` (236 §1's two columns replaced 234 §3.1's 500px single column); the `--overnow`
+  precedence check now compares against the first `summary.creditAmount > 0` branch, since the
+  old `summary.creditAmount <= 0 ? null` tail no longer exists.
+- `pos-credit-ux-and-fullpage-payment.spec.tsx` — the desktop is still a dialog and not a page,
+  now via `paydlg__hd` / `paydlg__body`; the credit block heads the phone body (above the
+  methods) and the dialog's right column; the state union carries 236 §3's sixth state `'owes'`
+  and the CSS-variant sweep covers `credblk--owes` on both tiers; the settled-walk-in chain
+  regex follows the longer chain down to the same `null`.
+
+Gates: `pnpm lint` clean (one pre-existing unrelated warning in `@mp/api`), `pnpm typecheck`
+clean, and the five specs pass locally (143 tests).
