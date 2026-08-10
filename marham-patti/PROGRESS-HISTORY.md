@@ -11267,3 +11267,99 @@ No new i18n keys (nothing new is said to the user), no new screen, so no new Pla
 tenant-english-only, tenant-search-select and tenant-page-titles all pass; the single remaining
 warning is the pre-existing unused eslint-disable in `@mp/api`, untouched by this step. Per AGENT.md
 §4A the unit/e2e/build gates are the controller's.
+
+---
+
+## 240 — purchases-suppliers-desktop — DONE (2026-08-10)
+
+**Work type:** FIX (presentation to mockup). **Branch:** `fix/240-purchases-suppliers-desktop`.
+**Spec:** `/specs/240-purchases-suppliers-desktop.md`. **Mockup:** `specs/mockups/pharmacy/purchases-suppliers-desktop.html` (gate passed — `.lineitems`, `.convline`, `.ledtbl` all present).
+**Schema:** none. **Migration:** none. **RLS / auth / permissions / flags:** unchanged — both screens stay behind `pharmacy.pos` + `pharmacy.sell`, with `pharmacy.stock.adjust` on the writes, exactly as 105/106 left them. **No new API surface.**
+
+### What was built
+Desktop rebuild of Pharmacy → Purchases and Pharmacy → Suppliers against the mockup, on the shared
+`.mp-inv2` list kit (212) plus a new `.mp-pur2` block in `globals.css` for the parts the mockup marks
+NEW COMPONENT: `.supmark` / `.supcell`, `.bal` + `.bal__sub`, `.lineitems` (with `.rownum`, `.rowdel`,
+`.convline`, `.lineerr`), `.totals`, `.entryfoot`, `.ledtbl` (+ `__bar`, `.ledtag`, `.led-debit`,
+`.led-credit`, `.led-run`), `.balhead`, `.pdrawer__*`, `.pdsec`, `.pskel`, `.ptop__badge`, and the A4
+`.specpage` / `.specwrap` / `.spechead` / `.specsec`. No hex literal was added; every declaration is
+token-based, so both themes follow from the tokens.
+
+- **Purchases list** — `.ptop` (title + tag + subtitle) with ONE severity badge (overdue → unpaid →
+  total owed, the 212 §1 pattern), breadcrumb, `.pghead__acts`, 4-across KPI row with the "—" no-data
+  variant, filter chips (All / Paid / Partial / Unpaid), toolbar with a 250 ms debounced search and
+  the "Searching N purchases…" card, per-user rows-per-page (25/50/100/250/500) and column show/hide
+  through the shared `mp.datalist.*` contract, the full mockup table (invoice/GRN, supplier, date,
+  items, subtotal, tax, total, paid, balance, status, `.rowacts`), `.pager`, `.pskel` skeleton and an
+  empty state that distinguishes "no purchases yet" from "nothing matched".
+- **Purchase entry** — a second surface on the SAME route (client-side, 216 §1): header fields on the
+  searchable select with inline "+ add supplier", the `.lineitems` grid with product, purchase unit
+  from that product's chain, qty, cost/unit, batch, expiry, disc %, tax % and line total, `.convline`
+  in plain words, `.lineerr` on a line that blocks save, Enter opens the next line, `.totals` and the
+  sticky `.entryfoot`.
+- **Suppliers list + drawer** — same table kit anchored on outstanding, `.pdrawer` at 640px with the
+  `.balhead` running balance, the `.ledtbl` running-balance ledger (debits and credits visually
+  distinct, closing-balance foot, its own `__bar` search), `.histlist` / `.histrow` for recent
+  purchases and payments, and record-payment through the shared centred modal (`<Panel frame="dialog">`
+  → `ModalHead` `.cxdialog__hd` + `.modal__body` / `.modal__foot`).
+- **A4 invoice** — the letterhead still resolves through `@mp/brand` server-side; the sheet is now
+  composed on `.specpage` / `.specwrap` / `.spechead` / `.specsec` over the shared print kit, and the
+  line table carries unit, batch and expiry.
+
+New shared module `packages/shared/src/pharmacy-purchase-desk.ts`: `balanceTone`, `overdueDays`,
+`purchaseDeskBadge`, `purchaseLineConversion`, `entryLineMoney`, `purchaseEntryTotals`,
+`entryLineIssues`, `canSaveEntry`, `PURCHASE_DESK_PAGE_SIZES`, `PURCHASE_SEARCH_DEBOUNCE_MS`.
+Tests: `apps/api/src/pharmacy/purchases-suppliers-desktop.spec.ts` (jest, where every other
+`@mp/shared` suite lives — the package itself has no runner).
+
+i18n: 194 new keys, EN + UR at parity (`pd*`, plus `pdKeyTab` / `pdKeyEnter`).
+
+### Judgement calls, and why
+1. **Per-line discount and tax are an ENTRY AID, not a stored figure.** The mockup draws Disc % and
+   Tax % per line; 105 stores ONE discount and ONE tax per purchase and this spec forbids a
+   business-logic change. So `purchaseEntryTotals` folds the per-line percentages into exactly those
+   two invoice-level figures and hands them to the UNCHANGED `purchaseTotals`. Typing 17% on every
+   line and typing the same rupees into the invoice tax produce the identical stored purchase; a unit
+   test pins that equality. Nothing new is stored and no supplier balance can drift.
+2. **The purchase date is the custom picker, shown as today and DISABLED.** `createPurchase` takes no
+   date — a purchase is dated by the moment it is recorded — and giving it one would be the forbidden
+   change. A picker that accepted a date the record then ignored would be a figure the screen invents,
+   so the field states the truth and the help line says why. Flagged here because the spec's §5 lists
+   the purchase date among the pickers; expiry and payment date ARE stored and DO get live pickers.
+3. **A line opens on the product's BASE unit.** Defaulting to the largest pack would silently change
+   what a purchase means for anyone who did not look; base units are byte-identical to every pre-240
+   purchase, and the operator picks "carton" when a carton arrived. The `.convline` therefore stays
+   silent on a base-unit line — "1 tablet = 1 tablet" is noise, not information.
+4. **The suppliers screen also reads the purchase list.** "Overdue" is a PURCHASE fact: a balance is
+   late when the OLDEST unpaid invoice has passed the supplier's terms. The summary endpoint carries
+   `lastPurchaseAt` — the newest — and painting overdue from that would state a lateness nobody could
+   reconcile. It reads `/pharmacy/purchase` (a read it already had) and resolves the oldest unpaid
+   invoice through 105's own `creditDaysFromTerms` + `purchaseDueAt`. A balance with no unpaid invoice
+   behind it (an opening figure) reads "owed" and states no date.
+5. **Unit chains come from `/pharmacy/pos/medicines?ids=`.** The catalogue list carries no chain and
+   this step may not add an endpoint; that route is on the same flag and the same permission and
+   already returns the chain. A failed read leaves the line in base units, which is what every
+   pre-185 purchase did.
+6. **Line-item control HEIGHT is not overridden.** The mockup draws a 30px cell control; every other
+   field in the app is the design system's one control anatomy at its touch height, and a grid whose
+   inputs are one size while the selects beside them are another is precisely the "looks like
+   different products" complaint the drift guard exists for. Consistency won over the pixel; the
+   right-alignment and tabular figures — what makes the grid read as a grid — are the mockup's exactly.
+7. **`.pill` → `<StatusPill>`, `.pos-sel__*` → `<SearchSelect>`, `.modal__*` → the shared `<Panel>`
+   dialog.** The mockup names its own kit's classes; the app's shared implementations of those atoms
+   are the design system's, and copying the mockup anatomy would have been the second implementation
+   239/237 keep removing. The acceptance §6 selector list does not name them.
+8. **Mobile untouched.** Both phone branches keep `.mp-inv .mp-pur` / `.mp-inv .mp-sup` — 241 rebuilds
+   them, and moving them early would leave them styled by neither kit.
+
+### Cross-cutting self-checks (by inspection)
+i18n EN+UR parity ✅ · isolation ➖ (pure presentation; no query widened, no new endpoint) · feature
+flags ➖ (unchanged gating) · white-label ✅ (invoice identity still from `@mp/brand`; two-tenant render
+is a runtime property of the unchanged server view) · accountability ➖ (no new state change; the
+existing `@Audited` purchase/payment writes are untouched) · offline ✅ (the entry still carries one
+`Idempotency-Key` per open surface) · no native `<select>`, no native date input, no keypad · errors
+are toasts · skeletons on load · `.env.example` unchanged (no new config).
+
+### Gates
+`pnpm lint` ✅ (one pre-existing warning in `doctor-portal.repositories.ts`, unrelated) ·
+`pnpm typecheck` ✅ · unit / build / e2e left to the controller per AGENT.md §4A.
