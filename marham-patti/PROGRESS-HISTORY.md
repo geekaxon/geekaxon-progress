@@ -11165,3 +11165,105 @@ comment to "No hard page reload is involved"; behaviour untouched. A repo-wide r
 dirs for `window.location.assign|replace`, `window.location.href =`, `location.reload(` and
 `router.refresh` now returns only the justified impersonation exit. `pnpm lint` and `pnpm typecheck`
 both pass.
+
+## 239 — dialog-close-and-amount-fields — DONE (2026-08-10)
+
+**Branch:** `fix/239-dialog-close-and-amount-fields` · WORK TYPE: FIX · no schema, no migration, RLS unchanged.
+Spec: `/specs/239-dialog-close-and-amount-fields.md`. No CODEREF companion.
+
+### §1 — the ✕, and the audit the spec asked for
+
+`layer-history.ts` is **untouched**, as instructed. The owner's fact — Escape and overlay-click
+behave, only ✕ is wrong — puts the defect in the close CONTROL, and both working paths already go
+through `LayerDialogRoot`'s topmost-gated `setOpen`. So the three paths were **converged onto one
+function** rather than ✕ being special-cased:
+
+- `packages/ui/src/components/dialog.tsx` — `LayerDialogRoot` now publishes its own `dismiss()`
+  (the gated close) on a new `DialogDismissContext`, and `DialogClose` is a real component that
+  takes `dismiss` from the nearest provider — which is always its OWN dialog's root — instead of
+  re-exporting `DialogPrimitive.Close`. Radix's Close resolves the nearest RADIX dialog context,
+  a second and independent notion of "which dialog am I closing"; that is the divergence removed.
+  The handler `preventDefault`s so Radix's own `onOpenChange` is not also fired (`composeEventHandlers`
+  honours `defaultPrevented`) — one close, never two. Outside a `LayerDialogRoot` it falls back to
+  Radix's Close, so nothing outside the kit changes.
+- Propagation is deliberately NOT stopped. Radix arms a one-shot document `click` listener on the
+  touch path when a pointerdown lands outside a layer; swallowing the click would strand it to fire
+  against a stack that has moved on — i.e. it would CREATE the reported defect on phones.
+- `packages/ui/src/components/drawer.tsx` — `DrawerClose` and the drawer's own floating ✕ now use
+  the same control. `DialogContent`'s floating ✕ likewise.
+
+**✕ audit — every close control in the tenant app.**
+- `MobileSheet` header ✕ / back (`mobile-sheet.tsx`) — already correct: control, scrim, `Escape`
+  and drag all take the gated `dismiss` (234 §3.2). Unchanged.
+- `DialogContent` / `DrawerContent` floating ✕ — were `DialogPrimitive.Close`; **converged**.
+- POS `addCustomerDialog` ✕, `discardDialog`, `heldDialog`, `clearSaleDialog`, `signOutDialog`,
+  `lineDiscountDialog`, `ShortcutsHelp`, `PaymentPanel`'s `.paydlg__x` — all `<DialogClose>`, so
+  all inherit the convergence with no per-screen edit.
+- **`MobileCustomerPicker` (PosClient) — FOUND, the same shape.** A hand-rolled full-screen layer
+  whose back control called the parent's `onClose` RAW, with no topmost gate and no `Escape` path
+  at all. Given the same `dismiss()` (control + drag + `Escape`), gated on `isTopLayer`.
+- **`PaymentPanel` page-layout back control — FOUND, the same shape.** Wired straight to
+  `onCancel`; now `dismissPage`, gated on the panel's own layer id. The DIALOG layout's footer
+  Cancel stays raw on purpose — that surface's layer is the kit dialog's, and a footer Cancel is
+  the deliberate PROGRAMMATIC close 234 §3.2 leaves alone.
+- Not dismissals, left alone: `heldpill__x`, `hsrow__x`, `pos-sel__x` (clear customer), cart
+  `mline__rm` / `cart__rm` (remove line), `tbl-toolbar__x` (clear search) in Inventory and Recent
+  Sales, `search-select` clear, the toast dismiss, the app-shell nav toggle.
+
+### §2/§3 — money fields
+
+New `packages/ui/src/lib/money-input.ts` (pure helpers + two hooks) and
+`packages/ui/src/components/money-input.tsx` (`<MoneyInput>` text-backed, `<MoneyAmountInput>`
+number-backed; `bare` renders a plain `<input>` for the mockup files' inline anatomy —
+`.paytender`, `.alloc__fld`, `.paymix__f`, `.floatinput` — instead of the full-height kit field).
+Components rather than a bare hook because half these boxes render inside a `.map`.
+
+- Two decimals; a third is rejected AT THE KEYSTROKE (the element's value and caret are restored,
+  because a controlled input whose state does not change is not re-rendered) — never rounded.
+- `.5` and `1250.` are legal while typing; the hook holds the draft even where the caller keeps a
+  NUMBER and hands back `String(n)`, and drops it the moment the caller's value stops agreeing
+  (a clamp, the `Exact` chip, a reset). Normalised on blur.
+- ↑↓ ±1, Shift+↑↓ ±100, clamped to each field's own bounds, `preventDefault`ed so a held key
+  repeats at our step and a native spinner cannot double-apply and skip values. Stands down under
+  Alt/Ctrl/Meta.
+- `inputMode` is `decimal` everywhere. The phone's tender and allocation boxes were `numeric`,
+  which raises a digits-only keypad with no way to type the `.50` the owner asked for.
+
+**Fields converted:** POS tender rows / cash tendered / amount / advance-apply, split legs
+(`.paysplit` and `.paymix`), the three allocation fields (bounded 0…received, so the
+received-vs-allocated reconciliation re-settles live as it steps), bill discount (ceiling = the
+bill in Rs, 100 in %), line-discount dialog (its `Enter`-to-apply is composed, not lost),
+add-customer credit limit (dialog + sheet), Customers record-payment / credit limit / opening,
+Suppliers record-payment / opening, Purchase line cost / discount / tax / amount paid, Inventory
+cost & sale price (base and per unit level), day-close opening float, PharmacyClient discount /
+sale price / cost price. `type="number"` was dropped on the converted fields — a number input
+cannot reject a keystroke, it silently blanks. No CSS selector targets `[type=number]`, so the
+per-selector rendering is unchanged in both themes.
+
+**Explicitly NOT converted (the Phase-20 boundary, stated in the module and asserted in the
+suite):** every quantity box — cart qty, `pinvContains`, opening qty, min stock, purchase line
+qty, prescription doses — and the day-close denomination COUNTS, which are counts of notes, not
+money. Percentages (sales tax rate, the settings discount percentage) are not rupee fields and
+were left alone.
+
+**Arithmetic untouched.** `splitPaymentSummary`, allocation, FEFO, the decrement, idempotency and
+every rounding rule are byte-identical; this module is only what the input ACCEPTS.
+
+### Tests written (controller runs them)
+
+- `packages/ui/src/lib/money-input.spec.tsx` — the draft grammar, blur normalisation, the
+  quantity boundary, the step contract and its modifiers, bounds; plus live-input suites proving
+  `1250.`/`.5` survive typing, a third decimal never lands, and an allocation-shaped box never
+  steps below zero or above the received figure.
+- `packages/ui/src/components/dialog.spec.tsx` — nested dialogs: ✕ on the top one fires exactly
+  one close, the dialog beneath is not called and keeps its typed state; a dismissal aimed at the
+  dialog underneath is refused while something stands on it.
+
+No new i18n keys (nothing new is said to the user), no new screen, so no new Playwright page test.
+
+### Gates
+
+`pnpm typecheck` clean (29/29). `pnpm lint` clean — design-drift, token-integrity,
+tenant-english-only, tenant-search-select and tenant-page-titles all pass; the single remaining
+warning is the pre-existing unused eslint-disable in `@mp/api`, untouched by this step. Per AGENT.md
+§4A the unit/e2e/build gates are the controller's.
