@@ -13161,3 +13161,116 @@ the re-attempt is now in place, not a navigation) and `demo-seed-repair-and-repe
 **Acceptance not verifiable here:** §6 asks for the deployed page in both themes with the network
 off. The build environment has no browser and no deployed host; the code-side halves are asserted
 and the two down screens' cause is proven structurally.
+
+## 256 — pos-fixes-r9 — DONE (2026-08-11)
+
+**Branch:** `fix/256-pos-fixes-r9` (FIX). Spec: `/specs/256-pos-fixes-r9.md`. No CODEREF for this range.
+**Schema:** none. **RLS:** unchanged. **Money logic:** byte-identical — `splitPaymentSummary`, `allocateOverpayment`,
+credit, FEFO, decrement and idempotency untouched; the new suite re-asserts two of them numerically.
+
+### §1 — The `.alloc` clip, fourth report: the rule, and why it clipped
+
+**Selector:** `.paymod .alloc, .mp-mobile .alloc` (globals.css, the 234 §1.2 allocation-list block).
+**Rule as it stood:** `border:1px solid var(--border-hairline); border-radius:var(--radius-md); background:var(--surface-card); box-shadow:var(--shadow-xs); overflow:hidden;`
+**Computed `overflow` on the block:** `hidden` BEFORE, `visible` AFTER.
+
+The three earlier attempts looked at ancestors — `.paydlg`, the kit `DialogContent`, `.paymod__body` — and each
+found and removed a real scroll box without the report changing. The clip was not on an ancestor at all: it was on
+`.alloc` itself, and `overflow:hidden` was doing two things, only one of them intended. Intended: clipping the head
+and sum fills to the radius. Unintended, and the actual defect: **a flex item's automatic minimum size resolves to
+zero unless its computed overflow is `visible`** (CSS Flexbox §4.5). `.alloc` is a flex child of `.mpay__body`
+(`display:flex; flex-direction:column`), so with `min-height:auto` collapsed to 0 the column compressed the block
+instead of overflowing it — no scrollbar appeared, and the rows past the compressed height were painted nowhere.
+That is exactly the owner's observation that deleting the declaration in devtools "fixes it": deleting it restores
+the content-based minimum, so the block takes its natural height and the body scrolls.
+
+**Change:** `overflow:visible; flex:none;` on the block; the radius is kept by rounding its first and last children
+(`border-start-*-radius` / `border-end-*-radius`) instead of clipping them. The only scroll on the surface stays
+`.mp-pos2 .mpay__body { flex:1; min-height:0; overflow-y:auto; }` — a real, usable scroll — and `.paydlg`'s
+`overflow-x/y:visible` (236 §2) is untouched, so at 360×640 the block's last row is reached by scrolling the body.
+
+**Honest limit on the evidence, recorded because the spec asks for computed styles:** this agent has no browser and
+no deployed page in its environment; it cannot run devtools or e2e. The selector, the rule and the before/after
+values above are read off the cascade (one rule matches `.alloc`; nothing else sets its overflow) plus the flexbox
+minimum-size rule that makes `hidden` behave as a silent clip here. The mechanism is falsifiable on the deployed
+page in one step: with the fix in place `getComputedStyle($0).overflow` on `.alloc` reads `visible`, and the block's
+`scrollHeight` equals its `clientHeight` (nothing hidden) while `.mpay__body` is the element that scrolls.
+
+### §2 — Money field height, in the shared component
+
+`height` on a flex child is a preference: `flex-shrink:1` (the initial value) lets a short column compress it, which
+is why `height:56px` on `.mp-mobile .paytender` was declared and did not hold. Fixed where the shared money field's
+shells are declared, not on the payment screen: `min-height` beside every declared height, and `flex:none` on the
+tender boxes. Values MATCH the heights already declared, so nothing anywhere grows: `.mp-kit`/`.paymod .paytender`
+52px, `.mp-mobile .paytender` 56px, split/advance rows 48px, `.alloc__fld` 38px, `.paymix__f` 34px, `.disc__in`
+46/44px. `flex:none` is stated ONLY on the tender boxes — their containers are column flexes, where shrinking
+happens; the other shells sit in grids and row flexes, where the same declaration would mean "never shrink my
+width". The kit skin needs neither: `min-h-touch` on the control is already a minimum, which is why an ordinary
+form field never showed this.
+
+### §3 — The payment foot, one line (OWNER DECISION, recorded so no diff restores it)
+
+The phone's `.mpay__foot` carried `statusBlock` (outcome rows + destination rows) plus a `.mpay__sumline`
+restatement. Removed: "Paid in full" (`v10.settled`), "Change due", the "To account" line and the sumline — every
+one of those figures is a row of the `.alloc` block directly above (this sale / old credit / change due / to
+advance / `.alloc__owed`), and two statements of one number make a cashier stop to decide which to trust. The foot
+now renders exactly one conditional line, `dueRow` — the balance the block never states. Over-applied and the
+applied advance are not destinations and are not in the block, so they moved into the BODY beside the tender that
+produced them (`residualOutcomeRows`). `destinationRows` and `statusBlock` are deleted. The DESKTOP dialog is
+unchanged: its right column has read the whole outcome in one place since 236 §1, which is the same decision
+reached a round earlier for the same reason.
+
+### §4 — Add customer wears the component reference's field, and the audit
+
+`.field--ic` (249 §4, extended by 251 §3.2) is retired. It was wrong twice: it positioned the glyph against the
+whole `<label>` — label text above, helper line below — so `top:50%` centred it on the block rather than on the
+control (the "heights and spacing are wrong" half); and its clearance rule selected `.input`, a class the kit
+`<Input>` does not carry, so on the desktop dialog nothing cleared the glyph at all (the overlap half). The phone's
+sheet uses a raw `.input` and so only looked mis-spaced — which is why one surface looked worse than the other.
+
+Replaced by `component-reference.html`'s own anatomy, declared ONCE and scope-free: `.input-wrap` wraps the CONTROL
+(`<span class="input-wrap"><svg/><input></span>`), the glyph is centred on the box it sits in, and the 34px
+clearance is stated for the ELEMENT so it holds for the kit `<Input>` and the mockup's `.input` alike. An invalid
+control tints its glyph with it (`:has()`, since the glyph precedes the input). The three pre-existing scoped copies
+(`.mp-kit`, `.mp-set`, `.mp-pur2`) are more specific and keep winning where they are, so nothing there moves.
+
+**FORM AUDIT — every form in the tenant app, for the same defect:**
+- POS add-customer, desktop dialog (`.cxdialog`) — OVERLAPPED (kit `<Input>`, no clearance). Fixed.
+- POS add-customer, phone sheet (`.maddc`) — glyph mis-centred on the label stack. Fixed.
+- Purchase entry → invoice number, desk — OVERLAPPED, same cause (kit `<Input>` under `.field--ic`). Fixed.
+- Purchase entry → invoice number, phone — same. Fixed.
+- Record supplier payment → Amount — a `.input-wrap` banknote in the SAME leading slot as the shared money field's
+  own `Rs` affix (249 §2 moved the affix into the component after 246 §5 added the icon): the two drew on top of
+  each other. Icon removed — a money box already IS the leading-glyph anatomy.
+- Add/Edit supplier → Opening balance — identical pairing. Fixed the same way.
+- Suppliers (name/contact/phone/address/terms), auth (login, reset, invite), settings (store, branding, sales tax)
+  — all already on `.input-wrap`; the auth and settings scopes had their own clearance rules, the supplier ones did
+  not and were relying on nothing. The new scope-free rule covers them; no markup change needed.
+- Inventory, customers, day-close, purchases line editor — no leading-icon fields; nothing to fix.
+
+The Udhaar-limit field is the shared money field with its `Rs` affix on both surfaces (unchanged from 249 §2).
+
+### §5 — A disabled result is inert on every input path
+
+Cause of the divergence: the pointer path called `addRow`, which refuses an out-of-stock row outright, while both
+Enter handlers re-tested the flag inline and let the `else` fall through to `runSearch()` — so Enter on a disabled
+row re-ran the search while the mouse correctly did nothing. Now one module-level predicate (`resultDisabled`) and
+one handler (`selectResult`) that both the pointer and the keyboard call: it refuses a disabled row and returns
+whether the row was taken, so "there was no row at all" (search) is decided without the disabled case leaking into
+it. The desktop row is a `<div>`, so it carries `aria-disabled`; the phone row is a `<button>` with the native
+`disabled`; both read the same predicate, and `addRow` refuses a third time at the bottom. Keyboard navigation
+still MOVES across a disabled row (↑↓ walk the whole list); only the opening highlight prefers a selectable row.
+
+### Tests
+
+New `packages/ui/src/lib/pos-fixes-r9.spec.tsx` — 27 assertions across §1–§5, including the arithmetic guard.
+Superseded guards updated with the reason, never deleted silently: r8's `mpay__sumline` and `.field--ic` entries,
+`round-3`/`round-4`'s `{outcomeRows}` counts, take-payment's `statusBlock` shape, customer-advance and
+credit-attribution's `.paychange--acct` regexes (the same figure is asserted on `.alloc__owed` instead), and the
+246 §5 supplier-icon assertions.
+
+### Gates
+
+`pnpm lint` clean (including the design-drift, token-integrity and tenant-* checks). `pnpm typecheck` clean.
+The @mp/ui jest suite was run once, filtered to failures only, to catch superseded guards before the controller
+does: 90 suites / 1727 tests green. No `pnpm build`, no e2e, vendor untouched, no schema change.
