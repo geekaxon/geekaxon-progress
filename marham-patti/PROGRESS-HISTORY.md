@@ -12635,3 +12635,185 @@ light/dark, skeletons, empty states, RTL logical properties, 44px targets on `.m
 EVERY entry the server sent and never from the filtered view, so narrowing the range narrows what is
 LISTED and never what is owed. `pnpm lint` and `pnpm typecheck` run once, clean (the one remaining
 warning is a pre-existing unused eslint-disable in `doctor-portal.repositories.ts`, untouched here).
+
+## 251 — purchases-r4 — DONE (2026-08-11)
+
+**Branch:** `fix/251-purchases-r4` · **Spec:** `/specs/251-purchases-r4.md` · WORK TYPE: FIX + small FEATURE.
+**Mockup gate:** PASSED — `.icards` and `.icard__anchor` both present in the recommitted
+`specs/mockups/pharmacy/purchases-suppliers-desktop.html` (and the `.icard` CSS is carried by the
+mobile file too, though the mobile file draws no `.icard` markup — the phone list stays `.pcard`).
+No `<A>-<B>-CODEREF.md` covers 251 (the last is 113–121), so file locations were read live.
+
+### §1 — the KPI row
+The desk drew four `.statcard`s inside `.pkpis` because 240 consumed the 212 list kit wholesale.
+Rebuilt on the file's own `.pkpi` anatomy — the same tiles Reports and the phone kit already carry —
+because §1 needs two things `.statcard` has no slot for: a BADGE on the icon row and a label that can
+put a figure inside a sentence. New shared `<PkpiTile>` beside `<KpiTile>` in
+`components/pharmacy/KpiTiles.tsx`; `.statcard` is untouched everywhere else.
+Card 1 is now the INVOICE COUNT with the "This month" badge (it repeated the topbar's rupee figure
+before); card 2 is OVERDUE, which was three cards away from the eye on a screen whose whole subject
+is what is owed. Cards 3 and 4 keep total-owed and items-received. Every card keeps 212's no-data
+rule: nothing to state renders "—", and a real zero renders "0".
+
+### §2 — the card view (`.icard`)
+The owner's report was that the card toggle does nothing on Purchases: `ListToolbarControls` was
+pinned to `view="list"` with a no-op `onView`, because the desk had no card view to switch to. Built
+one, on the file's `.icards` grid and `.icard` anatomy — the invoice sibling of 247's supplier
+`.scard`, same radius, same sunken anchor, same hover-revealed footer actions, so the two grids read
+as one system. The toggle now writes the SAME stored preference the phone keeps
+(`mp.datalist.view.pharmacy.purchases`, 243 §3), so cards on one surface means cards on the other.
+Cards and table are handed the identical `paged` rows and fold them through the identical
+`balanceTone` / `overdueDays` / `purchaseDueAt`, so there is no second calculation path for a figure
+to differ down. Verified states: paid · partial · unpaid · returned · overdue-tinted anchor · long
+supplier name truncating (`.icard__t small .who`). The file's `.icard.is-hovered` is deliberately NOT
+shipped — it exists to pin one card open for the screenshot, and a card that never lets go is a bug
+with a class name. `@media (hover:none)` keeps the row actions visible on a touch device.
+
+**DECISION — the "Returned" pill and how it is attributed.** 108's `PurchaseReturn` records the
+supplier, reason and credited lines; it does NOT point at the purchase the goods arrived on, and the
+Returns screen that would let a user say so is #6/#12 in the owner's sequence and not built. The pill
+therefore cannot be read off a foreign key. Rather than drop it (the spec asks for it) or invent a
+schema link (out of scope), the attribution is a stated, shared, pure rule in
+`@mp/shared` (`purchasesWithReturns`): a return is attributed to the LATEST purchase from the SAME
+supplier, dated at or before the return, that received at least one of the returned products. It is
+deliberately conservative — no candidate marks nothing, and one return can never mark two invoices.
+`PurchaseRowView.returned` carries it on the wire. Nothing in this step creates, edits or values a
+return. Recorded so a later reader does not mistake the softness for an oversight.
+Also folded every settlement pill on the screen into one `<PurchasePill>` (table row, desktop card,
+phone card, phone list) — a fifth word that appeared on one surface and not the sibling it is the
+same purchase as would be exactly the drift this module keeps closing.
+
+### §3.1 — the supplier field, and the component both screens now share
+The POS customer field's `.pos-sel` composition was private to `PosClient.tsx`. §3.1 asks for "one
+component, two consumers", so the anatomy moved to `components/pharmacy/PosSelectField.tsx` and BOTH
+screens render it: `CustomerSelect` is now a thin wrapper that says what goes in a customer row
+(paged source, offline fallback, credit tint, the `data-poscustomer` F10 route, 201 §1's Insert /
+Delete keys), and the purchase entry is a thin wrapper that says what goes in a supplier row. The DOM
+is unchanged from what 226/228 shipped — same classes, same order, same `aria-*`, same focus stop —
+and `.mp-pur2` gains the `.mp-pos2` declarations character for character, so the two consumers cannot
+drift visually any more than they can structurally. The purchase entry previously used a plain
+`SearchSelect`, whose "add new" is a row at the bottom of a list you must scroll to; the file (and the
+POS) puts the **+** on the field itself. The supplier book is held whole and filtered in place —
+a pharmacy deals in tens of suppliers, not the tens of thousands of customers 228 §1 paged for.
+
+### §3.2 — the invoice number (the one schema change)
+`PurchaseOrder` did NOT carry an invoice-number field: 105 added no schema and stashed it inside the
+JSON meta encoded onto `note`. A value inside a JSON string cannot be policed by a constraint, so two
+tills — or one till clicked twice — could commit the same number and the database would raise
+nothing. The spec allows exactly one additive migration where uniqueness is genuinely absent, and this
+is that case. `20260811000000_purchase_invoice_numbers`: a nullable `invoice_no` column, a unique
+index on `(tenant_id, invoice_no)` (NULLs stay distinct, so any number of purchases may carry no
+number), a `purchase_number_sequences` counter table with fail-closed `apply_tenant_rls`, and a
+backfill that lifts the number out of the meta note. The backfill leaves a PRE-EXISTING duplicate in
+its note rather than rewriting or refusing it — history is history; the constraint governs what
+happens next — and the counter is seeded after the highest `PI-#####` on the books, so a supplier's
+own bill number ("HP/2026/88") never moves it. Idempotent on re-apply; the DML runs in the
+established NO FORCE window and restores FORCE in the same transaction.
+Empty on save now mints from that counter through 213 §5's mechanism: inside the insert's own
+transaction, under a per-tenant `pg_advisory_xact_lock`, using the SHARED, explicitly-cast statement
+(192 §1 — `(int4, int4)`, never `(bigint, integer)`), with its own namespace so a stock-in cannot
+block a checkout. The mint steps over a position a hand-typed number already holds, bounded.
+A duplicate is refused by the DATABASE (P2002 → `DuplicateInvoiceNoError` → a field-level 400, never a
+500) and the screen shows the message UNDER the invoice-number input, not only in a corner toast.
+The service also pre-checks, as courtesy only — two counters racing both pass it, which is precisely
+why the index is the guarantee. Reads are column-first with the meta note as fallback, so every
+purchase written before this step reads exactly as it did.
+
+### §3.3 — the purchase date
+The field was disabled because `createPurchase` took no date, and a picker that accepted one the
+record then ignored would be a figure the screen invents. The record takes one now (`purchaseDate`,
+`YYYY-MM-DD`, the same contract 134's back-dated sale uses), on BOTH the desk and the phone.
+**DECISION — no new permission, and this is a decision rather than an omission.** A back-dated SALE
+(134) moves takings, day-close and till reconciliation, which is why it is gated and audited. A
+purchase date moves none of those: it dates a document the supplier already dated, and refusing it
+would only push the operator into typing a wrong date. Past dates are allowed and are the normal case;
+a future date warns (`.field__warn`, the warning register between help and error) and is allowed,
+which is the app's warn-never-block rule.
+The chosen day drives the purchase's `createdAt` and the batch's received date, so the supplier ageing
+behind the Overdue KPI follows the delivery rather than the keystroke — proven in the spec: Net 30
+from 4 Aug is overdue on 10 Sep, where the same purchase entered today is not. Stock movements keep
+the wall clock: they are live-stock events, not supplier documents.
+
+### §3.4 / §3.5 — the header group and the line sizing
+Method and Note moved up from the stranded foot card into the header field group beside supplier,
+invoice number and date. Method stays conditional on money actually changing hands (a pure-credit
+purchase tenders nothing, so a control with one honest answer is not asked); Note is now
+unconditional, because a remark about a delivery is worth keeping either way and 105 has always
+stored one. Method has no leading icon (246 §5, one control anatomy).
+Line fields brought to the file's compact sizing — `--control-sm` with tighter horizontal padding,
+copied, not invented — so a line reads as one row and more lines fit without scrolling. The delete
+control keeps a 32px target; the conversion line and the per-line error keep their size because they
+are reading, not entry. The phone's line CARDS are untouched, and the compact block's selector list is
+asserted to mention `.lineitems` and never `.plinecard`.
+
+### §4 — the import button
+Back on both surfaces, RENDERED AND DISABLED WITH ITS REASON on `title` and the accessible name.
+246 §6 removed it, and that argument holds only while the capability is nowhere on the map: "a
+disabled control that will never be pressed is worse than no control". Spec 254 builds the purchases
+importer in this same group, so it now states something the screen cannot do YET, which is a different
+sentence. No endpoint is invented here; 254 makes it live. `ImportExportActions` gained
+`importPendingKey` — a caller with a live importer still passes `onImport` and gets no excuse.
+
+### §5 — the full-file diff
+Changed selector families: `.pkpi`, `.pkpi__top`, `.pkpi__ic(--amber|--red|--green)`, `.pkpi__v`,
+`.pkpi__l`, `.badge`, `.badge--soft` (added under `.mp-inv2`); `.icards`, `.icard`, `.icard__hd`,
+`.icard__t`, `.icard__meta`, `.icard__anchor`, `.icard__amt`, `.icard__bal`, `.icard__ft`,
+`.icard__acts`, `.icard--paid|--partial|--unpaid|--returned`, `.icard--unpaid.is-overdue`,
+`.supmark--xs` (new under `.mp-pur2`); the whole `.pos-sel__*` / `.pos-opt*` block mirrored under
+`.mp-pur2`; `.field--ic` / `.field__ic` added under `.mp-inv2` and its input clearance stated for the
+element as well as the class (the screens use the `<Input>` kit component, not the mockup's literal
+`.input`); `.field__warn` new under `.mp-inv2` and `.mp-mobile`; `.lineitems` control heights, cell
+padding and `.rowdel` target compacted. Diffed clean and unchanged: `.entryfoot*`, `.convline`,
+`.lineerr`, `.lineitems__foot`, `.lineitems__hint`, `.pcard*`, `.minv*`, `.mfacts`, `.mtotalbar`,
+`.plinecard*`.
+
+### Gates
+`pnpm prisma generate`, then `pnpm lint` and `pnpm typecheck` — both green (the single remaining lint
+warning is a pre-existing unused eslint-disable in `doctor-portal.repositories.ts`, untouched here).
+Per CLAUDE.md the agent did not run `test:unit` / `test:e2e` / `build`; the controller runs them.
+
+### Tests written
+- `packages/db/src/purchase-invoice-number.spec.ts` — the §6 "real database, not a mock" requirement,
+  the 192 lesson honoured: real migrations inside pglite, the IMPORTED lock statement, the migration
+  shape, the backfill (including the vendor PO left alone and the pre-existing duplicate recorded not
+  rewritten), idempotent re-apply, the seed, gapless bursts, per-tenant independence, and the index
+  refusing a duplicate while NULLs stay distinct. It restates the `PI-#####` format rather than
+  importing it, because `@mp/db` sits below `@mp/shared` and a dependency added for one test is a
+  cycle waiting to happen; both sides pin the same literals so drift reddens one of them.
+- `apps/api/src/pharmacy/purchases-r4.spec.ts` — the number's vocabulary, the card state, the return
+  attribution rule, generation / typed / blank / duplicate / mint-steps-over / replayed-save, the date
+  (none, past, future, ageing, month), and a frozen-record block asserting the same lines dated or
+  not, numbered or not, produce the same batch, the same on-hand and the same money.
+- `packages/ui/src/lib/purchases-r4.spec.tsx` — the shared `.pos-sel` field rendered and its POS
+  anatomy pinned (trigger opens to its borders, the + does not also toggle, filter + Enter, arrows,
+  create-from-typed, Insert/Delete, Escape, the conditional ✕), plus the stylesheet families.
+
+### Notes for the next round
+- The mobile purchase entry keeps Method and Note in the review sheet with the payment choice (241
+  §2's own shape); §3.4's complaint was the desk's stranded foot card, which is what moved.
+- `PurchaseItem` still has no link to a `PurchaseReturn`. If the Returns screen (#6) wants an exact
+  pill instead of an attributed one, that is the schema change to make there, not here.
+
+### Gate fix — 251 (2026-08-11) — `pnpm test:unit` red, 5 failures in 4 suites
+
+- `take-payment-redesign-and-udhaar-wording.spec.tsx` — the udhaar banned-word walk caught
+  `pdIcardCleared = "Cleared — nothing outstanding"` (added by 251). The `pd*` exemption is only
+  for the payables keys (`pdSup*`, `pdPay*`, `pdShowingPurchases`, `pdMKpiOutstanding`), and this
+  one is invoice-card copy, so the wording moved instead: **"Cleared — nothing left to pay"**.
+  EN only; the UR string already read "کچھ باقی نہیں".
+- `demo-seed-repair-and-repeat-failures.spec.tsx` (246 §6) — asserted the purchases desk renders
+  `<ImportExportActions lang={lang} onExport={exportCsv} />` with no import control at all. Spec
+  251 §4 supersedes that: the button returns RENDERED AND DISABLED with `importPendingKey`
+  ("pdImportComingSoon") because 254 makes it live. Test updated to the 251 shape; the part of
+  246 §6 that still holds — this desk wires no `onImport=` — is kept verbatim.
+- `pos-credit-ux-and-fullpage-payment.spec.tsx` (§4) — read the `.pos-sel__trigger` anatomy and
+  the `aria-haspopup`/`aria-expanded` contract out of `PosClient.tsx`, but 251 §3.1 lifted them
+  into the shared `apps/web/components/pharmacy/PosSelectField.tsx`. Assertions repointed at the
+  shared field; `data-poscustomer` stays asserted on `PosClient.tsx`, where the wiring lives.
+- `purchases-r4.spec.tsx` — harness bug, not a component bug. Its `Harness` resolved the picked
+  supplier's NAME out of the QUERY-FILTERED row list, so with "Get" typed the field fell back to
+  the raw id `s1` and "Delete never eats a character out of a half-typed name" read `s1` instead
+  of `Hilal Pharma`. The lookup now runs against the unfiltered list.
+
+No product behaviour changed beyond the one EN string. Gates: `pnpm lint` clean, `pnpm typecheck`
+clean, `@mp/ui` jest 87 suites / 1632 tests green.
