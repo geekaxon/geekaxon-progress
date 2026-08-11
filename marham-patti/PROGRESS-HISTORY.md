@@ -12293,3 +12293,182 @@ thermal printing (raw ESC/POS, Bluetooth and wired), then keyboard shortcuts, th
 then Customers → Returns → Recent Sales → Settings → Day-close → Prints → Dashboard. Parked, unchanged: a purchases
 import endpoint, a server-side export, per-page menu visibility by permission, the deferred shortcut bindings.
 No step 249 is authored; PROGRESS.md `Next` is set to the spec's dictated sentinel.
+
+## 249 — pos-and-global-fixes-r8 — DONE (2026-08-11)
+
+**Branch:** `fix/249-pos-and-global-fixes-r8` (created from staging head before any commit).
+**Type:** FIX. No schema change, no migration, RLS unchanged. `splitPaymentSummary` byte-identical.
+
+### §1 The mobile payment allocation block
+
+Cause was structural, not cosmetic: there were TWO allocation components. `allocBlock` (234 §1.2)
+was gated on `allocationActive` — a registered customer who handed over MORE than the sale needs —
+and only the phone rendered it; `deskAlloc` (236 §1) was the desktop's always-present copy. So on
+every ordinary sale (i.e. every sale where nobody overpays) the desktop stated where the money went
+and the phone rendered `null`.
+
+Fix: `deskAlloc` is deleted and `allocBlock` is now a single unconditional expression rendered by
+BOTH layouts — `.mpay__body` on the phone, `.paydlg__col--right` on the desktop. All four
+destinations are drawn (This sale · Old udhaar · Change due · To advance), zero rows dimmed with the
+file's own `is-zero` rather than hidden, and `allocationActive` now decides only whether a row is a
+FIELD or a FIGURE. A walk-in still gets no ledger destinations (234 §1.2 refused to invent that
+money path) and collapses to This sale + Change due. `.alloc--err` and Confirm are gated on the same
+`allocBlocked` flag, so the screen cannot look settled while Confirm refuses. No arithmetic moved.
+
+### §2 One money field — the audit
+
+239 shared the money BEHAVIOUR (`useMoneyField`/`useMoneyAmount`) but not the FIELD: every screen
+assembled its own shell and its own leading `Rs`. That is the divergence the owner reported.
+
+`packages/ui/src/components/money-input.tsx` now owns the affix, the placeholder (`0.00`) and the
+shell, through a `skin` prop: `field` (kit `<Input>` + `.mp-money` affix overlay — kit height,
+radius, focus ring), `paytender`, `alloc`, `paymix`, `disc` (the mockup files' own markup, same tags
+the CSS already selects on), and `plain` (no shell, no affix — the escape hatch, so a screen cannot
+smuggle an affix back). A `trailing` slot carries the discount box's "of bill" tail.
+
+AUDIT — every money input in the tenant app, and whether it already used the shared component:
+
+| Screen | Boxes | Before | Now |
+|---|---|---|---|
+| POS `PaymentPanel` — `.paytender` (tender, advance, split legs) | 3 call sites | shared INPUT, per-screen shell + affix | `skin="paytender"` |
+| POS `PaymentPanel` — `.paymix__f` (desktop split leg) | 1 | shared input, per-screen shell + affix | `skin="paymix"` |
+| POS `PaymentPanel` — `.alloc__fld` (allocation rows) | 1 (×3 rows) | shared input, per-screen shell + affix | `skin="alloc"` |
+| POS `PosClient` — `.disc__in` cart discount | 1 | shared input, per-screen shell + affix | `skin="disc"` |
+| POS `PosClient` — line discount | 1 | shared, kit field, NO affix | kit skin, affix |
+| POS `PosClient` — add-customer credit limit (sheet + dialog) | 2 | one was `bare className="input"` (no affix) | kit skin, localised affix |
+| Purchases `PharmacyPurchaseClient` | 4 | shared, kit field, NO affix | kit skin, affix |
+| Suppliers `SuppliersClient` | 1 | shared, kit field, NO affix | kit skin, affix |
+| `RecordSupplierPayment` | 1 | shared, kit field, NO affix | kit skin, affix |
+| Customers `CustomersClient` | 3 | shared, kit field, NO affix | kit skin, affix |
+| Inventory `PharmacyInventoryClient` | 3 | shared, kit field, NO affix | kit skin, affix |
+| `PharmacyClient` (settings/quick forms) | 3 | shared, kit field, NO affix | kit skin, affix |
+| Day-close `DayCloseClient` (opening float) | 1 | shared, kit field, NO affix | kit skin, affix |
+
+No screen carries money-field markup any more. Decimals and ±1 / Shift ±100 stepping unchanged.
+
+### §3 The customer picker
+
+`customerRowTone` added to `@mp/shared` beside `customerCreditState`, so the desktop select and the
+phone's picker sheet cannot drift: `over` (danger) → `advance` (success) → `owes` (warning) → `null`
+for a clear or non-credit account. Over-limit outranks owing. `OverLimitFlag` is deleted on the
+owner's call — the tint carries the state and every credit state now has one, so a glyph marking one
+of four said nothing the colour did not. It is not colour-alone: `CREDIT_TONE_LABEL` puts the state
+in words on the row's own `aria-label`, and `data-credit` carries it for tests. Tints are
+`--danger-soft` / `--warn(ing)-soft` / `--success-soft`; the name keeps `--text-primary` over each.
+
+### §4 Add customer
+
+Both surfaces (the phone's `MobileSheet` and the desktop `.cxdialog`) now carry the kit anatomy:
+`.field--ic` with a leading `UserRound` / `Phone` glyph, `required` + a `.req` mark on the two
+required fields, placeholders, and a helper line under each (replaced by the error line when one
+shows). New i18n namespace `pharmacyPos.v17` (en + ur).
+
+### §5 Re-holding an open held sale
+
+New endpoint `POST /pharmacy/pos/held/:id/update`, audited as `pharmacy.pos.hold.update` (NOT
+`.hold`), so the trail can tell "parked a second cart" from "corrected the one that was open".
+`PharmacyRepo.updateHeldSaleCart` is a conditional `updateMany` on the OPEN statuses — the same
+optimistic lock the transitions use. `HeldSaleCartPatch` has no `number`, `heldBy`, `heldByName` or
+`heldAt` by construction, so the hold keeps its identity (190 §1) and day-close attribution (187)
+still names whoever parked it; the updating user lands in the resumed slot. No advisory lock and no
+number sequence is touched. Idempotency rides the park's own mechanism (`clientActionId`). A hold
+completed or discarded elsewhere returns null from the conditional write and the service parks a
+FRESH hold instead of resurrecting a terminal row. Client: `holdCart` branches on `activeHeldId`,
+acts directly with NO dialog, and reads the response id to decide which toast to show.
+
+### §6 Error page recovery and branding — the three findings, recorded BEFORE the fix
+
+**Finding 1 — does the click reach the handler?** YES, and it always did. `ErrorState.ActionButton`
+binds `onClick={recovery.attempt}` for `kind: 'reset'`, and `errorContent('server-error')` /
+`('offline')` both declare their action as `reset`; `global-error.tsx` binds the same. This was
+never a wiring defect — which is why two rounds of fixing the handler changed nothing.
+**What is NOT true is that the surface hydrates.** `public/sw.js` precaches exactly
+`/offline?reached=1` plus a small asset list; Next's route chunks are same-origin requests that fall
+straight through to a network that is, by definition, gone. So offline the page paints from cache
+and never hydrates: no handler is ever bound, and a script that 404s mid-hydration surfaces as the
+route error boundary — which is precisely the owner's "Retry leads to Something went wrong".
+
+**Finding 2 — what does `reset()` do?** It was never reached. 242's `useRecovery` gated the WHOLE
+recovery on a probe: `if (outcome !== 'recovered') { setPhase(...); return; }`. With the network
+genuinely off `probe()` returns `null`, the verdict is `offline`, and the function returned there —
+`onReset()` was never called and no navigation was ever queued. The button spun, printed a notice,
+and left the page exactly as it was. It is worse than a no-op because it only happens when it
+matters: a probe also fails behind a captive portal, a proxy that eats `?_retry`, a server still
+warming, or a stale `navigator.onLine`, in every one of which the page would have recovered if we
+had simply tried.
+
+**Finding 3 — why is the branding cache empty?** Two causes. (a) `AppErrorState` consulted the cache
+only when the light client `useBrand()` snapshot had ALREADY come back platform, so a snapshot
+carrying a partial identity outranked the per-host, per-theme identity resolved on the last load
+that actually worked. (b) The offline surface's branding does not come from that cache at all when
+it cannot hydrate: it is whatever the server rendered into `/offline?reached=1` at SERVICE-WORKER
+INSTALL time, frozen for the life of the worker — a device that installed the PWA before the logo
+existed (or during an API blip) keeps a platform-marked page forever.
+
+Fixes: (1) the retry control is an `<a href>` whose click is intercepted, so it performs a real
+recovery with zero JavaScript and the probe/spinner/notice behaviour on top; (2) `reload` mode now
+ALWAYS runs `reset()` + a fresh `location.replace` of the same route, with the probe reduced to
+deciding the MESSAGE (`connectivity` keeps the probe as the answer — leaving the offline page while
+the network is down would replace a designed surface with a browser error); (3) the fallback order
+is now `serverLockup ?? cachedLockup ?? snapshot ?? platform`, `global-error` resolves its theme
+from the `.dark` class (cookie-backed, survives an outage) inside the same effect as the cache read,
+and `sw.js` re-fetches and re-puts `OFFLINE_URL` in `event.waitUntil` on every successful navigation
+so the fallback's branding is as current as the last page opened.
+
+### §7 Floating panels
+
+New `packages/ui/src/lib/floating-panel.ts` — the one shared positioning helper. `planFloatingPanel`
+is the pure Select2 rule (open below when it fits; else above when above is roomier; else the side
+that clears `PANEL_MIN_HEIGHT_PX`) and returns a `maxHeight` as well as a side, which is what makes
+"never extends the document scroll" true: the panel is capped at the room that exists and scrolls
+internally. `avoidCollisions` alone could not do this — with nothing capping the height, no side
+fits a long list and Radix keeps the roomier one while the panel overflows; and it re-decides on
+every content resize, which is the 246 §4 jitter. So the side is planned ONCE per open by
+`useFloatingPanel` and held; only the cap follows a resize. Adopted by all four portalled panels:
+both `SearchSelect`/`MultiSearchSelect` popovers, the date picker, and both `DataList` menus (which
+became controlled popovers so they can be measured).
+
+### §8 Zoom
+
+The viewport meta was NOT the cause — it has never carried `user-scalable=no` or a `maximum-scale`,
+so there was nothing to delete. Two event handlers were eating the gestures:
+* `apps/web/lib/use-pull-to-refresh.ts` binds `touchmove` `{ passive: false }` and `preventDefault`s
+  a downward drag from the top of the page. A pinch is two fingers whose midpoint drifts down, so
+  from the top of any list the browser never got the gesture. `onStart` refuses a multi-touch START
+  but a second finger landing mid-pull never re-runs it, so the guard now lives in `onMove`.
+* `packages/ui/src/components/search-select.tsx` `preventDefault`s every wheel event over a result
+  list — including Ctrl/⌘ + wheel, which is the desktop browser zoom.
+Both now stand down. `layout.tsx` states `userScalable: true` / `maximumScale: 5` explicitly, so a
+later "PWA feels more native" diff has to delete a line that says why.
+
+### Files
+
+`packages/ui`: `lib/floating-panel.ts` (new), `components/money-input.tsx`, `components/search-select.tsx`,
+`components/date-picker.tsx`, `components/data-list.tsx`, `index.ts`.
+`packages/shared`: `pharmacy-customers.ts` (`customerRowTone`).
+`apps/web`: `app/layout.tsx`, `app/global-error.tsx`, `lib/error-recovery.ts`, `lib/use-pull-to-refresh.ts`,
+`components/error/ErrorState.tsx`, `components/error/AppErrorState.tsx`, `public/sw.js`,
+`app/(app)/pharmacy/pos/PaymentPanel.tsx`, `app/(app)/pharmacy/pos/PosClient.tsx`, `app/globals.css`.
+`apps/api`: `pharmacy.repositories.ts`, `pharmacy.service.ts`, `pharmacy.controller.ts`, `__fakes__.ts`.
+`packages/i18n`: `messages/en.json`, `messages/ur.json` (`pharmacyPos.v17`).
+
+### Tests
+
+New: `packages/ui/src/lib/pos-and-global-fixes-r8.spec.tsx` (51 cases across all eight sections) and
+`apps/api/src/pharmacy/held-sale-update.spec.ts` (7 cases). Superseded assertions updated in
+`take-payment-redesign-and-udhaar-wording`, `date-picker-portal`,
+`inventory-desktop-r2-and-global-fixes`, `inventory-mobile-to-mockup`, `pos-final-fixes`,
+`pos-credit-ux-and-fullpage-payment`, `demo-seed-repair-and-repeat-failures`.
+
+### Gates
+
+`pnpm lint` clean (one pre-existing unused-disable warning in `doctor-portal.repositories.ts`,
+untouched). `pnpm typecheck` clean, 29/29. Vendor untouched. No schema change, so no
+`prisma generate`.
+
+### Not done, and why
+
+Verification on the deployed page with the network genuinely off is the acceptance this spec names
+and it cannot be performed from here — no deployed environment is reachable in this session. The
+§6 findings above are established from the code and the service worker's precache list, not from a
+browser capture; the controller's deploy is where the owner's three symptoms get confirmed dead.

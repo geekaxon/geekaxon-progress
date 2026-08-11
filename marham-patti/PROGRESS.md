@@ -1,24 +1,25 @@
-> ⚠️ **PUBLIC FILE** — no secrets, hosts, endpoints, credentials or keys. Placeholders only.
+> ⚠️ **PUBLIC FILE** — no secrets, hostnames, endpoints or keys.
 
 # PROGRESS.md — Marham Patti Build Tracker (SHORT)
 
-> SHORT tracker; detail in PROGRESS-HISTORY.md. Under 1.5 KB. A completed step is NEVER rebuilt; a dangling "Next" means [HUMAN_REQUIRED].
+> SHORT tracker; detail lives in PROGRESS-HISTORY.md. A done step is NEVER rebuilt.
 
 ## Current Status
-- **Project:** Marham Patti — multi-tenant white-label health platform.
-- **Phase:** **PHASE 21** — production LIVE; Purchases and Suppliers testing.
-- **Last completed:** **248 — purchases-suppliers-mobile-r3**.
-- **Next:** none — awaiting next spec block [HUMAN_REQUIRED]
-- **Group order:** complete. Purchases and Suppliers are done, desktop and mobile.
-- **BRANCH RULE:** switch to the spec's own branch BEFORE any commit.
-- **VERIFICATION RULE:** a fix is accepted on the DEPLOYED page, never on a unit test.
+- **Project:** Marham Patti — multi-tenant white-label healthcare platform.
+- **Phase:** **PHASE 21/22** — production LIVE; owner-test round 8, then pricing and bulk data.
+- **Last completed:** **249 — pos-and-global-fixes-r8**.
+- **Next:** specs/250-suppliers-drawer-and-mobile-r4.md
+- **Group order:** 249 → 250 → 251 → 252 → 253 → 254. One step, then checkpoint.
+- **BRANCH RULE:** create and switch to the spec's own branch BEFORE any commit.
+- **VERIFICATION RULE:** accepted on the DEPLOYED page or a real device, not on a passing test.
+- **252 is schema-only and changes NO behaviour; 253 wires it.** Do not merge them.
 - **Numbering is continuous — never skip a number.**
-- **Production note:** deploys change CODE only; no operational data on boot.
-- **Sequence after this round:** printing → shortcuts → consistency audit → Customers → Returns → Recent Sales → Settings → Day-close → Prints → Dashboard.
-- **Parked:** purchases import; server-side export; per-page menu perms.
+- **After this group:** printing → shortcuts → purchase returns → Customers → Returns → Recent Sales → Settings → Day-close → Dashboard → accounting → audit.
+- **Parked:** purchases import; per-page menu permissions; deferred shortcuts.
 
 ### Recent steps
-- **248 — purchases-suppliers-mobile-r3** — DONE (2026-08-10) — cards no longer hide behind the glass; the redrawn search-and-range row
-- **247 — suppliers-card-view-and-desktop-r3** — DONE (2026-08-10) — the redrawn supplier card; the desktop file diffed whole
+- **251 — purchases-r4** — AUTHORED — KPI badges, cards, supplier field, auto invoice number, back-dating.
+- **250 — suppliers-drawer-and-mobile-r4** — AUTHORED — sortable paged tabs, recent blocks, ledger row fix.
+- **249 — pos-and-global-fixes-r8** — DONE (2026-08-11) — mobile allocation, picker tints, hold updates itself, error recovery, zoom.
 
 > Older steps in PROGRESS-HISTORY.md
