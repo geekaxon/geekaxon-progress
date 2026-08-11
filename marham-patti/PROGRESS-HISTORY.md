@@ -12472,3 +12472,166 @@ Verification on the deployed page with the network genuinely off is the acceptan
 and it cannot be performed from here — no deployed environment is reachable in this session. The
 §6 findings above are established from the code and the service worker's precache list, not from a
 browser capture; the controller's deploy is where the owner's three symptoms get confirmed dead.
+
+## 250 — suppliers-drawer-and-mobile-r4 — DONE (2026-08-11)
+
+**Branch:** `fix/250-suppliers-drawer-and-mobile-r4` · **WORK TYPE: FIX** · presentation to the
+recommitted mockups. **Schema: none. RLS: unchanged. Flags/permissions: unchanged. Endpoints:
+none added or changed.** Spec 106 owns the payable and no figure here is computed — the screen
+reads, tints, sorts, pages and cuts; it never adds.
+
+**Mockup gate:** both recommitted files carry `.recentblk*`, `.mrangebtn*`, `.sorth*`, `.pager*`,
+`.dtbl*`, `.drawbar`, `.mpop*` — gate passed, no `[HUMAN_REQUIRED]`.
+
+### §1 — the drawer's Purchases and Payments tabs are tables
+Both were `.histlist` runs of loose rows: amounts unaligned, no sort, no pager, the status pill
+buried in a `<small>`. Rebuilt on the file's `.dtbl` — Purchases: Date · Invoice · Items received ·
+Amount · Status; Payments: Date · Reference · Method · Amount, the method cell carrying the file's
+`.ledtag` chip (Landmark / CreditCard / Banknote for ONLINE / CARD / CASH). Right-aligned tabular
+numerics; the status pill on the shared `.pill` anatomy with `dot={false}`.
+- **Sort:** `<SortHead>` renders a real `<button class="sorth">` inside the `<th>`, so it is
+  keyboard-operable by construction rather than by a `tabIndex` bolted onto a cell, and `aria-sort`
+  rides the `<th>` where a screen reader looks for it. One active sort at a time; a new column
+  starts descending, the active one flips (`nextSort`). Sorting Payments by Reference sorts by what
+  the row SHOWS (§3), never by the column behind it — otherwise the rows with no typed reference
+  would sort by an id nobody can see.
+- **Pager:** the desk list's inline pager was extracted to one `<Pager>` component, now mounted
+  three times (list + both tables). `SUPPLIER_TAB_PAGE_SIZE = 10`. A search, a range change or a
+  re-sort rewinds both tables — page 4 of a 30-row result is a blank card once the result is 8.
+- **`.drawbar`:** 243 nested the search + range inside the ledger card as `.ledtbl__bar`, which
+  made "one search for all three tabs" true in behaviour and false to look at. Lifted out onto the
+  file's `.drawbar`, standing above whichever panel is in front. `.ledtbl__bar` is no longer
+  rendered (its CSS stays — the ledger card's own bar anatomy is still the sibling reference).
+- **Loading skeleton (judgement call, recorded):** the file draws one and the drawer had no
+  loading state at all — it appeared only once the ledger had ARRIVED, so a press did nothing for
+  the length of the round trip, which is the one moment a user cannot tell a slow network from a
+  dead control. `openLedger` now sets `pending` from the list row and `<LedgerDrawerSkeleton>`
+  opens immediately. Its header and balance headline are REAL (the list row already holds the
+  name, contact and outstanding, and they are the same figures the list is stating behind the
+  scrim) — only what is in flight shimmers. The tab bar and the search bar are drawn inert rather
+  than omitted, so the drawer does not change shape when the data lands. Desktop only: the phone's
+  sheet has its own entrance animation over the wait and the mobile file draws no loading pane.
+
+### §2 — recent purchases / recent payments
+One `<RecentBlock>` on the file's `.recentblk` family (`__hd`, `__more`, `__none`, `.recentrow`),
+mounted four times (two tiers × two blocks). They are VIEWS of the arrays the table above them drew
+from — same range, same search, no second query path — cut at `SUPPLIER_RECENT_COUNT = 10`.
+- **Judgement call:** they sort by DATE (`recentFirst`) regardless of the table's own sort. "Recent"
+  means the latest ten; a table sorted by Amount does not change which ten those are.
+- **Which tab shows which:** the file draws recent-purchases under the Purchases tab and
+  recent-payments under the Payments tab, and the mobile Ledger panel draws BOTH. Built exactly
+  that way — Ledger shows both, each other tab shows its own. `__more` moves to the tab; it is
+  omitted on the tab it would link to, because a link to here is not a link.
+- 243 had DELETED the two standing lists on the reasoning that the tabs already stated those facts;
+  the owner brought them back in a different role (a tighter secondary summary). Recorded so the
+  round-trip reads as a decision and not as a revert.
+
+### §3 — the ledger's payment rows (the owner's `payments-detail-1/2.png`)
+Root cause: `SupplierPayment.reference` is ONE free-text column holding two unrelated things — what
+an operator typed (composed with the Note as `"<ref> · <note>"` by 243 §6, `pharmacy.dto.ts`) and
+what the SERVER writes when a purchase is saved part-paid (`po:<purchaseId>`,
+`pharmacy.service.ts`). The API's `ledgerLabel` is `reference ?? <kind>`, so a server-written
+payment came back with the same internal key as its reference AND its label, and the row read
+*"po:d_pur_getz_5 · Online · po:d_pur_getz_5"*. A purchase with no invoice number has the same
+shape of problem — its reference falls back to the purchase row's own id.
+
+New pure module `packages/shared/src/pharmacy-supplier-ledger.ts`:
+- `isInternalReference()` — catches an empty value, a namespaced key (`po:`), a uuid, a cuid, and a
+  lower-case snake row id (`d_pur_getz_5`, three segments or more). **Tuned on an asymmetry:** a
+  false negative (an id shown) is a bug the owner can photograph; a false positive (a reference
+  replaced by "Cash payment · 14 Jul 2026") is merely less specific. So it catches the four shapes
+  the database actually holds and guesses at nothing else — `PI-20492`, `GRN-8841`, `884120` and
+  `no. 004417` are all short opaque strings a human DID type and none may be dropped.
+- `splitPaymentReference()` — splits on the FIRST separator only (a note may contain one itself),
+  drops an id in the reference position, keeps whatever note rode with it.
+- `SUPPLIER_TAB_PAGE_SIZE`, `SUPPLIER_RECENT_COUNT`.
+
+In the screen: `rowReading(lang, e)` is the one derivation and `<RowText>` the one renderer — a
+`<b title>` over a clipped `<small title>`, mounted by `.histrow__t`, `.mledrow__hd`, `.dtbl
+.idcell`, `.ledtbl .ref` and `.recentrow .t` alike. A payment with no typed reference states its
+tender and its day (`pdLedPayMethodDate` / `pdLedPayDate`) — a true description reconcilable against
+a bank line. The note is clipped by CSS with the full value on `title` (hover, and long-press on the
+devices that surface it); **decision recorded:** a `title` attribute rather than a tap-to-expand
+control, because the note is context and a row that grows on tap is a list that jumps under a thumb.
+The drawer's and the sheet's SEARCH now fold the row's reading rather than `e.reference`/`e.label`:
+a user who can no longer SEE `po:d_pur_getz_5` must not have to type it either.
+
+### §4 — Record payment pre-fills the balance
+`RecordSupplierPayment` opens with `target.outstanding` in the amount box and selects it on mount
+(ref + `focus()` + `select()`). Same `target.outstanding` the drawer headline and the dialog's own
+subtitle state — one source, so the field can never open on a figure the header contradicts. A
+credit balance (nothing owed) pre-fills nothing: there is no figure to offer and 0 is not a payment.
+Everything 243 §6 settled stands — no "Pay in full" (its purpose is now the pre-fill), today
+pre-selected, Notes field, icon + placeholder on the amount, no icon on the Method select.
+
+### §5 — mobile
+- **5.1** the list header's last-days range is REMOVED and the search field takes the full row.
+  Owner's ruling, and the bug behind it: the range read a supplier's LAST PURCHASE — the only date
+  a supplier row carries — so "Last 30 days" quietly removed every supplier not bought from this
+  month, including the one with the largest overdue balance on the page. `listDays` and its filter
+  are gone; the range survives in the drawer and the sheet, where it narrows a ledger. The chrome's
+  height is unchanged (the field was always the 46px object), so 248 §1's scroll reservation holds.
+- **5.2** the sheet's search field rendered broken because `.mpos-search` was declared only under
+  `.mp-pos2` and `.mp-mobile .mchrome--pos`; the sheet is portalled to the document root wearing
+  `.mp-inv2 .mp-pur2`, so the field had NO box — the glyph outside a control that was never drawn.
+  Declared for the scope. `MobileSearchField` split out of `MobileFilterRow` so the header and the
+  sheet mount the same object.
+- **5.3** `.mcycle` → `.mrangebtn` + `.mpop`. A 46×46 icon button opening the four ranges in a
+  popover; it says nothing at rest and tints with a short label (`pdMRangeShort`) only once a range
+  other than "all entries" is applied. Reasons, both the file's: the words cost the field a third of
+  the row (worse in Urdu) and stepping put two wrong states between "All" and "Last 365". The
+  `.mcycle` rules were DELETED rather than left standing — a sheet that keeps every superseded
+  component teaches the next round two ways to draw one control.
+- **5.4** infinite scroll on all three sheet tabs, `PURCHASE_MOBILE_PAGE` per flick, the standard
+  `.infload` foot with its own wording per tab. The window rewinds on a tab/search/range change and
+  the sentinel is `useInfiniteScroll`'s CALLBACK ref (218 §2), so the observer follows the foot
+  across the remount. No pagination on this tier.
+- **5.5** the same two recent blocks in the file's `.recentblk--m` variant.
+
+### §6 — full-file diff, changed selector list
+NEW to `globals.css`, all `.mp-pur2`-scoped: `.drawbar`; `.dtbl` (+ `table/th/td/.num/.date/
+.idcell/.qty/.amt/.amt--open/.amt--late/.amt--paid/.methcell/.pager*` and the
+`@container (max-width:460px)` narrow-card rule that sheds the method chip rather than pushing the
+amount out); `.sorth`, `.sorth__arr`, `.sorth.is-asc/.is-desc`; `.recentblk`, `__hd`, `__more`,
+`__none`, `.recentrow` (+ `.d/.t/.a/.a.is-open/.a.is-late`), `.recentblk--m`; `.mrangebtn`,
+`__lbl`, `.is-set/.is-open`, `.mpop`, `.mpop__opt`; `.mpos-search` (+ `> svg`, `input`,
+`:focus-within`) for the portalled scope. CHANGED: `.pdrawer__body >` now also exempts `.drawbar`,
+`.dtbl`, `.recentblk` and `[role='tabpanel']` from being squeezed (the file's own `flex:none`
+note — a squeezed `.dtbl` eats its own pager); `.mfiltrow` gained `position:relative` (the popover
+anchors to the row); `.sheet__body >` also exempts `.recentblk`/`.segctl`; clipping added to
+`.histrow__t b/small`, `.mledrow__hd b/small`, `.ledtbl .ref small`, `.recentrow .t b`. REMOVED:
+the whole `.mcycle` family incl. its RTL padding mirror. Logical properties used for the new
+families (`text-align:start/end`, `inset-inline-end`) where the mockup wrote physical ones — RTL is
+a §4B self-check and the module already converts (`.balhead__end`).
+Untouched and verified: `.ledtbl*`, `.histrow*`, `.pdrawer__hd/__foot`, `.tabs-underline`,
+`.segctl`, `.balhead*`, `.pill`, `.scard*`, `.pcard*`, `.mfacts`, `vendor`.
+
+### i18n
+22 new keys, EN + UR, parity verified both directions: `pdMRangeOpen`, `pdMRangeShort`,
+`pdDrawColInvoice/Items/Amount/Status/Method`, `pdSortNone/Asc/Desc`,
+`pdDrawShowingInvoices/Payments`, `pdSupRecentPurchases/Payments/More/NoPurchases/NoPayments`,
+`pdLedPayMethodDate`, `pdLedPayDate`, `pdMLoadingMoreEntries/Invoices/Payments`.
+
+### Tests written (controller runs them)
+- NEW `packages/ui/src/lib/suppliers-drawer-and-mobile-r4.spec.tsx` — the mockup gate; unit tests
+  for `isInternalReference` / `splitPaymentReference` (incl. the exact `po:d_pur_getz_5` row from
+  the screenshot and the six human references that must never be dropped); guard suites for §1 the
+  tables/sort/pager/`.drawbar`/skeleton, §2 the recent blocks, §3 the one renderer and the clipping,
+  §4 the pre-fill and selection, §5.1–5.5 the phone, §6 the selector families, §7 the frozen
+  figures and the EN/UR gate.
+- UPDATED `purchases-suppliers-mobile-r3.spec.tsx` (the list range is gone; `.mcycle` retired;
+  one `MobileFilterRow` mount) and `purchases-suppliers-mobile-r2.spec.tsx` (the sheet's payments
+  fold moved onto `filterTabPayments`; the 46px guard moved to `.mrangebtn`, plus the new
+  `.mp-pur2 .mpos-search` declaration). Each edit carries the reason it was superseded.
+- Every string/regex assertion in the new and edited suites — and in every existing suite that
+  reads `SuppliersClient.tsx`, `RecordSupplierPayment.tsx`, `globals.css` or the two mockups — was
+  verified statically against the live files rather than by running the suite.
+
+### Self-checks
+Isolation ➖ (pure presentation, no query touched). Flags/permissions ➖ (unchanged). Audit ➖ (no
+new state change). Offline ➖. White-label ✔ (tokens only, no brand literal). Design ✔ (tokens,
+light/dark, skeletons, empty states, RTL logical properties, 44px targets on `.mpop__opt` and
+`.recentblk--m`). i18n ✔ (EN+UR parity). Money ✔ — 106 frozen; the ledger foot is still folded from
+EVERY entry the server sent and never from the filtered view, so narrowing the range narrows what is
+LISTED and never what is owed. `pnpm lint` and `pnpm typecheck` run once, clean (the one remaining
+warning is a pre-existing unused eslint-disable in `doctor-portal.repositories.ts`, untouched here).
