@@ -12941,3 +12941,105 @@ Payment settlement, the 234 allocation block, credit, prescription handling, FEF
 
 ### Gates
 `pnpm prisma generate`, `pnpm lint` and `pnpm typecheck` run once at the end — both clean (the one remaining lint warning is pre-existing, in `doctor-portal.repositories.ts`, untouched here). Unit/e2e/build left to the controller per AGENT.md §4A.
+
+## 254 — import-export — DONE (2026-08-11)
+
+**Branch:** `feature/254-import-export` · **Spec:** /specs/254-import-export.md · **Work type:** FEATURE · **Schema:** none (no migration; the spec-12 `ImportJob` table already records every run).
+
+### What was built
+
+**The framework was EXTENDED, not duplicated (§1).** `@mp/import` gained: `ColumnSpec.aliases` + `help`;
+`normalizeHeader` / `suggestMapping` / `resolveMapping` (case-, space- and punctuation-insensitive auto-match, one
+file column used at most once); `dryRun(importer, sheet, { mapping })` now returns `mapping`, `missingRequired` and
+the per-row natural `keys`; `Importer.keyFor` for a CONDITIONAL natural key and `naturalKeyOf` / `planUpsertWith`
+over it; `summarizeUpsert` for the created/updated/collapsed split; `describeErrors` +
+`buildReadableErrorReportCsv` for the plain-words report; and `transformRow(row, present)` — the rule the whole
+step turns on.
+
+**A missing column never erases (§2.2).** `dryRun` now OMITS a column the file does not carry instead of coercing
+it to null, and hands `transformRow` the set of columns the file actually had. A partial file updates what it
+names; a present-and-blank cell is an explicit clear. Without this, one supplier file with six columns wipes the
+tax rate off fifty thousand rows.
+
+**A missing REQUIRED column rejects the file whole (§2.3)**, in one sentence, instead of emitting "is required"
+once per row — 50,000 copies of one sentence tells a shopkeeper nothing.
+
+**Entities registered (§3).** `inventory` (new, pharmacy module, `inventory.manage`): product type, name, generic,
+strength, form, category, barcode, base/pack/carton unit chain, pack-size note, sale price, discount %, tax %, min
+stock, shelf, requiresRx, active — 20 columns, every one aliased so a supplier's own export auto-maps.
+`customer` (new, `pharmacy.settings.manage`): name, phone, address, udhaar limit, allowCredit, opening balance,
+notes, active. `purchase` (new, `purchase.manage`, `importable: false`) — EXPORT ONLY.
+
+**Keys, per §2.4.** Inventory: barcode, else name+strength+form — expressed as `keyFor`, since no fixed column
+list can say "it depends". A stored row answers to BOTH its barcode key and its name key, so adding a barcode to a
+product that had none UPDATES it rather than creating a twin. Customers: phone. Suppliers: **phone**, which
+SUPERSEDES 246 §6's name key — recorded as a deliberate change, with 246's own spec text and tests rewritten
+rather than deleted. Every key is stated in the wizard, so "the same row" is never a guess.
+
+**No stock, no batch, ever (§3/§8).** The inventory importer touches `medicines`, `product_categories` and
+`product_units` and nothing else. Asserted directly, twice: the fake repo's stock/batch/movement arrays stay empty
+after a three-row import, and a source assertion forbids the importer from reaching for those repo methods.
+
+**Apply (§2.5/§3).** Still chunked at 500 and resumable from the last completed chunk; now yields the event loop
+between chunks so the API stays responsive during a 50k apply, and `POST …/apply {background:true}` answers
+immediately with the job in APPLYING while the wizard polls `applied/valid`. Both fakes' upserts were re-indexed
+per chunk (they were O(n²) row scans) — that is what made the 20k e2e finish inside the gate's timeout again.
+
+**Export (§4)** is now server-side and streamed: `ImportService.exportCsvChunks` yields the header then one chunk
+per page; the controller returns a `StreamableFile` over it. `exportProducts` / `exportCustomers` /
+`exportPurchases` page by keyset, honour the screens' own filters (search, category, type, active, lowStock,
+nearExpiry; supplier search; purchase date range and invoice search) and emit the IMPORT column keys, so
+export → edit → import round-trips — proven by a test that exports, re-imports and asserts the catalogue is
+byte-identical with 0 created and 3 updated.
+
+**Screens (§5/§6).** `CatalogueIO` became a four-step wizard — file → columns → dry run → apply — composed from
+the kit: the `Panel` dialog, the standard table for the mapping and for the error report, a `SearchSelect` per
+system column over the file's headers, kit pills for the counts, a determinate progress meter, toasts. Wired on
+Inventory, Low stock & near expiry, Suppliers and (new) Customers; every import gated on its entity's permission
+via `usePermission`, absent rather than disabled when the role lacks it. The purchases import button is REMOVED —
+251 §4 drew it disabled expecting 254 to build it; 254 §3 parks it for its own spec and §5 says a parked control
+is clutter. Both remaining client-side CSV exports (Suppliers, Purchases) are gone.
+
+### Decisions recorded
+
+1. **The catalogue entity is `inventory`, not `medicine`.** Spec 18 had already registered `medicine` for the
+   clinic's six-column prescribing dictionary under `rx.write`. Overriding that registration would have silently
+   changed a clinic capability from a pharmacy step; a second entity over the same table, with the columns the
+   counter actually sells from and the catalogue's own permission, is the honest split. The web catalogue now
+   points at `inventory`.
+2. **Customers are gated on `pharmacy.settings.manage`.** The customers desk itself is `pharmacy.sell`, but
+   rewriting every customer's udhaar limit and opening balance in one file is a CREDIT-configuration act, and §5
+   is explicit that this is not a counter tool. No new permission key was invented for it.
+3. **The stored error report changed format** to `Row,Column,Problem` with the column's human title (§6). Two
+   assertions in the spec-12 e2e were updated; `buildErrorReportCsv` is untouched for any other caller.
+4. **`GENERAL` rows are stripped of medical identity** (generic, strength, form, requiresRx) rather than refused —
+   183 §2's rule is that a general product simply leaves them null, and a mixed retail sheet leaves them blank
+   anyway.
+5. **A half-filled unit level is an error, not a guess**: a pack name with no count cannot be converted and a
+   count with no name cannot be printed, so both are refused in the tenant's own words.
+
+### Gates
+
+`pnpm lint` clean (0 errors; the one API warning is the pre-existing doctor-portal disable directive).
+`pnpm typecheck` clean, 29/29. Suites run in-place while building: `@mp/import` 31/31, `packages/ui` 88 suites /
+1651 tests, `@mp/i18n` 28/28 (parity), API `src/import` + `src/purchase` + the new
+`src/pharmacy/import-export.spec.ts` (32 cases covering every Acceptance clause) 79/79, `pharmacy.e2e` 21/21.
+
+### Files
+
+`packages/import/src/index.ts` (+ spec), `apps/api/src/import/{registry,service,controller,dto,constants,__fakes__,e2e spec}`,
+`apps/api/src/pharmacy/{inventory.importer,customer.importer,purchase.exporter,import-export.spec}.ts` (new),
+`apps/api/src/pharmacy/{pharmacy.repositories,pharmacy.module,__fakes__}.ts`,
+`apps/api/src/purchase/{supplier.importer,purchase.repositories,__fakes__,supplier-import.spec}.ts`,
+`apps/web/components/pharmacy/{CatalogueIO,PurchaseHeadActions}.tsx`,
+`apps/web/app/(app)/pharmacy/{inventory,inventory/alerts,suppliers,customers,purchase}/*Client.tsx`,
+`apps/web/app/globals.css`, `packages/i18n/src/messages/{en,ur}.json` (25 keys),
+`packages/ui/src/lib/import-export-254.spec.ts` (new) + three superseded UI specs rewritten.
+
+### Not done here, deliberately
+
+The 50,000-row file, the memory/timing figures and the "imported products sell correctly at POS" check in §7 are
+DEPLOYED-PAGE acceptance: they are run against the live tenant, not asserted in a unit test. The code path is
+proven at 20k (spec-12 e2e) and 2.5k (this step's suite) with chunked, resumable, event-loop-yielding apply.
+
+WORK TYPE: FEATURE (branch feature/254-import-export)
