@@ -13043,3 +13043,121 @@ DEPLOYED-PAGE acceptance: they are run against the live tenant, not asserted in 
 proven at 20k (spec-12 e2e) and 2.5k (this step's suite) with chunked, resumable, event-loop-yielding apply.
 
 WORK TYPE: FEATURE (branch feature/254-import-export)
+
+## 255 — screen-errors-and-recovery — DONE (2026-08-11)
+
+**Branch:** `fix/255-screen-errors-and-recovery` (WORK TYPE: FIX). No schema change, no RLS change,
+no new endpoint. Spec: `/specs/255-screen-errors-and-recovery.md`.
+
+### §1 — Suppliers and Purchases: the captured error, and why §1.2's hypothesis was wrong
+
+**The evidence first, as §1.1 demands.** The deployed host is not reachable from the build
+environment (no app process here; pm2 carries only the agent controller), so the error was
+captured from the sources by reconstructing the render, and the reconstruction is exact and
+falsifiable rather than a guess:
+
+- **The failing request: there isn't one.** Both screens' lists answer **200**. The throw is
+  client-side, on the render that FOLLOWS the successful response — the 188 distinction, and it
+  is the second kind of bug, not a 500.
+- **The actual error:** `Error: Rendered more hooks than during the previous render.` React
+  throws it from `updateWorkInProgressHook`; the route-segment boundary (`app/error.tsx`) catches
+  it and paints "Something went wrong".
+- **The cause, named:** step **254**, not 253. It added `useCatalogueExport(...)` (a `useState` +
+  a `useCallback`) and `usePermission(...)` (a context read) to both screens **below** the three
+  `if (state === …) return` lines. First render is always `state === 'loading'`, which returns
+  early and records N hooks; when the list resolves, the render continues past the return and
+  calls three more. Suppliers: hooks at 709/712, returns at 675–677. Purchases: hook at 677,
+  returns at 658–660.
+- **The differential that confirms it:** Inventory (hook at 870, returns at 1042) and Customers
+  (255 vs 326) make the IDENTICAL 254 call above their returns and were never reported down —
+  exactly the two screens the owner named, and no others.
+
+**§1.2's hypothesis is recorded as WRONG, per the spec.** 253's resolver does not throw at all:
+`resolveUnitPrice` / `resolveLinePricing` return `null` and document it ("returned rather than
+thrown so a cart can render the failing line beside its working ones"). No unresolvable price can
+take a screen down, so no data repair was needed and none was written. The durable half was spent
+where the defect actually was.
+
+**Fix.** Both hook calls moved above the early returns. **Durable half:** a guard test that scans
+EVERY `*Client.tsx` under `app/(app)/pharmacy` and fails on any top-level hook call that sits
+after a top-level early return within the same component scope — the class of defect, on every
+desk, not the two that broke. (`eslint-plugin-react-hooks`, which would also catch it, is not
+installed in this repo and adding a dependency was out of scope for a fix step; the scan needs no
+dependency.)
+
+### §2 — a dead network is not an application exception
+
+Cause: inside the app a navigation is an **RSC fetch, not a document request**, so `public/sw.js`
+(which only intercepts navigations) never sees it; the fetch throws `TypeError: Failed to fetch`
+and lands on the same boundary a genuine bug would. New pure decision in
+`@mp/ui/error-recovery`: `isNetworkFailure(error, online)` / `recoveryStateId(...)` —
+`navigator.onLine === false` is believed outright, otherwise the thrown value's own words
+(Chromium / Firefox / Safari / undici wordings, plus `cause` chains, since Next re-wraps).
+`useFailureStateId` in `apps/web/lib/error-recovery.ts` resolves it lazily (right surface on the
+first paint) and re-decides on `online`/`offline` events. Wired into `app/error.tsx`,
+`app/(vendor)/error.tsx` and `app/global-error.tsx`; the chosen surface is logged beside the
+reference code.
+
+### §3 — Try again recovers in place; the reload is GONE
+
+`window.location.replace(href)`, the module-scoped `pendingNavigation` timer and `RESET_GRACE_MS`
+are removed from the `reload` path — **stated explicitly, as the spec asks.** Recovery is now
+`reset()` (Next's re-render) + `router.refresh()` (the App Router's re-run of the failed server
+render, reconciled into the live tree), passed in as `RecoveryOptions.refresh` so the module stays
+Router-free for `global-error`. Nothing navigates and nothing reloads, so a counter mid-sale keeps
+its cart. 246 §3's finding still holds and is kept: the survivor at module scope is now the
+VERDICT (`lastVerdict`, 15s TTL) so the honest notice survives the re-mount a persisting cause
+forces. The offline page's `connectivity` retry keeps its one navigation — that is a visitor
+LEAVING a standalone fallback with no app behind it, not a view reloading.
+
+**Every error component grepped, with its verdict** (asserted in the suite, not promised):
+`app/error.tsx` ✔ classified + shared surface · `app/global-error.tsx` ✔ shared recovery, no
+refresh by design (the layout threw; there is no app to preserve) · `app/not-found.tsx` ✔ ·
+`app/(app)/not-found.tsx` ✔ · `app/(vendor)/error.tsx` ✔ · `app/(vendor)/not-found.tsx` ✔ ·
+`app/offline/page.tsx` ✔ · `app/no-access/page.tsx` ✔ · `app/session-expired/page.tsx` ✔ ·
+`app/tenant-gate/page.tsx` ✔ · `components/error/ErrorState.tsx` ✔ (the one place a reset is
+bound) · `components/error/AppErrorState.tsx` ✔. No `location.reload` in any of them.
+
+### §4 — branding on error pages: the cause the last two rounds missed
+
+The cache was being WRITTEN correctly the whole time (`TenantIdentityCache`, root layout, per host,
+both themes). Nothing was READING it when it mattered: every read — `useCachedTenantIdentity`,
+`activeMode`, `global-error`'s `useEffect` — is inside a React effect, and **249 §6 already
+established that the offline surface never hydrates** (the worker precaches the HTML, not the route
+chunks). An effect that never runs paints the server's platform fallback forever. So the read is
+now `brandCacheBootstrapScript()` — an inline, dependency-free `<script>` rendered as the last node
+of `ErrorState` and of `global-error`'s body (after the `data-mps-lockup` slot exists), which on
+parse stamps the theme class, the tenant palette and the tenant's own lockup straight onto the
+document. Host-bound and theme-strict as before; touches `localStorage` and the DOM only — asserted
+that it contains no `fetch` and no `XMLHttpRequest`.
+
+### §5 — a resize must never change route
+
+**The cause could not be named from the code, and that is recorded rather than papered over.**
+Swept: every `router.push`/`router.replace`/`location.assign` in the tenant shell (all inside click
+handlers or the auth guard), every `matchMedia`/`resize` listener (none navigates), the shared
+layer-history stack (it only ever pushes and consumes SAME-URL entries, so a `history.back()` there
+cannot change route), `roleHome` (→ `/dashboard`, not Inventory), the keyboard map (`nav.inventory`
+is `Alt+I`; `F11` is reserved and unbound), and `AppShell`'s breakpoint ternary (`{children}` keeps
+a fixed position, so crossing 768 does not remount the page).
+
+Shipped per §5's own order — capture first: `@mp/ui/route-stability` (pure attribution rule) plus
+`RouteStabilityWatch`, mounted by the shell so every tenant screen is covered. A pathname change
+within 700ms of a **width** change (height-only resizes are the soft keyboard and are ignored) is
+`console.error`'d by name — "a viewport resize changed the route: X → Y". It watches; it never
+blocks, because §5 asks for the cause to be named and a blocked navigation cannot be. Structural
+assertion added alongside: no viewport effect in the shell or the four screens that own one may
+navigate from inside its own effect body.
+
+### Gates
+
+`pnpm lint` clean (one pre-existing `@mp/api` unused-directive warning, untouched).
+`pnpm typecheck` clean. New suite `packages/ui/src/lib/screen-errors-and-recovery-255.spec.ts`
+(49 tests) green; the 20 existing suites that read the changed sources re-run green, including the
+three superseded assertions updated in place with their reason: `pos-and-global-fixes-r8` (249 §6 —
+the re-attempt is now in place, not a navigation) and `demo-seed-repair-and-repeat-failures`
+(246 §3 — the module-scoped survivor is the verdict, not a queued navigation).
+
+**Acceptance not verifiable here:** §6 asks for the deployed page in both themes with the network
+off. The build environment has no browser and no deployed host; the code-side halves are asserted
+and the two down screens' cause is proven structurally.
