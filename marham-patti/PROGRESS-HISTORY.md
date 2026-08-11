@@ -12817,3 +12817,88 @@ Per CLAUDE.md the agent did not run `test:unit` / `test:e2e` / `build`; the cont
 
 No product behaviour changed beyond the one EN string. Gates: `pnpm lint` clean, `pnpm typecheck`
 clean, `@mp/ui` jest 87 suites / 1632 tests green.
+
+## 252 — pricing-model-schema — DONE (2026-08-11)
+
+**Branch:** `feature/252-pricing-model-schema` · **WORK TYPE:** FEATURE (schema only) · **Spec:** specs/252-pricing-model-schema.md
+
+**Problem.** Pharmacy pricing could not express three things: a sale price that belongs to a BATCH rather than a
+product (the same medicine bought twice at two prices silently lost the difference), a TRADE DISCOUNT ON COST that
+moves the profit basis, and a PRE-SET SALE DISCOUNT that follows the stock it was bought with.
+
+**Change.** One additive migration `20260811010000_pricing_model_schema` + the matching schema.prisma fields. No UI,
+no service, no DTO, no behaviour. 253 wires them.
+
+**Already-exists audit (§1 demands the verdict list).**
+- `medicines.sale_price` EXISTS (spec 20) → NOT re-added; it is the product PRICE rung.
+- `medicines.cost_price`, `.tax_rate`, `.exclude_from_global_discount` (222) EXIST → untouched.
+- `medicines.discount_pct` absent → ADDED (product rung of the discount ladder).
+- `batches.cost_price` EXISTS → untouched, still the UNDISCOUNTED cost as entered.
+- `batches.sell_priority` (215) EXISTS → untouched; ordering is not pricing.
+- `batches.sale_price` / `.sale_discount_pct` / `.cost_discount_type` / `.cost_discount_value` /
+  `.effective_unit_cost` absent → ADDED.
+- `purchase_items.cost_price` / `.line_total` / `.product_unit_id` / `.unit_qty` EXIST → untouched.
+- `purchase_items.cost_discount_type` / `.cost_discount_value` / `.effective_unit_cost` / `.sale_price` /
+  `.sale_discount_pct` absent → ADDED.
+- `pharmacy_settings.default_tax_rate` / `.restocking_fee_pct` / `.pos_pin_*` EXIST → untouched.
+- `pharmacy_settings.fefo_price_mode` / `.margin_warn_enabled` / `.min_margin_pct` absent → ADDED.
+- `sale_items` had NO discount column at all (the bill discount is `sales.discount`) → `price_source`,
+  `discount_source`, `discount_pct`, `discount_amount` ADDED.
+
+**Enums (4, new):** `DiscountValueType` (PERCENT|AMOUNT), `FefoPriceMode` (SPLIT|BLENDED),
+`PriceSource` (BATCH|PRODUCT), `DiscountSource` (NONE|MANUAL|BATCH|PRODUCT|GLOBAL).
+
+**Judgement calls, and why.**
+1. *`effective_unit_cost` is STORED, not derived.* Profit is always measured against the discounted cost; a derived
+   figure would drift the day a discount rule changes, silently rewriting historical profit. A stored column cannot.
+2. *Two separate discount pairs, never one.* Cost discount moves the cost basis (profit, valuation, payable); sale
+   discount moves what the customer pays. Conflating them destroys margin figures silently, so they are two pairs of
+   columns, and the batch SALE discount is percentage-only (a fixed rupee concession at the counter is a manual line
+   discount, 222).
+3. *`cost_discount_value` uses money precision DECIMAL(12,2), not DECIMAL(5,2)*, because it holds EITHER a percentage
+   OR a rupee amount, discriminated by `cost_discount_type`. A PERCENT-typed value is bounded at 100 by the CHECK.
+   No new precision is introduced anywhere: money is (12,2), percentages (5,2) — exactly what is already in use.
+4. *SPLIT is the FEFO default* (owner decision): one cart line per batch at its own price and expiry — honest and
+   auditable. BLENDED produces a weighted-average figure matching no real batch, so it is opt-in per tenant.
+5. *The margin guard warns, never blocks* (owner decision, consistent with every other guard): `margin_warn_enabled`
+   defaults true; `min_margin_pct` NULL means "warn only at or below effective cost" — a floor, not a target.
+6. *`DiscountSource.NONE` exists* because "no rung matched" is different from "we never looked", and a receipt read
+   years later must be able to tell those apart.
+
+**Constraints (§2 — in the DATABASE, not only the DTO).** `batches_pricing_ck`, `purchase_items_pricing_ck`,
+`medicines_discount_pct_ck`, `pharmacy_settings_min_margin_pct_ck`, `sale_items_discount_ck`: no discount negative,
+no percentage over 100, PERCENT-typed cost discount bounded at 100, AMOUNT-typed one merely non-negative.
+
+**Backfill (§3).** Existing batches get NO sale price and NO discount — NULL means "fall through to the product
+price", which is today's behaviour. `effective_unit_cost` is set to `cost_price` on `batches` and `purchase_items`
+(the cost already recorded), so historical profit, valuation and supplier balances cannot move. Guarded by
+`WHERE effective_unit_cost IS NULL`, so a second run is a no-op; a batch already priced is never overwritten.
+
+**RLS.** All five tables are pre-existing tenant tables; the migration re-asserts the canonical `apply_tenant_rls()`
+(ENABLE + FORCE + `tenant_isolation`) on `batches`, `purchase_items`, `medicines`, `pharmacy_settings`, `sale_items`.
+The backfill DML runs inside a `NO FORCE` window restored in the same transaction — the 61/90/152 trap (as owner,
+FORCE would apply the fail-closed policy, zero rows visible, backfill silently writing nothing).
+
+**Idempotency.** Every DDL statement is catalogue-guarded (`pg_type` / `information_schema.columns` /
+`pg_constraint` probes; enum columns use a guarded plain `ADD COLUMN` rather than `ADD COLUMN IF NOT EXISTS` so the
+152 §4 static drift guard can see the native enum type on the column). Applied twice against a populated database
+in-process: identical.
+
+**Tests written (controller runs them).** `packages/db/src/pricing-model-schema.spec.ts` — real migrations over
+pglite: per-table byte-identical fingerprints across the migration; new columns NULL / at their defaults; the
+effective-cost backfill equals the recorded cost; every CHECK proven (including AMOUNT-150 accepted vs PERCENT-150
+rejected); precision asserted (12,2) / (5,2) per column; the four enum member lists; twice-run idempotency including
+"an already-priced batch is not overwritten"; RLS read-isolation + WITH CHECK + fail-closed no-context, asserted
+PER TABLE for all five; and a static scan of every `.ts`/`.tsx` under `apps/` and `packages/` proving NOTHING READS
+THE NEW COLUMNS YET (§4). Sentinels are the identifiers unique to this step; `discountPct` / `discountAmount` /
+`salePrice` are excluded as camelCase because they already occur in unrelated code (purchase-desk entry field, a POS
+i18n key, Medicine/ProductUnit) — their unique SQL forms are checked instead, plus a `salePrice`-near-`batch` probe.
+
+**Endpoints:** none. **i18n keys:** none. **Flags/permissions:** unchanged. **.env.example:** unchanged.
+
+**Gates run here:** `pnpm prisma generate`, `pnpm lint`, `pnpm typecheck` — all clean. Migration SQL additionally
+validated by applying every migration + this one TWICE against an in-process Postgres before commit.
+
+**Self-checks:** i18n ➖ (no UI) · isolation ✅ (RLS forced + per-table isolation tests) · flags ➖ · performance ➖
+(no query added) · design ➖ (deliberately no visual surface) · white-label ➖ · accountability ➖ (no state change) ·
+offline ➖ · secrets ✅ none.
