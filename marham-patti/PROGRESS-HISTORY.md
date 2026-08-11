@@ -13274,3 +13274,153 @@ credit-attribution's `.paychange--acct` regexes (the same figure is asserted on 
 `pnpm lint` clean (including the design-drift, token-integrity and tenant-* checks). `pnpm typecheck` clean.
 The @mp/ui jest suite was run once, filtered to failures only, to catch superseded guards before the controller
 does: 90 suites / 1727 tests green. No `pnpm build`, no e2e, vendor untouched, no schema change.
+
+---
+
+## 257 — panel-placement-and-zoom — DONE (2026-08-11)
+
+**Branch:** `fix/257-panel-placement-and-zoom` · **Work type:** FIX · **Schema:** none · **RLS:** unchanged.
+
+### §1 — the fourth report, and the first time the cause was named
+
+The three prior fixes (209 §2, 213 §2, 245 §1) each moved a DIFFERENT panel to a different
+remedy — stacking contexts, portals, `avoidCollisions` — and the owner kept photographing the
+same page. 249 §7 then built `planFloatingPanel` / `floatingPanelProps` and wired the four
+**Radix** panels to it. That is why the report survived: Radix already lays its content out with
+`strategy: 'fixed'` (`@radix-ui/react-popper` 1.3.2, `dist/index.mjs:128`), so the panels 249
+fixed were never the ones in the screenshots.
+
+The panels in the screenshots are the ones drawn straight from the mockups, and every one of
+them was the same shape:
+
+```
+.mp-pos2 .unitsel-wrap .menu { position:absolute; top:calc(100% + 6px); ... }   globals.css:9876
+.mp-pos2 .pos-results       { position:absolute; top:calc(100% + 6px); ... }    globals.css:9685
+.mp-pos2 .pos-sel__panel    { position:absolute; top:calc(100% + 6px); ... }    globals.css:9745
+.mp-inv2 .menu              { position:absolute; top:calc(100% + 6px); ... }    globals.css:9421
+.ptop__pop .usermenu/.notifmenu { position:absolute; top:calc(100% + 8px); }    globals.css:3216
+.mp-pur2 .mpop              { position:absolute; top:calc(100% + 8px); ... }    globals.css:13184
+```
+
+**An absolutely-positioned box contributes to its scroll container's overflow.** So the 196px
+unit menu opened on the LAST cart line adds its own height to
+`document.documentElement.scrollHeight`; the page grows a scrollbar; and the sidebar — sized to
+the viewport, not to the new document — ends short of the bottom. That gap IS the owner's
+screenshot. No collision setting, z-index or portal reaches it, because the defect is the
+`position` property.
+
+**The fix, once, in the shared helper.** `packages/ui/src/lib/floating-panel.ts` gains
+`placeAnchoredPanel()` (pure) and `useAnchoredPanel()` (the DOM half). It plans the side through
+the SAME `planFloatingPanel` the Radix panels use, then returns the inline style that pins the
+panel to the **viewport**: `position: fixed`, a `left` clamped to the viewport, `top` when it
+opens downward and `bottom` when it flips upward, a `maxHeight` equal to the room that actually
+exists, and `overflow-y: auto` so a list too long for either side scrolls inside itself. A fixed
+box is out of flow AND out of its scroller's overflow, so the document's scroll height cannot
+move when a panel opens — the acceptance, as a property of the code rather than a hope.
+
+**Decisions recorded:**
+
+* **Fixed, not portalled.** The obvious alternative was to portal these panels to the document
+  root the way 213/245 moved the Radix ones. Rejected, twice over: each panel is styled by a
+  rule scoped to a screen (`.mp-pos2 .pos-sel__panel`), so a portalled node loses its skin
+  entirely; and each closes through the shared `contains()` dismissal contract (193 §4), which a
+  portalled node breaks — the trap `use-dismiss.ts`'s own header warns about. `position: fixed`
+  fixes the reported defect while the panel stays a child of its trigger's wrapper, keeping both.
+* **Transformed ancestors.** `fixed` is relative to a transformed / filtered / contained
+  ancestor, which a drawer mid-slide is. `fixedContainerOf()` walks up from the trigger, finds
+  that element and subtracts its rect, so offsets are correct inside a drawer or an animating
+  dialog. Without it the panel would fly to a corner there.
+* **Scroll listener in the CAPTURE phase.** These panels hang off cart rows and table bodies; a
+  bubbling `window` listener never hears a nested scroller and a "fixed" panel would sit still
+  while its trigger slid away underneath it.
+* **The flip is frozen per open** (`side` ref), so a filtered list or a taller month moves only
+  the cap — the jitter of 246 §4 stays fixed.
+* **RTL.** The mockup CSS positions with `inset-inline-start`, which is `right` on an Urdu page.
+  `left` + `right` + a width is over-constrained and the RTL cascade drops `left`, which would
+  pin every Urdu panel to the wrong edge. The style therefore writes `insetInlineStart/End: auto`
+  FIRST, then the physical `left`/`right`. The key order is asserted in the suite.
+* **`prefer` added to `planFloatingPanel`.** The tooltip wants ABOVE first; everything else wants
+  below. Default is `bottom`, so no existing behaviour moved.
+* **Tooltip converted from CSS `:hover` to state.** A rule cannot report where its trigger is. The
+  four events are the same ones the CSS reacted to, so WHEN a tooltip appears is unchanged; the
+  bubble is no longer in the DOM (or the page's overflow) while closed.
+
+**Converted — the grep the spec asks for.** `grep -rn 'useAnchoredPanel(' apps packages`, excluding
+the helper itself and the suite:
+
+```
+apps/web/components/pharmacy/PosSelectField.tsx:129      (POS customer + purchases supplier)
+apps/web/components/pharmacy/ListToolbarControls.tsx:119 (columns menu)
+apps/web/components/shell/TopbarActions.tsx:122,128      (notification panel, account menu)
+apps/web/app/(app)/pharmacy/pos/PosClient.tsx:1005       (scan results)
+apps/web/app/(app)/pharmacy/pos/PosClient.tsx:3750       (unit select — the screenshot)
+apps/web/app/(app)/pharmacy/suppliers/SuppliersClient.tsx:2093 (mobile range popover)
+packages/ui/src/components/tooltip.tsx:47
+```
+
+And the sweep proving nothing was missed — for every floating-panel class marker
+(`className="menu"`, `"menu is-open"`, `"pos-sel__panel"`, `"pos-results"`, `"notifmenu"`,
+`"usermenu"`, `"mpop"`) across `apps/web/app` + `apps/web/components`, the only files that draw
+one are the six above plus `app/ui/StaffKit.tsx`. StaffKit is the design-system SHOWCASE and
+renders its specimens `position: static` on the page, so it neither floats nor can grow anything;
+it is excluded explicitly in the test, by name and with the reason. The vendor console is out of
+scope by spec. That sweep is a TEST (`§1.2 ONE helper — no component positions itself`), so a new
+screen can no longer hand-roll a panel without the suite noticing — which is what stops this
+becoming a fifth report.
+
+The four Radix panels (search-select ×2, date-picker, data-list ×2) still spread
+`floatingPanelProps` and are unchanged; the suite re-asserts it, so there is one module and two
+mountings rather than two rules.
+
+**Evidence — and its honest limit.** The EVIDENCE RULE asks for `documentElement.scrollHeight`
+before/after from the DEPLOYED page. This agent has no browser and cannot produce that number;
+`test:unit` renders no page and jsdom reports `scrollHeight: 0` for everything, so asserting it
+there would be theatre. What is recorded instead is the mechanism and the code-level proof:
+the CSS declarations above (the cause, with line numbers), the Radix strategy line that explains
+why 249 missed it, the conversion grep, the marker sweep, and a suite that pins
+`style.position === 'fixed'` for every placement on every side plus the flipped panel's computed
+`bottom`/`top` (`§1.1 FLIPS UPWARD on the last row` asserts `bottom: 84px`, `top: auto` for a
+trigger 80px off the bottom of an 800px viewport). The browser before/after pair remains for the
+owner's next pass on the deployed page.
+
+### §2 — zoom is disabled again (OWNER DECISION, reversing 249 §8)
+
+249 §8 turned user scaling ON in `apps/web/app/layout.tsx`, on my recommendation, on
+accessibility grounds — a pharmacist reading a 6pt batch number needs to zoom. The owner heard
+that argument and overruled it: they want the tenant app to feel fixed, like an application. It
+is their product and their call.
+
+* `apps/web/app/layout.tsx` → `userScalable: false`, `maximumScale: 1`. The pair, not
+  `user-scalable` alone, because iOS Safari has ignored the latter on its own since iOS 10.
+* The whole exchange is written into the file's comment — that the accessibility case was made,
+  heard and overruled — so a later spec re-enabling zoom "for accessibility" is re-opening a
+  settled decision rather than raising a new point.
+* **The vendor console is excluded.** The root layout was the ONLY viewport in the app, so this
+  change would silently have taken the console with it. `apps/web/app/(vendor)/layout.tsx` now
+  declares its own `generateViewport()` keeping `userScalable: true` / `maximumScale: 5`.
+* 249's two REAL causes of the no-zoom report (a `{passive:false}` touchmove in
+  `use-pull-to-refresh`, a wheel handler in `search-select`) are untouched and their tests stand.
+* `pos-and-global-fixes-r8.spec.tsx` §8 was REWRITTEN rather than deleted: its two assertions
+  pinned the old policy, and they now pin the new one plus the vendor exclusion plus the fact
+  that the reversal is recorded in the source. The decision and its reversal read as one exchange
+  in one place.
+
+### Files
+
+`packages/ui/src/lib/floating-panel.ts` (helper: `placeAnchoredPanel`, `useAnchoredPanel`,
+`fixedContainerOf`, `prefer` on `planFloatingPanel`) · `packages/ui/src/index.ts` ·
+`packages/ui/src/components/tooltip.tsx` · `apps/web/components/pharmacy/PosSelectField.tsx` ·
+`apps/web/components/pharmacy/ListToolbarControls.tsx` ·
+`apps/web/components/shell/TopbarActions.tsx` · `apps/web/app/(app)/pharmacy/pos/PosClient.tsx` ·
+`apps/web/app/(app)/pharmacy/suppliers/SuppliersClient.tsx` · `apps/web/app/layout.tsx` ·
+`apps/web/app/(vendor)/layout.tsx` · new `packages/ui/src/lib/panel-placement-and-zoom-257.spec.tsx` ·
+rewritten §8 in `packages/ui/src/lib/pos-and-global-fixes-r8.spec.tsx`.
+
+No stylesheet change: the mockup rules keep their `position:absolute` (the suite for
+`.mp-pur2 .mpop` asserts it), and the inline placement overrides it only while a panel is open.
+
+### Gates
+
+`pnpm typecheck` — 29/29 tasks pass. `pnpm lint` — 16/16 tasks pass, including the design-drift,
+token-integrity, tenant-english-only, tenant-search-select and page-title checks. `pnpm test:unit`
+is the controller's gate, per CLAUDE.md.
