@@ -12902,3 +12902,42 @@ validated by applying every migration + this one TWICE against an in-process Pos
 **Self-checks:** i18n ➖ (no UI) · isolation ✅ (RLS forced + per-table isolation tests) · flags ➖ · performance ➖
 (no query added) · design ➖ (deliberately no visual surface) · white-label ➖ · accountability ➖ (no state change) ·
 offline ➖ · secrets ✅ none.
+
+---
+
+## 253 — pricing-in-screens — DONE (2026-08-11)
+
+**Work type:** FEATURE — branch `feature/253-pricing-in-screens`. **Schema: none** (252 did that). **RLS: unchanged.** No new permission, no new feature flag.
+
+### Problem
+252 added the columns — batch sale price, the two discounts, the stored effective cost, `fefo_price_mode`, and the `price_source`/`discount_source` provenance on a sale line — and deliberately left every one of them unread. This step is where money behaviour actually changes for the first time since Phase 20: it builds the ONE resolver those columns exist for and points every consumer at it.
+
+### What was built
+- **`packages/shared/src/pharmacy-pricing.ts` — the pricing engine.** Pure, browser-safe. The price ladder (batch sale price → product sale price → an explicit ERROR, never a silent zero — 192 §3), the discount ladder (manual → batch → product → global, first match, NEVER stacked), `resolveEffectiveCost`, `costDiscountAmount`/`effectiveUnitCost`, the warn-never-block `marginVerdict`, the plain-words `pricingSummary`, and `groupPricedAllocations`/`priceAllocatedLine` for SPLIT/BLENDED. Exported from `@mp/shared`.
+- **Settings (§5).** `fefoPriceMode` (SPLIT default) + `marginWarnEnabled` + `minMarginPct` through the shared shape, defaults, resolver, DTO, repo and the Settings screen's new **Pricing** card — stated in plain words with the consequence spelled out (a receipt looks different under each).
+- **Purchase entry (§2).** Per-line cost discount (percent OR fixed, defaulting to percent), the batch's sale price + sale discount, the live `.convline` summary, and the below-cost / below-floor warning. Desk grid gets a pricing SUB-ROW; the phone gets the same two fields on its card anatomy.
+- **POS (§3).** Pricing and the FEFO plan now resolve BEFORE the idempotency seam (the price is bound to the lot, so pricing against one read of the shelf and decrementing against another would quote one figure and charge another). The seam re-reads the shelf and refuses a sale the stock can no longer cover — same wording, same property — but VALIDATES that plan rather than making a second one. Split lines flow into `computePosCartTotals` unchanged. The counter previews the identical split with the identical engine.
+- **Returns (§4).** Return lines are now per SALE ITEM (`saleItemId`, optional), not per medicine — a split sale carries several lines for one product, and the old `Map<medicineId, row>` kept only the last one. Refunds are NET of the line's recorded discount, back to that line's own lot.
+- **Reports / prints / inventory (§4).** Profit and stock valuation cost against the lot's EFFECTIVE cost; the medicine's `costPrice` is now fed the discounted per-base figure at goods-in. Receipt lines print their own discount. The inventory drawer shows per-batch sale price + concession beside the effective cost; the product's own `discountPct` is editable on the form.
+
+### Judgement calls (recorded, not escalated)
+- **The trade discount is folded ONCE, at invoice level, by the SERVER.** `PurchaseItem.lineTotal` stays gross (`costPrice`'s meaning is unchanged since 105/185) and `purchaseGrandTotalFromLines` derives the header discount from the lines whenever any line carries one. Trusting the client's fold would eventually differ by a paisa on an invoice nobody could then reconcile; netting the line total *as well* would take the discount twice. Payable, supplier balance and ageing therefore reconcile exactly, and a body with no line discounts falls straight through to the old path.
+- **`Medicine.costPrice` now receives the DISCOUNTED per-base cost.** It is the product-level fallback both profit and valuation reach for; feeding it the sticker cost while the batch stored the discounted one would make the same shelf worth two different amounts depending on which report asked.
+- **`manualDiscountPct` is a NEW wire field, and its PRESENCE is the signal.** The POS used to send one already-resolved percentage, so the server could not tell a typed discount from a store rule — which is exactly the distinction the ladder turns on. A body carrying the key declares it understands the ladder; a body without it is honoured as MANUAL, so a pre-253 client's bill is byte-identical rather than silently re-priced behind a customer who has already been quoted.
+- **BLENDED's average is UNROUNDED**, for the same reason `baseUnitSalePrice` is: `round2(avg × qty)` is then exactly the split lines' summed gross, so the blended sale total equals the split total to the last paisa. The blended discount percentage is derived the same way.
+- **A split line records the entered unit only when its share is a WHOLE number of them.** Half a box drawn from a second lot is not "1 box", and printing it as one is the tidy lie §4 forbids.
+- **The margin figure in the summary is `(net − cost) / cost`** — markup, matching spec §2's own worked example ("Rs 807.50 → Rs 990 · Margin 22.6%"). Deliberately not the report's `profitMargin` (profit over revenue): different question, different place, and the spec fixes the sentence.
+- **`marginVerdict` is neutral when nothing is priced.** A half-typed row, or a lot that simply sells at the product's price, has no margin to judge; flagging it "below cost" would train staff to ignore the warning that matters.
+- **Topping up an existing lot re-prices it** (as `receiveBatch` has always done for cost), but a receipt that sets NO retail figures leaves the lot's existing ones alone rather than clearing them.
+
+### Frozen and verified by inspection
+Payment settlement, the 234 allocation block, credit, prescription handling, FEFO order (215 §2.3 comparator untouched), the stock decrement (still per REQUESTED line) and idempotency. The over-sell refusal keeps its exact wording. Tenant scoping is unchanged — every new read rides an existing `runWithTenant` repository method.
+
+### Files
+`packages/shared/src/pharmacy-pricing.ts` (new), `pharmacy-settings.ts`, `pharmacy-purchase-desk.ts`, `pharmacy-payment.ts`, `index.ts`; `packages/db/src/index.ts` (enum re-exports); `apps/api/src/pharmacy/{pharmacy.service,pharmacy.repositories,pharmacy.dto,__fakes__}.ts`; `apps/api/src/pharmacy-settings/{dto,repositories}.ts`; `apps/web/app/(app)/pharmacy/{pos/PosClient,pos/ThermalReceipt,purchase/PharmacyPurchaseClient,inventory/PharmacyInventoryClient}.tsx`; `apps/web/app/(app)/settings/sections/SalesTaxSection.tsx`; `apps/web/app/globals.css`; `packages/i18n/src/messages/{en,ur}.json` (32 keys, EN+UR parity).
+
+### Tests
+`apps/api/src/pharmacy/pricing-in-screens.spec.ts` — both ladders proven at EVERY rung and proven not to stack; the unpriced product blocked with nothing moved; a lot-priced product still sold when the product is unpriced; the 5% cost discount's payable / supplier balance / stored effective cost / discounted product cost; SPLIT two lines, identical prices one line, BLENDED equal to the split to the paisa; a lot's own concession recorded as BATCH and replaced by a typed one; the split-sale return refunding each line at its own price to its own lot; the net-of-discount refund; profit against the effective cost; idempotency and the over-sell guard unchanged; and the pre-253 client's bill preserved.
+
+### Gates
+`pnpm prisma generate`, `pnpm lint` and `pnpm typecheck` run once at the end — both clean (the one remaining lint warning is pre-existing, in `doctor-portal.repositories.ts`, untouched here). Unit/e2e/build left to the controller per AGENT.md §4A.
