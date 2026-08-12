@@ -13661,3 +13661,145 @@ parity green. Per CLAUDE.md the full `pnpm test:unit` / `build` gates are the co
 The spec asks for verification on a REAL DEVICE, both themes — scrolling past the first picker
 page on a large catalogue, the gestures, the pickers. That is not something an agent can do; the
 work is complete and the device pass is the owner's.
+
+---
+
+## 261 — void-purchase-and-invoice-print — DONE (2026-08-12)
+
+**Branch:** `feature/261-void-purchase-and-invoice-print` (WORK TYPE: FEATURE).
+**Spec:** `specs/261-void-purchase-and-invoice-print.md`. **Mockup gate:** `.a4tbl` and `.voidmark` both
+present in `purchases-suppliers-desktop.html` — proceeded.
+
+### §1.4 SCHEMA AUDIT — every field checked, and its verdict
+
+Spec §1.4 requires the existing `PurchaseOrder` to be examined BEFORE any column is added.
+
+| Field asked for | What already exists | Verdict |
+|---|---|---|
+| a status able to express VOIDED | `status POStatus` = DRAFT / SENT / PARTIAL / RECEIVED / **CANCELLED** | **ADD `VOIDED` to the enum.** CANCELLED is spec 29's "a purchase ORDER dropped before goods arrived" — a document under which no stock ever moved. A void is the opposite fact: goods arrived, batches were created, and all of it is now reversed. Reusing CANCELLED would make the two indistinguishable in every list, report and audit for ever after. |
+| the reason | `note` (carries the 105 meta JSON) | **ADD `void_reason`.** 251 §3.2 already recorded what hiding an indexable fact inside that blob costs; a mandatory reason shown wherever the void is shown is a column. |
+| the actor | `created_by` | **ADD `voided_by`.** `created_by` is who RECORDED the purchase, very often not who voided it — naming the voider is half the point of the marker. |
+| the time | `updated_at`, `created_at` | **ADD `voided_at`.** `updated_at` moves on any write and is not a void instant. |
+| the reversed quantities | `PurchaseItem.qty` per line + `StockMovement` | **NOTHING ADDED.** The reversal is derivable from the lines, and each reversed lot gets its own logged StockMovement. |
+| the payable reversal | `SupplierPayment`, and the ledger derives charges from purchases | **NOTHING ADDED.** The payable reverses BY EXCLUSION: a voided purchase is no longer a charge. A counter-entry would be a second reversal path to keep in step with the first. |
+
+**One additive migration:** `20260812000000_purchase_void` — `ALTER TYPE "POStatus" ADD VALUE 'VOIDED'`
+(guarded by a `pg_enum` existence check, legal inside a transaction on PG12+ because the label is
+declared and not used in the same file) plus three `ADD COLUMN IF NOT EXISTS` on `purchase_orders`.
+No backfill DML, therefore no RLS NO-FORCE window (unlike 251). Idempotent on re-apply.
+
+### §1.2 THE HARD RULE, AND HOW IT IS CHECKED
+
+`purchaseStockMoved()` in `@mp/shared` is the whole rule, pure, so the endpoint, the screen and the
+tests read one sentence. It looks at ACTUAL StockMovements against the lots the purchase filled:
+
+* any movement with `qtyDelta < 0` → refused, and the refusal NAMES the kind (sold / returned /
+  transferred / written off / adjusted) AND the alternative (a purchase return for goods going back
+  to the supplier, a stock adjustment for a counting correction);
+* the purchase's OWN stock-in movements are skipped (they are what put the stock there), and so are
+  a void's own reversal movements (`refType: 'purchase-void'`), so asking twice cannot answer
+  differently;
+* **another purchase topping up the same lot is NOT stock moving out.** Decision: the void then
+  reverses exactly the quantity THIS purchase brought in, never the whole lot. Zeroing the lot would
+  destroy the second delivery's stock. In the ordinary case — the purchase created the lot — the
+  quantity reversed IS the whole lot, so it returns to zero exactly as the spec words it.
+* a SECOND, independent reading: every lot must still hold at least what this purchase put in. The
+  movement log is the rule, but a lot that is short with no movement to explain it is exactly the
+  case where reversing anyway would drive stock negative, so that refuses too.
+
+Refusals additionally cover: a recorded payment (`SupplierPayment` referencing `po:<id>`, with the
+meta note's `paid` as the fallback reading) naming the amount and telling the user to reverse the
+payment first; a second void naming who voided it and when; and a line whose lot is no longer on the
+books (stops rather than losing the quantity).
+
+### §1.3 THE WRITE
+
+`PharmacyRepo.voidPurchase` is ONE `runWithTenant` transaction — status + reason + actor + time, each
+lot's qty, each medicine's aggregate on-hand, and one reversal `StockMovement` per lot carrying the
+operator's words (`Purchase voided: batch B1 reversed — <reason>`, `type: PURCHASE`, negative delta,
+`refType: 'purchase-void'`). Nothing is deleted. The stock feed publishes the new on-hand, the same
+coalesced 184 §4 bus a stock-in uses.
+
+**Audit:** the route is `@Audited({action:'pharmacy.purchase.void', entityType:'purchase'})` and the
+interceptor stores the whole handler RESULT as the summary — so returning `VoidPurchaseView` (the
+detail record, with `voidReason` / `voidedAt` / `voidedBy`, plus `reversed[]`) puts the actor, the
+time, the reason AND the reversed quantities into one audit row without adding an AuditService
+dependency to PharmacyService (which would have needed every positional test fixture edited).
+
+### §1.4 PERMISSION
+
+New TENANT key `pharmacy.purchase.void` ("Void a recorded purchase (reverse its stock and supplier
+payable)"), flag-mapped to `pharmacy.inventory` (it moves stock, like `pharmacy.stock.adjust`).
+Default grants: MANAGER explicitly; TENANT_OWNER by construction (`permissionKeysByScope('TENANT')`).
+NOT on ADMIN, PHARMACIST, SALESMAN or CASHIER. Enforced with `@RequirePermission` on
+`POST /pharmacy/purchase/:id/void`; the client's `usePermission` only decides whether to OFFER the
+button. Noted for later: MANAGER holds neither `pharmacy.sell` nor `pharmacy.stock.adjust`, so a
+Manager cannot currently reach the Purchases screen at all — a pre-existing role-composition matter,
+out of this step's scope, but the void key is where the spec put it.
+
+### §1.5 ON SCREEN
+
+Void is LIVE in the desk drawer footer and the phone sheet footer (danger-quiet, visually separated,
+hidden entirely without the permission, disabled with its reason when the purchase is already
+voided or the detail is still loading). It opens a centred destructive confirmation (132) — not
+`ConfirmDialog`, because this one takes input — stating the invoice number, the value and EVERY
+quantity that goes back, with the reason field required before the action enables. `VoidMark` draws
+`.voidmark` on BOTH tiers from one component (reason + actor, the actor resolved to a staff NAME
+server-side). A voided purchase cannot be paid anywhere: drawer, sheet, table row action, desk card,
+phone card. Voided rows are EXCLUDED from the four KPI stats, from `supplierLedger` and from
+`listSupplierSummaries` (so reports' supplier facts follow), and stay in the list under a new fifth
+filter chip — VOIDED — on both tiers, wearing a Voided pill that outranks every settlement word
+(`invoiceCardState` gained an optional third argument; every pre-261 call reads identically).
+
+### §2 THE PRINTED A4 INVOICE
+
+`InvoiceOverlay` was the generic `InvTable`/`InvTot` kit; it is now the mockup's own `.a4*` document.
+Transcribed into `globals.css` under the `.mp-pur2` scope, declaration for declaration: `.a4`,
+`.a4top`, `.a4brand`, `.a4mark`, `.a4title`, `.a4stamp`, `.a4parties`, `.a4party`, `.a4tbl`,
+`.a4cont`, `.a4foot`, `.a4notes`, `.a4terms`, `.a4tot`, `.a4sign`, `.a4legal`, `.a4slot`, `.a4peek`,
+`.a4box`, `.a4--phone`, `.a4wrap`, `.printdlg`, `.printdlg__hd`, `.printdlg__body`, `.printdlg__brk`.
+Two additions the mockup has no rule for and the spec asks for: `.a4stamp--void` and `.a4voidnote`
+(the void stamp and its reason on paper), plus `.printscrim` (the app's own overlay; the spec sheet
+draws a static stage).
+
+The paper keeps its OWN light `--pa-*` palette rather than the tenant tokens — a dark tenant palette
+must not print white on white. Desktop: a large centred dialog with Print and Escape. Mobile: a
+full-height bottom sheet with Print, the same document under one `a4--phone` scale class — never a
+second document. Pagination: 10 lines on page one (it carries the parties block), 14 after; the last
+page carries the totals, terms and signatures; `.a4cont` states what is carried over; `@media print`
+sets real A4 pages, repeats `.a4tbl thead` and marks the totals/signatures/terms/party blocks
+`break-inside: avoid`.
+
+`PurchaseInvoiceView.letterhead` gained the `store` block, so the printed header carries the tenant's
+PHONE and tax number (220 §3) as §2 requires — all of it resolved through `@mp/brand`, nothing
+hardcoded, proven by a two-tenant render test that finds two identities and no platform name.
+
+### Files
+
+* `packages/db/prisma/schema.prisma` (+ `migrations/20260812000000_purchase_void/migration.sql`)
+* `packages/shared/src/pharmacy-purchase.ts` (the void vocabulary + refusal messages),
+  `pharmacy-purchase-desk.ts` (`invoiceCardState` + `voided`), `purchase.ts` (`POStatusLit`),
+  `permissions.ts`
+* `apps/api/src/pharmacy/`: `pharmacy.repositories.ts` (`findLotBatch`, `listMovementsForBatches`,
+  `voidPurchase`, the three PO columns), `__fakes__.ts`, `pharmacy.service.ts` (`voidPurchase`, the
+  exclusions, `staffName`), `pharmacy.dto.ts` (`parseVoidPurchase`), `pharmacy.controller.ts`,
+  `pharmacy.constants.ts`
+* `apps/web/app/(app)/pharmacy/purchase/PharmacyPurchaseClient.tsx`, `apps/web/app/globals.css`
+* `packages/i18n/src/messages/{en,ur}.json` (+52 keys each; `pdVdVoidSoon` retired — the step it
+  named has arrived)
+* Tests: `apps/api/src/pharmacy/void-purchase-261.spec.ts` (the rule, the four refusals, the
+  reconciliation, the two-tenant whitelabel render), `packages/ui/src/lib/purchases-void-261.spec.tsx`
+  (per-selector CSS diff across the whole `.a4*` family + the source guards). One assertion in
+  `purchases-mobile-260.spec.tsx` retired: it asserted Void was inert with "arrives with the next
+  build step" — this IS that step.
+
+### Gates
+
+`pnpm prisma generate`, `pnpm lint` and `pnpm typecheck` run once at the end, both clean (the single
+remaining lint warning is a pre-existing unused eslint-disable in `doctor-portal.repositories.ts`).
+`pnpm test:unit` / `build` deliberately not run here — the controller runs the full gates.
+
+**No Playwright in this repo** (no config, no `test:e2e` script), so the screen's proof is the guard
+suite above, in the pattern 195/196/242/244/248/260 established.
+
+[CHECKPOINT]
