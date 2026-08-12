@@ -13511,3 +13511,153 @@ Batch creation, stock movement, unit conversion, supplier balances and every mon
 - 261: wire Void (the button and `.voidmark` are drawn and inert) and move Print invoice onto the `.a4*` family.
 - 260: the mobile families listed in §8.
 - The picker projection carries no unit or price, so the `.ppick` rows state name + generic/strength only; the line's own Unit and Cost fields state the rest the moment a product is chosen.
+
+---
+
+## 260 — purchases-mobile-redesign — DONE (2026-08-12)
+
+**Branch:** `fix/260-purchases-mobile-redesign` · **WORK TYPE: FIX** (presentation and interaction only)
+**Spec:** `/specs/260-purchases-mobile-redesign.md` · no CODEREF companion exists for this range.
+**Gate:** the recommitted mockup `specs/mockups/pharmacy/purchases-suppliers-mobile.html` carries
+`.mmargin` (20 occurrences) and `.msum` (64), so the spec's STOP condition did not fire.
+**Schema:** none. **RLS:** unchanged. **API:** unchanged — no endpoint added, changed or re-projected.
+
+### §1 — the header identity row
+
+The audit the spec asked for found exactly ONE divergent mount in the whole app, and it was this
+file's. `PurchaseSheet` passed the supplier mark as `icon`, which `MobileSheet` nests inside the
+34px `.sheet__hdic` medallion — a 44px `.supmark--lg` inside a 34px tile, with the heading and
+meta line then following it at the wrong gaps. That is the owner's "badly spaced". The supplier
+ledger (`SuppliersClient`, the spec's stated reference) has passed `lead` since 244 §5, and
+`UsersSection`/`RolesSection` pass `lead` with the shared `<Avatar>`. Fixed by moving this one
+call site onto `lead`; recorded as an executable grep in the new guard suite so a sixth
+divergence fails the build rather than reaching a screenshot.
+
+### §2 — view purchase, redrawn as the mockup's bottom sheet
+
+- Head: `lead` mark + `sheet__hd--stack` + a new `headExtra` slot on `MobileSheet` carrying the
+  mockup's `.vdsub` strip (status pill · date · recorded-by). `headExtra` is a frame concern:
+  inside the body those facts scroll away with the line items.
+- `.mfacts` now states supplier · purchase date · payment method · recorded by (it stated the
+  invoice number, which the header already carries, and an items count the line label states).
+- Line items are the mockup's `.mvline` cards — batch, expiry, unit chips, `qty × cost − disc`
+  and the batch's own sale price. A lot with no expiry reads "No expiry"; no batch reads
+  "No batch". The desk's ten-column table cannot survive 360px and the `.mledger` row it used
+  to borrow could not say all of that at once.
+- Totals are `.msum` / `.msum__row`, FULL WIDTH at the foot (the owner's report). `.totals` is
+  the desk's narrow boxed object.
+- Foot is `.sheet__foot--stack3`: Print · Record payment on one row, Void beneath in
+  `.btn--dangerquiet`. Void renders DISABLED with `pdVdVoidSoon` as its reason — 261 wires it;
+  the desk drawer says the same thing about the same button.
+- `.voidmark` + `is-voided` body for a voided purchase, and Record payment goes inert with it.
+- The sheet now opens from `detailFor` (the tapped row) with `detail === null` as the loading
+  state, so a tap draws a skeleton instead of nothing until the round trip lands. This mirrors
+  `PurchaseDetailDrawer` exactly.
+
+### §3 — new purchase
+
+**§3.1** `.mentryhead`: supplier · invoice number · purchase date · payment method · note, all
+five at 48px through ONE rule on the group. Method and note used to live inside a review sheet
+at the END of the flow, i.e. two facts about the invoice asked after the goods. The group FOLDS
+to the mockup's `.mfacts` read-back once a line exists, with a pencil `.mic` to reopen it —
+five 48px controls are most of a phone screen and, once the invoice is identified, they are
+answers rather than questions. Supplier picker stays full-screen with "+ Add supplier" opening
+the add form as a bottom sheet through `<Panel mobile>`; method is a short bounded sheet.
+
+**§3.2** Line cards restructured to the mockup's group order: (Item, Unit + Qty) · Cost · Selling
+· Batch & expiry. SALE PRICE AND SALE DISCOUNT ARE DRAWN FROM THE START, empty but present, on
+their own `.plinecard__grp` rather than behind an optional-looking tail. `.mmargin` sits beneath
+each card carrying the conversion, cost, selling price and margin — the SAME sentence and the
+same formatter as the desk's `.mgline`: `MarginLine` gained a `block` prop ('mgline' | 'mmargin')
+rather than the phone growing a second copy of the composition. It warns and never blocks;
+`canSave` never reads the margin.
+
+DECISION RECORDED: the spec's §3.2 field list omits tax and the cost-discount type toggle. Both
+were KEPT. Dropping the tax box would silently save 0 tax from every phone entry, and dropping
+the PERCENT/AMOUNT toggle would silently turn every fixed-rupee cost concession into a
+percentage one. Either is a money change by omission, which §3's own "no money-logic change"
+forbids. Both stay on the Cost group.
+
+**§3.3 — the owner's infinite-scroll bug, and what it actually was.** The phone's item select was
+handed a STATIC `options` array built from whatever `/pharmacy/medicines` had returned into the
+screen's memory. There was no paged source at all, so the sentinel had nothing to ask and
+scrolling past the first screenful loaded nothing, for ever; search appeared to work because a
+static list still filters in the browser. Fixed by giving the phone the SAME `usePagedOptions`
+state, the same `/pharmacy/medicines/picker` endpoint and the same 25-row page the desk has used
+since 228 §1 and 259 §2.2 — which brings the rest of §3.3 with it and re-implements none of it:
+the sentinel is `useInfiniteScroll`'s callback ref (218 §2, re-observed on remount), the
+"Loading more…" row is bound to the in-flight flag so it never lingers at the end, and
+"Searching N items…" renders while the first page of a query lands. The in-memory catalogue
+survives as the OFFLINE fallback. Camera scan: `SearchSelect` gained a `searchAction` slot
+rendered inside the sheet's search row (`.selsheet__srch--scan`, the mockup's `.mpick__srch--scan`);
+the tile joins the existing `.mchrome--pos .mscan` selector list rather than redeclaring it, so
+the two scan buttons are one object. A decoded code becomes the picker's QUERY — a scan is a way
+of typing a product name — and the viewfinder is portalled to the body past the chrome's
+`backdrop-filter`.
+
+**§3.4** `.mtotalbar--pay`: grand total with a 132px Amount paid box beside it, balance read back
+underneath, then a separate `.mactbar` with Cancel · Save purchase. The mockup's 78px/14px
+offsets were NOT transcribed literally: its phone frame has no floating dock and the live shell
+always mounts one at 12px (124 §2.3), which 241 already cleared by parking `.mtotalbar` at 86px.
+Taken as drawn, Save would have rendered on top of the dock. The action bar takes the 86px and
+the total bar rises above it; the scroller clears all three. The review sheet is gone. The
+pay STATUS is no longer a second control: it is `derivePayStatus(grandTotal, paid)`, which is
+what 259 already did on the desk, so the two entry surfaces now agree by construction. The old
+pair could reach "Paid" with 0 typed and "Credit" with the full total handed over.
+
+### §4 — record payment footer
+
+Per-selector diff against `NewSupplierPanel` named exactly one difference: Cancel wore
+`variant="ghost"` where every other sheet in the family draws the secondary button. Changed.
+`.sheet__foot--row` supplies the rest (46px, 10px gap, secondary-hugs/primary-takes-the-rest).
+The change lands on the desk dialog too, which is correct — the two now match on both tiers.
+Future dates were already disabled (259 §5) and the amount already pre-fills (250 §4); both
+re-asserted in the guard suite.
+
+### §5 — the last-days filter
+
+`MobileFilterRow`'s `.mpop` popover replaced by the shared bottom sheet on `.selsheet` rows,
+portalled to the document root. 218 §3 is the rule it broke: on this surface a short bounded
+list is a sheet. The popover also had to measure the viewport to decide up-or-down (257 §1's
+helper existed for it), sat at 40px rows against the 56px the shared row gives, and was awkward
+to dismiss. The `.mrangebtn` trigger is untouched. `useAnchoredPanel`, `useDismissOnOutside` on
+the row and the `MPOP_*` constants are gone with it.
+
+### §6 — the full-file diff
+
+Transcribed to `.mp-pur2` scope, declaration for declaration: `.midt`, `.sheet__hd--stack`,
+`.mvline*`, `.msum`/`.msum__row*`, `.sheet__foot--stack3`, `.mentryhead`, `.mmargin*`,
+`.mtotalbar--pay*`, `.mactbar`, plus corrections to `.mentryhead .input-wrap` padding and the
+card group's control heights. The `-ink` tone tokens are used where the mockup's own dark block
+overrides to them. Families the mockup declares but this screen's markup does not use
+(`.plinecard__sum`, `.plinecard__out`, `.mpick__price`, `.msum__total` — the last belongs to the
+POS `.msum`) were deliberately not transcribed: a rule with no element is a rule that rots.
+
+### Files
+
+- `apps/web/app/(app)/pharmacy/purchase/PharmacyPurchaseClient.tsx` — `PurchaseSheet` rewritten,
+  `MobilePurchaseEntry` rewritten, `MarginLine` gained `block`, `PAY_STATUSES` retired.
+- `apps/web/app/(app)/pharmacy/suppliers/SuppliersClient.tsx` — `MobileFilterRow` §5.
+- `apps/web/components/pharmacy/RecordSupplierPayment.tsx` — §4 footer.
+- `packages/ui/src/components/mobile-sheet.tsx` — `headExtra`.
+- `packages/ui/src/components/search-select.tsx` — `searchAction`.
+- `apps/web/app/globals.css` — the 260 block (+ `.selsheet__check.is-hidden`).
+- `packages/i18n/src/messages/{en,ur}.json` — 6 new keys, parity green.
+- NEW `packages/ui/src/lib/purchases-mobile-260.spec.tsx` (81 assertions — the per-selector diffs).
+- NEW `apps/api/src/pharmacy/purchases-mobile-260.spec.ts` (5 — the money did not move).
+- UPDATED, not deleted, three guards this round supersedes: the 250 §5.3 popover assertion in
+  `suppliers-drawer-and-mobile-r4`, the 257 §1.2 panel list (the sixth panel is now a sheet; the
+  desk's own `.colmenu > .menu` is CSS-anchored and was passing that check by accident), and the
+  244 §3 direct-`MobileSheet` count in `purchases-suppliers-mobile-r2`.
+
+### Gates
+
+`pnpm lint` clean (the one `@mp/api` warning is pre-existing and untouched). `pnpm typecheck`
+clean, 29/29. `packages/ui` jest and `apps/api/src/pharmacy` jest green (735 API tests). i18n
+parity green. Per CLAUDE.md the full `pnpm test:unit` / `build` gates are the controller's.
+
+### Not verified by this agent
+
+The spec asks for verification on a REAL DEVICE, both themes — scrolling past the first picker
+page on a large catalogue, the gestures, the pickers. That is not something an agent can do; the
+work is complete and the device pass is the owner's.
