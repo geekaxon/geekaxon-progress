@@ -14093,3 +14093,36 @@ case only the anchor moved; what each test asserts is unchanged.
 pre-existing unused eslint-disable in `apps/api` on an untouched file, confirmed present on
 a clean tree. `pnpm test:unit` / `pnpm build` deliberately not run (agent rule); the
 controller runs the full gates. Vendor untouched.
+
+## 266 — purchases-import — DONE (2026-08-13)
+
+**Branch:** `feature/266-purchases-import` (WORK TYPE: FEATURE). Spec: `/specs/266-purchases-import.md`. No CODEREF in range. **No schema change** — the import framework and its run records (12/254) carried everything.
+
+### What was built
+The bulk purchase import — the only import in the app that creates batches and moves stock. One row per LINE; rows sharing an invoice number become ONE `PurchaseOrder`. Registered on the existing spec-12 engine as the `purchase` entity, which 254 §3 had registered EXPORT-ONLY.
+
+- `apps/api/src/pharmacy/purchase.importer.ts` (new; replaces the deleted `purchase.exporter.ts`) — 21 columns per §1 with distributor aliases, per-row validation, whole-file header-agreement validation, store-backed resolution, per-invoice apply, group summary, per-line export.
+- `packages/import/src/index.ts` — four additive, pure engine extensions: `transformRow` gains a `rowNumber` argument; `Importer.validateSheet?` (whole-file pass whose errors drop the rows they name); `Importer.groupKey?`; `DryRunReport.rowNumbers`; and the helpers `orderByGroup` / `groupChunks`.
+- `apps/api/src/import/import.registry.ts` — `EntityImporter.resolveErrors?` (store-backed dry-run checks) and `groupSummary?` returning `GroupSummary`.
+- `apps/api/src/import/import.service.ts` — upload folds `resolveErrors` into the dry run before staging; apply orders by `groupKey` and chunks on group boundaries.
+- `apps/api/src/pharmacy/pharmacy.repositories.ts` — `findProductIdsByKeys`, `findProductsByName`, `existingInvoiceNos`; `exportPurchases` rewritten to ONE ROW PER LINE in the import column keys via the new pure `purchaseExportRow`; paged by purchase (`PURCHASE_EXPORT_PAGE = 200`).
+- `packages/shared/src/pharmacy-purchase.ts` — `PurchaseMeta.imported?`, decoded back only when present so every pre-266 note reads unchanged.
+- `apps/web` — the Purchases desk's Import icon is live on both surfaces behind `purchase.manage`, opening the SAME spec-12 wizard on the `purchase` entity; the wizard's dry run reads in invoices and lines when the server sends document counts; an `ImportedMark` pill on both purchase detail surfaces. Nine new strings in `en.json` and `ur.json`.
+
+### Decisions recorded
+1. **"One transaction per invoice" (§3) is delivered where it is observable, not as a DB transaction.** The repo seam has no cross-call transaction — every write is its own tenant-scoped statement, which is as true of the entry screen as of the importer — and threading one through would mean the importer writing rows itself, which §3 forbids in the same breath ("the import calls the same service the entry screen calls"). So: a duplicate invoice is refused by `createPurchase` BEFORE its first line is written, and any failure part-way through an invoice VOIDS that invoice through 261's own reversal before the job fails. No invoice is left standing with half its lines and half its stock.
+2. **Export was extended, not left alone.** §4 says export "is unchanged" but §5 requires export → edit → import to round-trip. A one-row-per-invoice export with a total on it cannot re-import. It is now one row per line in the import's columns. Cost per unit is recovered as `lineTotal ÷ quantity-as-entered` (the entry screen's multiplication run backwards, exact) rather than the stored per-base cost multiplied up, which would round a paisa back into the supplier's bill.
+3. **Two columns beyond §1's list:** `Supplier phone` (§2 requires phone matching, as the suppliers import does) and `Amount paid` (without it a paid invoice cannot round-trip, and §5 requires the round trip). Both optional.
+4. **Bare brand names resolve only when unambiguous.** A distributor's file routinely carries "Panadol" and no strength column. Where the catalogue holds exactly one product of that brand the row resolves; where it holds two it resolves NOTHING and the error names the strengths. Guessing which lot a delivery entered is precisely the mistake §0 exists to prevent.
+5. **An already-recorded invoice is not a dry-run ERROR but a reported SKIP.** §2 asks for collision detection and §3 for idempotency; the resolution is that the dry run names the invoices it will skip (`groupSummary.existing`) and the apply skips them. Never updated — a purchase is never edited (261).
+6. **`imported` is set in-process only.** It is a field on `CreatePurchaseInput` that `parseCreatePurchase` never reads, so no request body can claim a purchase was imported when a person typed it.
+7. **Invoice-level trade discount is 0.** §1 declares a per-line cost discount and an invoice tax and no invoice discount; inventing a second place to take the concession would double-count it.
+
+### Gates
+`pnpm lint` clean (one pre-existing unused-eslint-disable warning in `doctor-portal.repositories.ts`, untouched). `pnpm typecheck` clean, 29/29. Suites run directly rather than through the forbidden `pnpm test:unit`: API `npx jest` 173 suites / 2189 tests green; `packages/ui` 99 suites / 2175 green; `packages/import` 37 green.
+
+### Tests added
+- `apps/api/src/pharmacy/purchase-import-266.spec.ts` (24) — template round-trip, distributor headers via alias auto-match, three rows → one purchase, scattered invoice lines gathered, header disagreement reported per row, unknown product / unknown supplier / unknown unit refused with nothing created, phone matching, bare-name ambiguity, out-of-bounds numbers, invoices-vs-lines summary, dry run writes nothing, base-unit conversion through a 1×10×100 chain, null-expiry lot, generated batch number, discounted payable clamping a Rs 1,000 payment to a Rs 900 invoice, triple re-import changing nothing, the imported marker, an imported purchase listing/owing/voiding like any other, permission, export → edit → import, tenant isolation, and 1,200 lines over 120 invoices with no invoice split by a chunk boundary.
+- `packages/import/src/import.spec.ts` (+7) — row-per-line keys never collapse, whole-file errors drop their rows, `orderByGroup` / `groupChunks` gather, never split, give an oversized group its own chunk, and are deterministic for a resumed apply.
+- `packages/ui/src/lib/purchases-import-266.spec.ts` (9) — the live permission-gated icon on both surfaces, one shared wizard, both lists re-read after an apply, the invoice/line dry-run wording, the imported mark on documents only, and every new string in both languages.
+- Updated `import-export.spec.ts`, `import-export-254.spec.ts` and `demo-seed-repair-and-repeat-failures.spec.tsx`, whose guards asserted the parked purchases import that 266 has now built. The rule they guard is unchanged: a control is present and live, or absent — never inert.
