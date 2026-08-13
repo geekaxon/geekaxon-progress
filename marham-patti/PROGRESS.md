@@ -12,13 +12,13 @@
 - **EVIDENCE RULE:** a 3rd+ attempt records the measurement, not an assertion.
 - **SHARED-COMPONENT RULE:** a fix to a shared component includes the app-wide audit.
 
-**Last completed:** **266 — purchases-import**.
+**Last completed:** **267 — offline-recovery-and-round-fixes**.
 
-**Next:** **267 — offline-recovery-and-round-fixes** — specs/267-offline-recovery-and-round-fixes.md
+**Next:** none — build order complete
 
 ### Recent steps
+- **267 — offline-recovery-and-round-fixes** — DONE (2026-08-13) — one offline screen that stays put, a toast instead of a reload, chip only when work is held.
 - **266 — purchases-import** — DONE (2026-08-13) — a delivery file that becomes real invoices, proves itself first, and never lands twice.
 - **265 — purchases-mobile-r2** — DONE (2026-08-13) — one sheet footer everywhere, a full-screen entry flow, and a way back out of it.
-- **264 — purchases-desktop-r2** — DONE (2026-08-13) — clip not hidden app-wide, two-column facts, badge and picker fixed, Save PDF.
 
 > Older steps, and the group's standing notes, in PROGRESS-HISTORY.md

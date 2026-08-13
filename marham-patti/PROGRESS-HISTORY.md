@@ -14126,3 +14126,119 @@ The bulk purchase import — the only import in the app that creates batches and
 - `packages/import/src/import.spec.ts` (+7) — row-per-line keys never collapse, whole-file errors drop their rows, `orderByGroup` / `groupChunks` gather, never split, give an oversized group its own chunk, and are deterministic for a resumed apply.
 - `packages/ui/src/lib/purchases-import-266.spec.ts` (9) — the live permission-gated icon on both surfaces, one shared wizard, both lists re-read after an apply, the invoice/line dry-run wording, the imported mark on documents only, and every new string in both languages.
 - Updated `import-export.spec.ts`, `import-export-254.spec.ts` and `demo-seed-repair-and-repeat-failures.spec.tsx`, whose guards asserted the parked purchases import that 266 has now built. The rule they guard is unchanged: a control is present and live, or absent — never inert.
+
+## 267 — offline-recovery-and-round-fixes — DONE (2026-08-13)
+
+**Branch:** `fix/267-offline-recovery-and-round-fixes` — WORK TYPE: FIX. No schema, no RLS change, no endpoint.
+Spec: `/specs/267-offline-recovery-and-round-fixes.md`. Phase 22, production owner-test round 11.
+
+### §1.3 THE DIAGNOSIS FIRST (the capture the four previous rounds never took)
+
+**Which component renders each of the two offline screens.**
+
+* **Screen WITH the "Changes saved locally" chip** — `apps/web/components/error/ErrorState.tsx`, the shared
+  surface. It rendered `errorContent('offline').note` unconditionally. Reached three ways: the root boundary
+  `app/error.tsx` (an RSC fetch that fails with no connection is classified as `offline` by
+  `useFailureStateId`), the `/offline?reached=1` route (`app/offline/page.tsx` → `AppErrorState`), and any
+  other `AppErrorState` host.
+* **Screen WITHOUT the chip** — `apps/web/app/global-error.tsx`. It carried its OWN hand-inlined copy of the
+  same six-part anatomy (brand slot · mark · title · body · actions · notice · reference) and simply never
+  had a `content.note` element in it. It could not import the shared surface because that surface uses
+  `useRouter` and `next/link`, and this boundary replaces the root layout and may assume neither. So: the
+  recurring second-implementation pattern, on the error family, and the copy was one element adrift —
+  which is precisely "the two screenshots differ only in that the second carries a chip".
+
+**Where the reload originates.** `apps/web/lib/error-recovery.ts`, the single `window.location.replace(window.location.origin + to)`
+kept for a host that supplies no `navigate` (255 kept it; 263 aimed it at the remembered route). `global-error`
+is exactly such a host. A DOCUMENT request while the network has not fully returned is intercepted by
+`public/sw.js` (`request.mode === 'navigate'` → `caches.match('/offline?reached=1')`), so the control meant to
+LEAVE the offline page was itself the route to the second, chip-carrying one. That is the owner's "clicking
+Retry on the first reaches the second by reloading the browser", exactly.
+
+**What triggers the hop without a press.** The same anchor. The retry control is an `<a href>` (249 §6) so it
+works on a precached document that never hydrates; on such a document the click handler is never bound and
+the browser simply follows the link — a navigation the service worker again answers with the offline copy.
+No timer, no effect and no guard in the app navigates to `/offline` on its own: greps for `router.push` /
+`router.replace` in the shell find only auth guards (→ `/login`), and `useFailureStateId` was already made
+sticky in 263 so a returning connection cannot swap the surface out from under the user.
+
+### §1.1 ONE OFFLINE SURFACE
+
+* **New `apps/web/components/error/ErrorSurface.tsx`** — the anatomy, ONCE. Presentational: no Router, no
+  `next/link`, no providers, no data. Hosts pass the lockup node, the recovery (`retryHref` / `onRetry` /
+  `trying` / `mode`), the notice and an optional `renderLink`.
+* **`ErrorState.tsx`** is now the WIRING only (router `refresh` + `navigate`, `next/link`, the shared
+  `TenantLock`). **`global-error.tsx`'s inlined copy is DELETED** — it renders `ErrorSurface` with a lockup
+  drawn from the cached identity, keeping its own `<html>`/`<title>` and its no-provider constraint intact.
+* The kept surface is the one matching `first-offline.png`: with an empty queue it has NO chip.
+* **The chip is conditional.** `packages/ui/src/lib/offline-queue.ts` (new) defines `PENDING_QUEUE_KEY`,
+  `OFFLINE_QUEUE_SLOT`, `encodePendingQueue`, `pendingQueueCount`, `offlineNoteVisible`. `OfflineProvider`
+  mirrors the outbox depth into `localStorage` on every `refreshCounts` (`apps/web/lib/offline-queue.ts`
+  holds the read/write seam + `usePendingQueue`), because the queue itself is IndexedDB — async, and
+  unreachable from an inline script. The chip ships `hidden`; React unhides it after mount and, on the
+  precached document that never hydrates, `brandCacheBootstrapScript()` unhides it from the same mirror.
+  `globals.css` gains `.mps-note[hidden] { display: none; }` (an author `display` beats the UA `[hidden]`).
+* **Nothing auto-navigates.** The offline page has no navigation left on any path but a user press.
+
+### §1.1 THE GREP, WITH VERDICTS (`location.reload`, `window.location` assignment, `router.refresh`)
+
+Across every error/offline component (`app/error.tsx`, `app/global-error.tsx`, `app/not-found.tsx`,
+`app/(app)/not-found.tsx`, `app/(vendor)/error.tsx`, `app/(vendor)/not-found.tsx`, `app/offline/page.tsx`,
+`components/error/{ErrorSurface,ErrorState,AppErrorState}.tsx`, `lib/error-recovery.ts`, `lib/route-memory.tsx`):
+
+* `location.reload` — **zero occurrences.** Verdict: none, and asserted.
+* `window.location.replace(window.location.origin + to)` in `lib/error-recovery.ts` — **DELETED this round.**
+  Verdict: this was the reload the owner reported and the way to the second screen.
+* `window.location.href` (read, `attempt`) and `window.location.origin + '/'` (the probe target) — **kept.**
+  Verdict: READS. Neither moves the page; the probe deliberately bypasses the service worker.
+* `window.location.pathname + window.location.search` in `lib/route-memory.tsx` — **kept.** Verdict: a READ,
+  recording where the user was.
+* `router.refresh()` in `ErrorState.tsx` — **kept.** Verdict: this IS the AJAX re-run §1.2 asks for — the
+  App Router re-fetches the failed server render and reconciles it in place, with no document request.
+* `router.replace(href)` in `ErrorState.tsx` — **kept.** Verdict: the client-side landing (263 §3).
+
+### §1.2 WHAT RETRY DOES (owner's specification, verbatim)
+
+* **Still offline** → `recoveryToast(outcome, mode)` (new, pure, in `@mp/ui/error-recovery`) returns
+  "Still no connection" + "Your work stays saved here and syncs as soon as it returns."; `useRecovery` raises
+  it through the imperative bridge. The branch then RETURNS: no navigate, no reset, no refresh, no reload.
+  `ErrorSurface` mounts its own `ToastProvider` (a boundary replaces the app subtree that holds the app's), and
+  the kit's bridge now RESTORES the outer provider on unmount instead of nulling it — otherwise every later
+  toast in the session would reach nothing. The body-line notice stands down when the toast carried the
+  verdict (`recovery.toasted`) and remains the fallback where no provider is mounted.
+* **Back online** → `reset()` + `router.refresh()` + `router.replace(recoveredHref(recalledRoute()))`: the data
+  reloads over AJAX and the user lands back on the page they were on, with no document request at all. A host
+  with no router (`global-error`) never left that route, so `reset()` alone returns them.
+
+### §2 TOAST ALIGNMENT (carried from 262 §4)
+
+262 DID land it in source and it is still there: `packages/ui/src/components/toast.tsx` computes
+`solo = !t.description`, the row is `items-center` (not `items-start`) and the icon `mt-0` (not `mt-px`),
+with the close control's `-mt-0.5` nudge dropped for solo. 262 asserted it structurally; this round adds
+RENDERING tests that mount the real provider and read the classes off the live nodes, title-only and with a
+description. Decision recorded: no code change was needed. If the owner still sees the old alignment on the
+deployed page, the remaining suspect is not this file — `@mp/ui` is consumed as a BUILT artifact (`dist/`,
+gitignored), so a deploy that reused a cached `dist` would ship the pre-262 toast.
+
+### Files
+
+New: `packages/ui/src/lib/offline-queue.ts`, `apps/web/lib/offline-queue.ts`,
+`apps/web/components/error/ErrorSurface.tsx`, `packages/ui/src/lib/offline-recovery-267.spec.tsx`.
+Changed: `packages/ui/src/lib/{error-recovery,brand-cache}.ts`, `packages/ui/src/components/toast.tsx`,
+`packages/ui/src/index.ts`, `apps/web/components/error/ErrorState.tsx`, `apps/web/app/global-error.tsx`,
+`apps/web/lib/{error-recovery.ts,offline.tsx}`, `apps/web/app/globals.css`, PROGRESS files.
+Superseded assertions updated (the "exactly one navigation" allowance and the per-host anatomy strings) in
+`screen-errors-and-recovery-255`, `import-dialog-and-error-recovery-263`, `pos-and-global-fixes-r8`,
+`demo-seed-repair-and-repeat-failures`, `layer-dismissal-and-error-recovery`.
+
+### Gates
+
+`pnpm typecheck` and `pnpm lint` clean (lint's design-drift, token-integrity, tenant-english-only,
+search-select and page-title checks all pass). The twelve spec files touching this family were run targeted
+rather than as the full suite: 12 suites, 338 tests, all passing. Vendor untouched; no schema, no migration.
+
+### Not verifiable from here
+
+The acceptance asks for confirmation on the deployed page and a real device (both themes, network tab showing
+no document request). That is the owner's round-11 pass; everything it checks is asserted structurally and,
+where it can be, behaviourally, in `offline-recovery-267.spec.tsx`.
