@@ -14426,3 +14426,117 @@ Every suite in this repo runs against the in-memory fakes, so the Prisma reposit
 exercised by the round-trip harness above and by staging. The first staging import after this
 lands should be checked against 268 §3.4's guard — `stock.qty == Σ batch.qty` — and against a
 small file applied both ways, before a 50,000-row file is run.
+
+## 270 — void-payment-reversal-and-names — DONE (2026-08-13)
+
+**Branch:** `feature/270-void-payment-reversal-and-names`. Spec: `/specs/270-void-payment-reversal-and-names.md`. No CODEREF covers this range.
+
+### §1.1/§1.2 — the void now reverses the payment it used to complain about
+
+261 refused a void whose purchase had a payment against it and told the user to "reverse the payment
+first" — an action that existed nowhere in the app, so a paid purchase entered by mistake could not be
+corrected at all. The refusal is gone (`purchaseVoidPaidMessage` deleted from `@mp/shared`; it was also
+the only message in the app that quoted the internal `po:<id>` linkage).
+
+Decision, taken and recorded here rather than escalated: **a payment is reversed by a RECORD, never by a
+deletion.** The original `SupplierPayment` row stays untouched and is STAMPED (`reversed_at`,
+`reversed_by`); a second row is written for the negative of its amount carrying the SAME `reference`, so
+the pair nets to zero everywhere downstream without any consumer learning a new rule. Deleting money that
+was recorded is the one thing this system must never do.
+
+- Migration `20260813010000_supplier_payment_reversal` — additive only: four nullable columns on
+  `supplier_payments` (`reversal_of_id`, `reversal_reason`, `reversed_at`, `reversed_by`) + one index
+  `(tenant_id, reversal_of_id)`. `ADD COLUMN IF NOT EXISTS` throughout, no DML, no RLS change.
+- `reversePaymentIn(tx, …)` in `pharmacy.repositories.ts` is the ONE write, shared by both paths. The
+  stamp is claimed with `updateMany … where reversedAt: null`, so two clicks racing produce exactly one
+  reversing entry (the loser gets `null` and is refused by name). A void passes `paymentReversals` into
+  `voidPurchase` and the reversal happens INSIDE the same transaction as the stock and the payable — a
+  failure anywhere leaves everything unchanged.
+- `buildSupplierLedger` gained a fourth kind: a payment with a NEGATIVE amount becomes a `REVERSAL` row
+  carrying the amount as a DEBIT. Balance arithmetic is unchanged (balance + debit − credit), both rows
+  stay visible, and `sourceId` now carries the payment row's id through to the entry — which also
+  replaced the fragile `date|amount|reference` key 243 §5 used to look a payment's tender back up.
+- `purchaseRow` takes `reversedPaid` and subtracts it: a purchase whose payment was reversed reads
+  `paid: 0`, `payStatus: CREDIT` again, on the list, the detail, the ledger and the supplier summaries —
+  all from one fold, `paymentsAgainstPurchases`, so no two surfaces can disagree.
+- `PurchaseDetailView.reversiblePayment` is read from the payment ROWS (net of reversals), never from the
+  meta note: the confirmation must state money that will actually move.
+
+### §1.3 — the standalone reversal
+
+`POST /pharmacy/purchase/suppliers/:id/payments/:paymentId/reverse`, reason required
+(`parseReversePayment`), `@Audited('pharmacy.supplier.payment.reverse')` writing the whole result (actor
+by NAME, time, reason, amount, both row ids). **Permission: `pharmacy.stock.adjust` — the same key
+recording a payment needs**, deliberately: making the correction harder to reach than the mistake is how
+wrong books stay wrong. It is already in the role editor, so an owner who narrows one narrows both. A
+reversing entry cannot itself be reversed (that is just recording the payment again). Web: new
+`components/pharmacy/ReverseSupplierPayment.tsx` (Panel — dialog on the desk, sheet on the phone),
+reached from the drawer's Payments table and the phone's ledger rows through one `ReverseAction`.
+
+### §1.4 — unchanged
+
+The stock rule still refuses independently: a purchase whose stock has moved cannot be voided, payment or
+no payment, and the refusal is total (proven: the payment is NOT reversed on that path).
+
+### §2 — the app-wide id rule, and the grep
+
+New `packages/shared/src/actor-names.ts`: `actorDisplayName` = full name → email → `"Unknown user"`,
+never the row id. Stated once, used everywhere. `staffName`/`findStaffNames` fell back to the USER ID
+until now — that is what printed "Recorded by cmr6degll0003fkhm2379qxwo".
+
+**The grep (labels, messages, toasts, print templates), every occurrence and its fix:**
+
+1. `PurchaseDetailView.createdBy` — raw cuid on the purchase detail AND the printed A4 invoice.
+   FIXED: resolved to a name server-side, so both surfaces inherit it with no web change.
+2. Void refusal quoting `(po:<cuid>)` — FIXED: the refusal is gone; the reversing entry's reason names
+   the INVOICE NUMBER instead (`purchaseVoidPaymentReversalReason`).
+3. Supplier ledger references `po:<id>` / `return:<id>` / `reference ?? row.id` — FIXED at the SOURCE:
+   `humanPaymentReference` resolves a payment's reference to the invoice it settled or to what a human
+   typed, and a charge's reference is its invoice number or nothing. 250 §3 had taught the SCREEN to
+   refuse an id; the API was still sending them, which is why it kept coming back.
+4. Sale/purchase return `processedBy` — cuid on the Returns screen, on the printed refund receipt
+   ("Authorised by …") and on the debit note ("Raised by …"). FIXED: resolved to a name.
+5. Refund receipt `originalInvoice` — printed `originalSaleId.slice(0,12)`, a truncated cuid, under
+   "Original sale". FIXED: the sale's human number (`INV-…`), empty when the sale predates numbering.
+6. Refund receipt `receiptNo` — a sale return has no human number of its own; the row printed a
+   truncated cuid. FIXED for now by DROPPING the row when the value is id-shaped (`isInternalReference`)
+   — the receipt is identified by the original invoice instead. The barcode keeps the id (scanned, never
+   read). A return-numbering sequence is a data-model decision and belongs to the Returns step.
+7. Day-close `closedBy`, the recent-closes `cashier` column, and the printed **Z-report** cashier —
+   all raw actor ids. FIXED: one batched lookup names them; "Unknown user" when the account is gone.
+8. Sample chain of custody (`SamplesClient`) printed `actorId` per scan. FIXED: new
+   `SampleEventRepo.findActorNames` + `SampleEventView.actorName`; the event still STORES the id (it is
+   evidence), the timeline shows the person.
+9. Billing end-of-day report — the column headed "Cashier" printed `cashierId`. FIXED:
+   `BillingRepo.findStaffNames` + `EndOfDayPerson.cashierName`, one lookup after the fold.
+
+Reviewed and deliberately LEFT: stored `StockMovement.reason` strings that embed a row id
+(`Purchase <id>: batch B1 received`) — 213 §5.2 renders the RESOLVED reference and the actor for every
+movement kind and never renders `reason` except for adjustments, whose reason is human-typed; and the
+`MED-xxxxxxxx` barcode fallback, which is a machine code by design. Both are data, not display.
+
+### Tests
+
+- `apps/api/src/pharmacy/void-payment-reversal-270.spec.ts` (new, 24 cases): the pure rules (reversal
+  reason wording, the already-reversed refusal, reason normalisation, `REVERSAL` in the ledger and the
+  same-instant ordering, the actor and reference resolvers), then the service — one-act reversal of
+  payment + payable + stock, the original row kept with a reversing entry against it, the ledger showing
+  both and reconciling, an unpaid purchase unchanged, the second void refused by name with no second
+  reversal, the moved-stock refusal leaving the payment alone, the standalone reversal and the purchase's
+  own paid/balance/status following it, the double-reversal and reverse-a-reversal refusals, the 404, and
+  a sweep asserting no ledger label or reference is id-shaped.
+- `packages/ui/src/lib/void-payment-reversal-270.spec.tsx` (new, 36 cases): the confirmation states the
+  payment, the reason gate, the endpoint's permission + audit, "nothing is deleted" (repository writes a
+  second row; the words on both surfaces), the §2 fixes, and EN+UR parity + placeholder parity for all
+  18 new keys.
+- `void-purchase-261.spec.ts`: its paid-refusal case is replaced by "a purchase with a payment CAN be
+  voided", and its message assertion now covers the reversing entry's wording.
+- `dayclose.spec.ts`: asserts the closer's NAME on the view and on the Z-report, not the actor id.
+
+### Gates
+
+`pnpm prisma generate`, `pnpm lint` and `pnpm typecheck` clean (one pre-existing unused-eslint-disable
+warning in `doctor-portal.repositories.ts`, untouched). Full API suite 2239/2239, `@mp/ui` 2240/2240,
+`@mp/db` pglite specs green (the migration applies). Vendor untouched.
+
+**WORK TYPE: FEATURE (branch feature/270-void-payment-reversal-and-names)**
