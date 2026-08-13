@@ -1,23 +1,24 @@
-> ⚠️ **PUBLIC FILE** — no secrets, hostnames, subdomains, endpoints, credentials or keys. Placeholders only.
+> ⚠️ **PUBLIC FILE** — no secrets, hostnames, endpoints or keys. Placeholders only.
 
 # PROGRESS.md — Marham Patti Build Tracker (SHORT)
 
-> SHORT tracker; detail in PROGRESS-HISTORY.md. A done step is NEVER rebuilt — a dangling "Next" means [HUMAN_REQUIRED].
+> SHORT tracker; full detail in PROGRESS-HISTORY.md. Keep under 1.5 KB. A completed step is NEVER rebuilt — a dangling "Next" means [HUMAN_REQUIRED], not an earlier step.
 
-## Current Status
-- **Project:** Marham Patti — multi-tenant white-label health platform.
-- **Phase:** **PHASE 22** — production LIVE; Purchases redesign.
-- **Last completed:** **262 — inventory-and-field-consistency**.
-- **Next:** specs/263-import-dialog-and-error-recovery.md
-- **Group order:** 263. Build one step only, then stop.
-- **BRANCH RULE:** switch to the spec's own branch BEFORE any commit.
-- **Numbering is continuous — never skip a number.**
-- **After this group:** thermal printing → shortcuts → Returns → Customers → Recent Sales → Settings → Day-close → Accounting → Dashboard → audits.
-- **Parked:** purchases import; per-page menu permissions; deferred shortcuts.
+## Current build-step
+- **Project:** Marham Patti — multi-tenant white-label healthcare platform.
+- **Phase:** **PHASE 22** — production LIVE; Purchases round 2 and bulk import.
+- **Group order:** 264 → 265 → 266 → 267. Build one step only, then stop.
+- **BRANCH RULE:** create and switch to the spec's own branch BEFORE any commit.
+- **EVIDENCE RULE:** a 3rd+ attempt records the measurement, not an assertion.
+- **SHARED-COMPONENT RULE:** a fix to a shared component includes the app-wide audit.
+
+**Last completed:** **264 — purchases-desktop-r2**.
+
+**Next:** **265 — purchases-mobile-r2** — specs/265-purchases-mobile-r2-and-sheet-consistency.md
 
 ### Recent steps
-- **262 — inventory-and-field-consistency** — DONE (2026-08-12) — one field anatomy app-wide, and opening stock arriving as a real purchase.
-- **261 — void-purchase-and-invoice-print** — DONE (2026-08-12) — a void only while the stock stands, and an invoice you can print.
-- **260 — purchases-mobile-redesign** — DONE (2026-08-12) — one identity mark, line cards, full-width totals, a picker that pages.
+- **264 — purchases-desktop-r2** — DONE (2026-08-13) — clip not hidden app-wide, two-column facts, badge and picker fixed, Save PDF.
+- **263 — import-dialog-and-error-recovery** — DONE (2026-08-12) — a dialog that explains its wait, and an error you come back from.
+- **262 — inventory-field-anatomy** — DONE (2026-08-12) — one field anatomy, and opening stock that arrives as a purchase.
 
-> Older steps in PROGRESS-HISTORY.md
+> Older steps, and the group's standing notes, in PROGRESS-HISTORY.md
