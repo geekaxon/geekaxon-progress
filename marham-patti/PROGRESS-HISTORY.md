@@ -13925,3 +13925,171 @@ The spec's STOP INSTRUCTION names `specs/265-purchases-mobile-r2.md` as the next
 
 ### Standing notes moved out of PROGRESS.md (budget)
 266 creates stock — one transaction per invoice, idempotent on invoice number, never auto-creates products or suppliers. Owner will test pricing (252/253) and import (254/266) once New Purchase is right. Sequence after this group: thermal printing → keyboard shortcuts → Returns → Customers → Recent Sales → Settings → Day-close → Accounting → Prints → Dashboard → final audit → consistency audit. Parked: per-page menu permissions; deferred shortcut bindings.
+
+---
+
+## 265 — purchases-mobile-r2-and-sheet-consistency — DONE (2026-08-13)
+
+**Branch:** `fix/265-purchases-mobile-r2-and-sheet-consistency` · WORK TYPE: FIX
+**Spec:** `specs/265-purchases-mobile-r2-and-sheet-consistency.md` · no CODEREF in range.
+**Schema:** none. **RLS:** unchanged. **Money:** byte-identical — no total, discount, tax,
+paid or balance expression was touched anywhere in this step.
+
+### The one cause behind §1 and half of §3
+
+Every rule the mockups write for a sheet footer and for the purchase action bar selects
+`.btn` — `.sheet__foot .btn`, `.sheet__foot--row .btn--secondary`, `.mactbar .btn`. The
+mockups' buttons are `<button class="btn btn--primary">`; the app's are `<Button>`, which
+emits utility classes and **no `.btn` at all**. So those declarations had never dressed a
+single app sheet: the buttons fell back to their intrinsic width and height, which is
+exactly "shrink-wrapped buttons that do not match Inventory". The only footer that looked
+right was Inventory's, and only because 214 §5 had added two rules scoped to
+`.mp-inv2 .sheet.mp-inv2-sheet` that select `button`. Those two are now generalised to the
+shared `.sheet__foot` family, unchanged, and the per-sheet workarounds are deleted. The
+`.btn` rules stay — they are the mockups' own text and the StaffKit renders real `.btn`
+markup against them.
+
+### §1 — the audit of every bottom sheet with a footer in the tenant app
+
+| Sheet | Footer before | Verdict |
+|---|---|---|
+| Inventory · View item (the reference) | `Panel` → shared `--row` | shared; unchanged |
+| Inventory · Add/Edit item | `Panel` → shared `--row` | shared; unchanged |
+| Inventory · Adjust stock | `Panel` → shared `--row` | shared; unchanged |
+| Inventory · Import | `Panel` → shared `--row` | shared; unchanged |
+| Record payment (Purchases) | `Panel` → shared `--row` (260 §4) | shared; now actually reached by the rules |
+| Record payment (Suppliers) | same component, same footer | shared; ditto |
+| Add supplier | `Panel` → shared `--row` | shared; unchanged |
+| **Supplier detail sheet** | shared `--row` **+ two inline `style={{flex:1}}`** | **fixed** — inline split removed |
+| **View purchase** | **own `.sheet__foot--stack3`** | **fixed** — shared column foot with a nested shared `--row`; the variant is deleted from source and stylesheet |
+| Purchase invoice (print) sheet | shared column foot | shared; unchanged |
+| Select sheet ("+ add new") | shared column foot, real `.btn` | shared; unchanged |
+| More sheet (sign out) | shared column foot, real `.btn` | shared; unchanged |
+| Account sheet | shared column foot, real `.btn` | shared; unchanged |
+| Date picker (touch) | shared column foot, real `.btn` | shared; unchanged |
+| POS · add customer | shared column foot, real `.btn` | shared; unchanged |
+| POS · held sales | shared column foot (summary, no button) | shared; unchanged |
+
+A standing guard in the new suite fails if any of these files ever wears a `sheet__foot*`
+class other than `sheet__foot` / `sheet__foot--row`.
+
+### §2 — the grip, and the rest of the family with the same cause
+
+`.sheet` is a flex column with `max-height`; `height` on a flex child loses to shrinking
+(256 §2's cause, reported again). `.sheet__grip` gains `min-height:5px` and `flex:none`,
+and its bottom margin goes to 0. Swept the rest of the family for the same shape:
+`.sheet__hd` had no `flex:none` and gained it; `.sheet__hdic`, `.selsheet__ic` and `.mscan`
+already stated it; the footer's buttons now state `min-height` rather than `height`.
+
+### §3 — New purchase
+
+- **Its own chrome key.** It claimed `purchases`, so the body reserved 117px — the module
+  header's title row *plus its search row* — for a sub-page header that draws the title row
+  alone. `purchase-entry` reserves 59px, which is the mockup's `--mchrome:103px` less the
+  44px phone-frame status bar the PWA does not draw. The 58px difference **is** the gap
+  above the Purchase details fields; it is 248 §1 read the other way round.
+- **The header is fixed.** `MobilePageChrome` now emits `mchrome--fixed` for a sub-page with
+  no search row. The collapse exists so a search field can stay stuck to the top while the
+  title row leaves; with no search field it empties the glass and takes the back control off
+  screen — on this screen, scrolling to the last line item removed the only way out. A
+  sub-page that *does* have a search row (Low stock & near expiry, 217 §4) is untouched.
+- **The dock is hidden.** `claim()` takes `{ hideDock }`, released with the claim itself, so
+  no screen can leave the app dockless. Only the dock goes; the More sheet stays mounted.
+- **The two bars come home.** 260 had to re-base the mockup's figures onto the dock's
+  clearance. With no dock, the action bar takes the file's own 14px and the total bar stands
+  one action bar plus one gap above it at 78px — both down by exactly 72px. `.pentry--pay`
+  drops 290px → 218px and the shell's 104px dock clearance goes too: that stacked pair was
+  the dead space under "+ Add line item".
+- **The action bar buttons are full width**, on `> button` selectors, in the §1 split.
+- **A date/month filter beside the search** — the same `MonthRangePicker` the desk opens
+  from its topbar badge, with its own trigger. The list has been narrowed by `monthWin`
+  since 259 §4; the phone simply had no control to move it. A narrowed window marks the
+  tile, because otherwise a filtered list reads exactly like an empty one.
+
+### §4 — pickers
+
+Item picker rows on the phone now carry `<ProductTypeMark>` and the desk's `itemHint`
+identity line, paged **and** offline — the same fix 264 §5 made for the desk from the same
+component. Supplier picker rows carry a new `SupplierMark`. It could not be `.supmark`:
+that family is declared inside `.mp-pur2` and both result surfaces are portalled to the
+document root, where the page scope no longer reaches (the 237 §3.3 trap). `.pickmark` is
+declared unscoped and fills whichever medallion the select hands it.
+
+**The barcode button is removed from purchase-entry search — owner decision, recorded so no
+later spec restores it.** 260 §3.3 put it there on the POS's reasoning ("a scan is a way of
+typing a product name"); the owner's ruling is that the reasoning does not carry, because a
+purchase is entered off a supplier's paper invoice, not from a box in the hand. Removed with
+it: the viewfinder portal, its host state, the decoded-string-into-the-query hop, the
+`BarcodeScanner` import and the app-translator read that existed only for its copy. **The
+POS scan button is untouched** — different control, different chrome (230 §1).
+
+### §5 — the `%`/`Rs` toggle
+
+Segments were sized by their own labels, so `Rs` took the remainder and the halves were
+unequal (and unequal differently again in Urdu). `flex:1 1 0` + centring on
+`.mp-pur2 .dtoggle button` — one rule on the atom, so cost discount and sale discount,
+phone and desk, cannot differ.
+
+### §6 — back from New purchase
+
+The screen is a **view** of the Purchases route, not a route, so it had no history entry:
+device-back was ordinary navigation and took the whole module with it. It now registers with
+the shared layer stack (195 §3), which also brings the ordering — a picker on top still
+takes the first press. The leave runs through `closeLayersForNavigation()` (203 §2's
+declared-intent path), so nothing's asynchronous `history.back()` can land after the
+navigation and undo it. **Accepted cost, exactly as 203 §2 documents it:** the detach leaves
+this screen's own entry behind, so a leave by the control costs at most one extra back press
+later. A `leavingRef` guard stops the one loop this shape can make — `detachAll` calls every
+detached layer's close, this screen's included, which would otherwise put the abandon warning
+back up over a purchase the user has just agreed to discard. An in-progress purchase (any
+started line) warns first; an empty one leaves silently.
+
+### §7 — a picker resets its search state on close
+
+The typed string is the caller's (it names the add-new action after it); its **lifetime** is
+the select's. The list itself always forgot — panel and sheet both unmount — but nothing ever
+told the caller, so the two copies of one fact drifted apart at the first close. `SearchSelect`
+now announces the reset on every close path (`onQueryChange('')` and `paged.setQuery('')`),
+which fixes every add-new picker at once rather than one at a time. Every add-new picker
+verified as a consumer of that one component:
+
+| Picker | Built on | Verdict |
+|---|---|---|
+| Category (the report) | `SearchSelect` + `onQueryChange` | **fixed** by the shared reset |
+| Base unit / pack name | `SearchSelect` + `onQueryChange` (`UnitNameSelect`) | fixed by the same reset |
+| Product type | segmented control, no search, no add-new | not affected |
+| Form / dosage form | part of the unit master, same `UnitNameSelect` | fixed by the same reset |
+| Supplier (`+ Add supplier`) | `SearchSelect`, add-new label not derived from the term | already correct; reset applies |
+| Customer (POS `+ Add customer`) | POS `.mpick` chooser, own query cleared on close since 198 §4 | already correct |
+
+### §8
+
+Both Barcode fields on Add/Edit item gained the `icon` + placeholder anatomy 262 §2.2 gave
+every other named field (`pinvBarcodePlaceholder`, en + ur). The Ledger tab's pager was
+full-size because the drawer's smaller sizing was scoped to `.dtbl` and the Ledger sits in
+`.ledtbl`; `.ledtbl` joins the selector list rather than getting a second copy.
+
+### Files
+
+`apps/web/app/globals.css`; `apps/web/app/(app)/pharmacy/purchase/PharmacyPurchaseClient.tsx`;
+`apps/web/app/(app)/pharmacy/suppliers/SuppliersClient.tsx`;
+`apps/web/app/(app)/pharmacy/inventory/PharmacyInventoryClient.tsx`;
+`apps/web/components/shell/MobilePageChrome.tsx`; `apps/web/components/shell/AppShell.tsx`;
+`apps/web/components/shell/mobile-chrome-slot.tsx`;
+`packages/ui/src/components/search-select.tsx`;
+`packages/i18n/src/messages/{en,ur}.json`;
+`packages/ui/src/lib/purchases-mobile-r2-265.spec.tsx` (new).
+
+### Superseded assertions in earlier suites
+
+`purchases-mobile-260.spec.tsx` — the `--stack3` selector, its two mockup transcriptions,
+`.mactbar .btn`, and the three-fixed-objects stack test (the dock is no longer one of them).
+`purchases-void-261.spec.tsx` — the `--stack3` anchor for the phone Void control. In every
+case only the anchor moved; what each test asserts is unchanged.
+
+### Gates
+
+`pnpm typecheck` clean (29/29). `pnpm lint` clean — the one remaining warning is a
+pre-existing unused eslint-disable in `apps/api` on an untouched file, confirmed present on
+a clean tree. `pnpm test:unit` / `pnpm build` deliberately not run (agent rule); the
+controller runs the full gates. Vendor untouched.
