@@ -14242,3 +14242,66 @@ rather than as the full suite: 12 suites, 338 tests, all passing. Vendor untouch
 The acceptance asks for confirmation on the deployed page and a real device (both themes, network tab showing
 no document request). That is the owner's round-11 pass; everything it checks is asserted structurally and,
 where it can be, behaviourally, in `offline-recovery-267.spec.tsx`.
+
+## 268 — batch-identity-and-stock-integrity — DONE (2026-08-13)
+
+**Branch:** `fix/268-batch-identity-and-stock-integrity` (WORK TYPE: FIX). Spec: `/specs/268-batch-identity-and-stock-integrity.md`. No CODEREF exists for this range.
+
+### §1 — a machine-made batch number is now an IDENTITY
+
+`autoBatchNo(nowIso)` returned the receipt DAY and nothing else (`AUTO-20260813`) for every batchless line of every product of every supplier, so unrelated deliveries merged into one lot and `receiveBatch`'s (correct) top-up re-pricing silently re-priced the earlier receipt. Both quotations in the spec still matched the source and were fixed at their quoted lines.
+
+- `packages/shared/src/pharmacy-purchase.ts` — `autoBatchNo(nowIso, seq)` → `AUTO-YYYYMMDD-00001`; new `openingBatchNo(seq)` → `OPENING-00001`; `RECONCILED_BATCH_PREFIX`, `formatBatchSeq`, `isGeneratedBatchNo`. The day survives for readability; the sequence is the identity.
+- `packages/db/src/advisory-locks.ts` — `BATCH_NUMBER_LOCK_NAMESPACE = 2_680_001`, its own namespace so a stock-in never queues behind a checkout.
+- New model `BatchNumberSequence` (`batch_number_sequences`, fail-closed RLS via `apply_tenant_rls`).
+- `PharmacyRepo.reserveBatchNumbers(tenantId, count, now)` claims a BLOCK under `TENANT_ADVISORY_XACT_LOCK_SQL` (192 §1's explicitly-cast statement, imported never retyped) and returns the first position. A block, not one at a time, because an import opens a whole catalogue at once — one round trip per chunk.
+- `createPurchase` claims one block for the delivery and hands `pricePurchaseLine` an `autoNo()` minter; a TYPED number is still used exactly as typed and still merges (253 §2 unchanged).
+- `OPENING_STOCK_BATCH_NO = 'OPENING'` DELETED. Opening lots draw from the same counter, one number per product.
+- **DB uniqueness**: `batches_lot_identity_key` on (tenant, branch, medicine, batch_no, expiry) — declared in schema.prisma — PLUS a partial `batches_lot_identity_undated_key` for `expiry IS NULL`, which Prisma has no syntax for and which lives only in the migration. Two indexes because a Postgres unique index treats NULLs as distinct; without the second, undated lots (the auto/opening ones) would be unconstrained — i.e. exactly the rows that matter.
+
+### §1.4 — the repair (migration `20260813000000_batch_identity_and_stock_integrity`)
+
+Order: counter table → merge exact-duplicate lot rows (a race, not a merge; must precede the index or it cannot be created) → split merged auto/opening lots → reconcile stock vs Σ lots → seed the counter above every generated number present → recreate FORCE → create both indexes → RLS on the counter.
+
+- **Split rule**: candidates are only `AUTO-[0-9]{8}` and the bare `OPENING` label. A lot is split ONLY when its quantity equals the sum of its non-voided receipts; otherwise it is AMBIGUOUS, left byte-identical, and recorded in `audit_log` (`stock.batch.repair.ambiguous`) with the receipt count and both quantities. Counts are also `RAISE NOTICE`d and written as `stock.batch.repair.summary`.
+- The earliest receipt keeps the original lot AND gets its own cost/retail figures restored (the merged row was carrying the LAST receipt's prices — that IS the owner's re-pricing report). Each later receipt gets a new lot dated from its own purchase, its `purchase_items.batch_no` rewritten (this is what `findLotBatch` resolves a void through) and its PURCHASE movement re-attributed.
+- **DECISION — the movement is RE-ATTRIBUTED, not cancelled and re-issued as a ± pair.** A ± pair would put a NEGATIVE movement from another purchase on the old lot, and `purchaseStockMoved` refuses a void on exactly that — so the "correct" bookkeeping would have re-created the §2 defect this step exists to remove. Nothing is silent: no quantity is created or destroyed, every lot still holds exactly the sum of its own movements (asserted), the aggregate is untouched, and the re-attribution is recorded per lot in the audit log.
+
+### §2 — the false "already sold" void
+
+No change to `purchaseStockMoved` and none to the service's second (belt-and-braces) check, as the spec directs. Fixing §1 fixes the symptom; proven both ways in the API suite — a purchase with nothing sold from its own lot voids cleanly even after a sale from the neighbouring one, and one with stock sold is still refused.
+
+### §3 — stock and batches are one figure again
+
+**Chose (a)**, the spec's preference, and it is implemented in `adjustStock` via a new `planAdjustLots`:
+- an INCREASE names an existing lot or opens one (`newBatch`), else 400 in words;
+- a DECREASE with no lot is allocated across lots by `allocateFefo` — the same ordering a sale uses — and a shortfall is refused rather than partly applied;
+- one `applyBatchDelta` + one StockMovement PER DRAW, so every touched lot's ledger equals its own quantity.
+(b) was rejected because a designated adjustment lot is a bucket of unattributable stock; the migration opens one only where drift ALREADY exists and cannot be attributed to anything better.
+
+Consequence, accepted deliberately: an increase from the Adjust sheet needs a lot to exist, and a product with a zero-quantity lot is topped up through a purchase. The Add/Edit item opening quantity is unaffected — it now posts `newBatch` and creates a real lot instead of raising the aggregate alone, which is how `stock` and `Σ batches` came apart in the first place.
+
+**§3.3 reconciliation**: aggregate ABOVE lots → a `RECONCILED-#####` undated lot holds the difference at the product's cost, with an ADJUST movement naming the reconciliation (the on-hand does not move; the units become attributable and therefore sellable — the 40-of-50 case). Aggregate BELOW lots → the aggregate is raised to the lots, with a movement. Both directions are positive movements, so neither can block a later void. Afterwards `stock.qty = Σ batch.qty` for every product; a second run finds nothing.
+
+### §4 — the two smaller items
+
+- **Why the below-zero guard did not fire**: it is conditional on `batchQty != null`, i.e. on a lot having been CHOSEN, and the sheet let the field go unset — reducing a batch of 10 by 20 passed the aggregate check and never reached a batch check. Both halves fixed: the API allocates (and refuses a shortfall), and the sheet's `max` is now the selected batch's quantity converted into the typed unit, or the sum across lots when no batch is chosen.
+- **Opening quantity requires cost and sale price** on the form (inline `field__err` through `FormField`'s own error slot, plus a save-time refusal), in the DTO (`parseAdjustStock` refuses a `newBatch` without both), and on IMPORT. The inventory importer had NO cost column at all — added `costPrice` (aliases: cost, purchase price, trade price, tp), written to `Medicine.costPrice` and therefore to the opening lot, and required alongside `openingQty`. `toProductExportRow` emits it too, or the file the export produces could not be re-imported.
+
+### Verification
+
+- `pnpm lint` + `pnpm typecheck`: clean (one pre-existing unrelated warning in doctor-portal).
+- Migration executed against a REAL PostgreSQL (pglite) out-of-band during the build: applies over the full chain, splits/merges/reconciles as asserted, and a second application changes nothing (proved by snapshot equality; an early version was NOT idempotent because the ambiguous + summary audit rows re-inserted — fixed with a NOT EXISTS guard and a "did anything change" condition on the summary).
+- New `packages/db/src/batch-identity.spec.ts` — the migration under a real Postgres: both indexes exist and refuse dated AND undated duplicates, the split/ambiguous/typed-number/merge cases, the reconciliation both directions, the invariant across every product, the audit counts, twice-run idempotency, and block/sequential number claims per tenant through the imported lock statement.
+- New `apps/api/src/pharmacy/batch-stock-integrity-268.spec.ts` — §3.4's guard: `stock.qty == Σ batch.qty` after a purchase, sale, return, void, adjustment with a batch, adjustment without one, an increase and an import; plus the two-lots/FEFO/typed-merge cases, the §2 void pair, the 40-of-50 case and the §4 refusals.
+- Updated `unit-aware-purchases-returns-reports.spec.ts` (185's "two same-day undated receipts top up ONE lot" is exactly what 268 reverses — rewritten with the reasoning) and `stock-alerts.spec.ts` (a decrease with no lot now needs lots to draw from).
+
+### 268 — gate fix (test:unit)
+
+`pnpm test:unit` failed on two suites after step 268; all three causes were the tests/fake, not the shipped behaviour.
+
+- `pharmacy/import-export.spec.ts` (9 failures): the 262-era header constant and the opening-quantity fixtures predate 268 §4 — the template now carries `Cost price`, and a row with an opening quantity is refused without a cost and a sale price. Updated the `HEADERS` constant and gave every opening-quantity CSV its two price cells; the "values the opening lot at the product's cost" case now passes the cost in the file instead of poking `costPrice` onto the fake row, since the template carries the column now.
+- `pharmacy/batch-stock-integrity-268.spec.ts` (3 failures): the suite never seeded a branch, so `recordOpeningStock` returned early and the two import-backed cases saw no opening lots (0 lots, and 30 of the 50 units). Seeded the primary branch in `beforeEach`.
+- `pharmacy/__fakes__.ts`: `listBatchesForFefo` returned rows in insertion order while the real repo orders `sellPriority ASC NULLS LAST, expiry ASC NULLS LAST, createdAt ASC` — the fake was lying about which lot sells first, which is exactly what the different-expiries case asserts. Sorted it with the existing `bySellPriorityThenExpiry` comparator. Allocation results are unaffected (`allocateFefo` re-orders via `orderBatchesForSale`).
+
+Gates: `src/pharmacy` 47 suites / 804 tests pass; the seven non-pharmacy suites that use the fake (commission, sample-tracking, home-collection, dashboard, accounts, phlebotomist, billing) 14 suites / 196 tests pass; `pnpm lint` 0 errors (one pre-existing warning in `doctor-portal.repositories.ts`), `pnpm typecheck` clean.
