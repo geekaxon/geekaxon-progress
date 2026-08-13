@@ -14305,3 +14305,124 @@ Consequence, accepted deliberately: an increase from the Adjust sheet needs a lo
 - `pharmacy/__fakes__.ts`: `listBatchesForFefo` returned rows in insertion order while the real repo orders `sellPriority ASC NULLS LAST, expiry ASC NULLS LAST, createdAt ASC` — the fake was lying about which lot sells first, which is exactly what the different-expiries case asserts. Sorted it with the existing `bySellPriorityThenExpiry` comparator. Allocation results are unaffected (`allocateFefo` re-orders via `orderBatchesForSale`).
 
 Gates: `src/pharmacy` 47 suites / 804 tests pass; the seven non-pharmacy suites that use the fake (commission, sample-tracking, home-collection, dashboard, accounts, phlebotomist, billing) 14 suites / 196 tests pass; `pnpm lint` 0 errors (one pre-existing warning in `doctor-portal.repositories.ts`), `pnpm typecheck` clean.
+
+---
+
+## 269 — import-performance — DONE (2026-08-13)
+
+**Work type:** FIX. **Branch:** `fix/269-import-performance`. **Schema:** none. **RLS:** unchanged.
+**Behaviour:** frozen — the same rows, batches, movements, payments and audit; only how the writes are issued.
+
+### §1/§2 — the defect, and what replaced it
+
+`PrismaPharmacyRepo.recordOpeningStock` ran four awaits per product — `createPurchaseItem`,
+`receiveBatch`, `applyStockDelta`, `recordMovement` — and each of those opens its OWN
+`runWithTenant` transaction with its own `set_config`. For a 50,000-product catalogue that is
+200,000 sequential round trips in 200,000 transactions.
+
+It is now ONE transaction for the whole chunk, issuing:
+
+- `purchaseItem.createMany` — one line per product, identical columns (undated lot, 185 §1).
+- `batch.findMany` (the lot identity `receiveBatch` matches on, asked once) → `batch.createManyAndReturn`.
+  A lot that somehow already exists is still topped up row-by-row, exactly as `receiveBatch` tops
+  one up; unreachable with a freshly claimed number, but the batched path answers the question
+  rather than assuming its answer.
+- `stock.findMany` → `stock.createMany` for the products holding no stock row, and for the ones
+  that do, one `updateMany` per DISTINCT resulting quantity rather than one per product. (A first
+  import has none of these and a re-import is skipped by the product idempotency key, so this is
+  the rare path.)
+- `stockMovement.createMany` — one PURCHASE movement per product.
+- the settling `supplierPayment` moved INSIDE the same transaction, so a chunk that fails rolls
+  back whole: no product half-received, no purchase without the payment that settles it.
+
+`importProducts` (the catalogue itself) got the same treatment: the row loop now only DECIDES —
+lifted into the pure, exported `planCatalogueChunk` — and the chunk is written as
+`productCategory.findMany` + `createManyAndReturn`, `medicine.createManyAndReturn`,
+`medicine.updateMany` grouped by payload, `productUnit.createMany` for the level-0 units, then
+`deleteMany` + `createMany` for the stated chains. Created rows are matched back to their rows by
+NATURAL KEY, not by the order the database returned them in.
+
+Decisions preserved deliberately, and tested: file order; "last wins"; a later row amending the
+product an earlier row of the same chunk created (including when it names it by its OTHER natural
+key — the old loop only registered the row's own keys, which this makes explicit); the first
+spelling of a category name winning; the last-stated unit chain winning, with no level-0 default
+left beside it; opening quantities truncated and collected in file order.
+
+`importCustomers` (254) and `importSuppliers` (254, purchase module) were the same two-round-trips-
+per-row shape and are now one identity read plus set-based writes per chunk. Supplier matching
+still resolves on the case-insensitive phone with the OLDEST row winning.
+
+The purchases import (266) asked `findPurchaseByInvoiceNo` once PER INVOICE GROUP inside
+`upsertChunk`; it now asks `existingInvoiceNos` once for the whole chunk, and adds each number it
+creates to that set. What remains per-invoice is `createPurchase`'s own duplicate-number pre-check
+(251 §3.2), which belongs to the document being raised and is part of the shared service path.
+
+### §3 — the await-in-loop audit
+
+FIXED (can run over an unbounded collection):
+
+| site | worst case | now |
+| --- | --- | --- |
+| `pharmacy.repositories.ts` `recordOpeningStock` receive loop | 50,000 products × 4 writes | 6 statements per 500-row chunk |
+| `pharmacy.repositories.ts` `importProducts` row loop | 50,000 products × 2–3 writes | 6 statements per chunk |
+| `pharmacy.repositories.ts` `importCustomers` row loop | one file of customers × 2 | 1 read + ≤2 writes per chunk |
+| `purchase.repositories.ts` `importSuppliers` row loop | one supplier book × 2 | 1 read + 1 insert (+1 update per existing supplier) |
+| `purchase.importer.ts` `upsertChunk` group loop | 500 invoices per chunk | 1 read per chunk |
+
+DELIBERATELY UNTOUCHED — every one is bounded by a single DOCUMENT, not by a file, and rewriting
+them adds risk for no gain (269 §3's own instruction):
+
+- `pharmacy.service.ts`: `createPurchase`'s line loops (~4456 medicine check, ~4542 stock-in) —
+  bounded by the lines on ONE invoice; `checkout`'s cart/allocation loops (~3153, ~3172); the sale
+  and purchase RETURN loops (~3505, ~3580, ~3601, ~3974, ~5076, ~5155, ~5192) — the lines of one
+  return; `adjustStock`'s FEFO draws (~2222) — the lots of one product; `voidPurchase`'s reversal
+  read (~4775) — the items of one purchase; `returnItemViews`'s batch meta (~5835) — the lines of
+  one return.
+- `pharmacy.repositories.ts`: `setUnitChain` (~2471) — a product's own levels; `resequenceFefo`
+  (~2946) — one product's lots; `createSale`/`createSaleReturn`/`createPurchaseReturn` item writes
+  (~3143, ~3904, ~4009); `findPurchasesByClientActionId` (~3485) — a replay lookup.
+- The server-side EXPORT generators (`for (;;)` at ~4694, ~4793, ~4883) are already PAGED at
+  1,000 rows (200 for purchases) per round trip, which is the shape this step is asking for.
+
+### §4 — the number
+
+MEASURED, by `import-round-trips-269.spec.ts`: it stands a counting stub where `runWithTenant`
+hands out its transaction client and drives the REAL `PrismaPharmacyRepo` through a 500-row
+catalogue chunk carrying opening stock.
+
+- **After: 21 statements in 8 transactions per chunk — and IDENTICAL for a 50-row chunk**, i.e.
+  O(1) in the rows. Each write carries its 500 rows (asserted).
+- **Before: ≈4,014 statements in ≈2,007 transactions for the same chunk**, derived by counting the
+  statements the previous code issued (catalogue ≈1,004 in 1 transaction; the receive 6 statements
+  and 4 transactions per row plus ≈10 for the purchase header).
+- Extrapolated to a 50,000-row file (100 chunks): ≈401,400 statements / ≈200,700 transactions
+  before, ≈2,100 / ≈800 after — roughly **190× fewer statements**.
+
+NOT DONE, and it is the one open acceptance item: §4's wall-clock, query count and PEAK MEMORY
+for a real 50,000-row import ON STAGING, and §5's "make a normal request while it runs" check. The
+build environment has no staging database, so these are a deploy-time measurement. Memory is
+bounded by construction — the engine applies 500 rows at a time and every array built here is
+per-chunk — and the engine already yields to the event loop between chunks (254 §3), which is what
+keeps the API answering during an import.
+
+### Tests
+
+- NEW `apps/api/src/pharmacy/import-performance-269.spec.ts` (9 tests) — the catalogue chunk's
+  decisions (`planCatalogueChunk`, pure), and the purchases import's one-read-per-chunk with
+  idempotency intact.
+- NEW `apps/api/src/pharmacy/import-round-trips-269.spec.ts` (4 tests) — the §4 measurement, kept
+  as a regression guard: a return to a round trip per row fails it.
+- Re-ran green: `purchase-import-266`, `import-export`, `batch-stock-integrity-268` (80 tests) and
+  `purchase/supplier-import` (11).
+
+### Gates
+
+`pnpm lint` clean (one pre-existing unrelated warning in `doctor-portal.repositories.ts`),
+`pnpm typecheck` clean. Vendor untouched. No schema change, so no `prisma generate`.
+
+### Note for the deployer
+
+Every suite in this repo runs against the in-memory fakes, so the Prisma repository is only
+exercised by the round-trip harness above and by staging. The first staging import after this
+lands should be checked against 268 §3.4's guard — `stock.qty == Σ batch.qty` — and against a
+small file applied both ways, before a 50,000-row file is run.
