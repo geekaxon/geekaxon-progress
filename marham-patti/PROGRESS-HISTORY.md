@@ -14790,3 +14790,178 @@ Both mockups diffed against `globals.css` family by family (a scripted declarati
 - Gates: `pnpm lint` clean (one pre-existing unrelated warning in `doctor-portal.repositories.ts`), `pnpm typecheck` clean. Targeted runs: `apps/api` `src/pharmacy` **53 suites / 899 tests pass**; `packages/ui` full suite **103 suites / 2,332 tests pass**. Vendor untouched.
 
 **Not verified by me:** the deployed page and a real device. Everything above is asserted in code and by declaration-level diff against the committed mockups; the on-device confirmation §7 asks for is the controller's.
+
+---
+
+## 274 — global-fixes-r12 — DONE (2026-08-14)
+
+**Branch:** `fix/274-global-fixes-r12` · **Schema:** none · **RLS:** unchanged.
+
+### §1.1 — THE FOUR MANDATORY CAPTURES, RECORDED BEFORE THE FIX COMMIT
+
+**Capture 1 — every component that can render an offline or error surface (full grep, by path).**
+267 §1.1 collapsed two offline screens into one; that has HELD. There is exactly one markup
+implementation and it is reached by two hosts:
+
+- `apps/web/components/error/ErrorSurface.tsx` — THE anatomy. Presentational; no Router, no
+  `next/link`. The only place the six-part layout exists.
+- `apps/web/components/error/ErrorState.tsx` — the router-wired host (refresh, navigate, links).
+- `apps/web/components/error/AppErrorState.tsx` — resolves the brand/lockup, renders ErrorState.
+- `apps/web/app/error.tsx` — tenant route boundary → AppErrorState.
+- `apps/web/app/(vendor)/error.tsx` — vendor boundary → AppErrorState.
+- `apps/web/app/global-error.tsx` — renders ErrorSurface DIRECTLY (no router, by construction).
+- `apps/web/app/offline/page.tsx` — the precached fallback → AppErrorState id="offline".
+- `apps/web/app/not-found.tsx`, `app/(app)/not-found.tsx`, `app/(vendor)/not-found.tsx`.
+- `apps/web/app/offline-indicator.tsx` — a banner, not a surface. Not part of this family.
+
+Verdict: no duplicate markup. What DOES still exist is two *documents* that can show the offline
+screen — the precached `/offline` HTML and the in-app boundary rendering id `offline` — and that
+distinction is what made "Retry reaches a second offline screen" possible in 267.
+
+**Capture 2 — what runs on Retry.** Handler: `useRecovery().attempt` in
+`apps/web/lib/error-recovery.ts`. It is now instrumented (`recoveryTrace`), so every press emits
+one line. The traces, by path:
+
+- offline, still down → `[retry] mode=connectivity outcome=offline latched=true did=probe→toast`
+  (probe origin `/` with a nonce, 8s cap; no answer; toast "Still no connection"; page does not move)
+- offline, reconnected → `[retry] mode=connectivity outcome=recovered latched=false did=probe→clear-latch→refresh→navigate→reset`
+- 500 page → `[retry] mode=reload outcome=failed|recovered latched=false did=probe→refresh→reset`
+
+**Capture 3 — where the navigation to "Something went wrong" comes from on reconnect.** Neither a
+re-thrown boundary nor an in-flight stale request. It is a **stale error state re-rendered**, and
+it took two independent defects:
+
+1. `useFailureStateId` latched with `let wasOffline = false` INSIDE a `useEffect` whose dependency
+   is the boundary's `error` prop. The latch therefore lived exactly as long as one error object.
+2. On a successful connectivity recovery the order was `reset()` → `refresh()` → `navigate()`.
+   `reset()` re-renders the failed subtree against a router cache that still holds the rejection,
+   so it throws again in the same tick — manufacturing the second error object that (1) cannot
+   survive. That second error is re-classified with `navigator.onLine === true`, and any second
+   failure not word-for-word a fetch error (a partial payload, a component reading `undefined`)
+   resolves to `server-error`. "Something went wrong", with no press and nothing actually wrong.
+
+**Capture 4 — every `location.reload` / `window.location` assignment / `router.refresh`, with a verdict.**
+
+- `lib/error-recovery.ts:281` `window.location.href` — READ (probe target). Keep.
+- `lib/error-recovery.ts:284` `window.location.origin` — READ (probe target). Keep.
+- `lib/error-recovery.ts:406` `window.location.href` — READ (no-JS anchor href). Keep.
+- `lib/route-memory.tsx:62` `window.location.pathname + search` — READ. Keep.
+- `components/error/ErrorState.tsx` `router.refresh()` — the in-place server re-run. Keep; REORDERED.
+- `components/error/ErrorState.tsx` `router.replace(href)` — the client recovery. Keep; REORDERED.
+- `components/error/ErrorSurface.tsx:86` `window.history.back()` — the `back` action. Correct.
+- NO `location.reload` / `.assign` / `.replace` and no `location.href =` anywhere in the family.
+  255 §3 and 267 §1.1 held on this point; the defect was never a reload.
+
+### §1.2 — what changed
+
+- **The latch is at module scope** (`offlineLatched`, `latchOffline`, `isOfflineLatched`,
+  `clearOfflineLatch`) and is consulted on the FIRST decision, so a re-entered boundary never
+  flashes a 500. Cleared in exactly two places: a recovery whose probe answered, and the suite's
+  `cancelPendingRecovery`. The pure rule is `latchedSurface()` in `@mp/ui/error-recovery`.
+- **Recovery order.** reload: `refresh()` → `reset()` (was reset-first, which re-threw against the
+  poisoned cache before the fresh payload could land — the "no attempt was made" report).
+  connectivity/recovered: `clear-latch` → `refresh()` → `navigate()` → `reset()`.
+- **Go to home** is `AppLink` (216 §1's one navigation primitive) instead of a bare `next/link`,
+  and clears the latch + calls `reset()` on the way out. `global-error` keeps plain anchors — the
+  root layout threw, so there is no router to use, and that is correct rather than a defect.
+- Still-offline Retry is unchanged and correct: probe → toast → page does not move.
+
+### §1.3 — THE FAVICON: WHY 263's WORK WAS CORRECT AND INVISIBLE
+
+263 §4 resolved the tenant favicon on the last successful load, cached it per host and taught
+`brandCacheBootstrapScript()` to append the `<link rel="icon">`. All correct. It never ran.
+
+The bootstrap ships as `<script dangerouslySetInnerHTML>` inside `ErrorSurface`. **An inline
+script only executes when it arrives in SERVER-RENDERED HTML.** `error.tsx` and `global-error.tsx`
+are client components rendered in response to a runtime throw, so React creates that node in the
+browser with `innerHTML` semantics — and the HTML spec says a script inserted that way never runs.
+The bootstrap therefore fires on exactly one surface, the precached `/offline` document, and on
+neither of the boundaries the owner has been photographing. It also explains the exact shape of
+the report: the LOCKUP is right on those pages (it has a React path, `useCachedTenantIdentity`)
+and only the favicon is missing (it had only the script).
+
+Cure: `components/error/CachedFavicon.tsx`, a React effect doing the same job, rendered by
+`ErrorSurface` beside the retained bootstrap. It also PARKS the layout's own `<link rel="icon">`
+(rel rewritten, never deleted) before appending, because on `error.tsx` — which renders inside the
+root layout — the host's icons were already in the head and the browser kept choosing them.
+
+### §2 — Pakistani phone validation
+
+New pure module `packages/shared/src/phone-pk.ts`: `parsePkPhone` / `isPkPhone` /
+`normalizePkPhone` / `pkPhoneE164` / `storedPkPhone` / `pkPhoneKey` / `pkPhoneVariants` /
+`PK_PHONE_MESSAGE`. Accepts every form §2 lists — `03001234567`, `0300-1234567`, `0300 1234567`,
+`+923001234567`, `92 300 1234567`, `0092…`, `(0300) 123-4567` — and landlines/UANs
+(`021-35678901`, `042 35091234`, `051-1234567`, `0244-123456`, `042-111-123-456`). Rejects
+foreign numbers, wrong lengths, and `0`/`1` after the trunk zero, with one plain sentence that
+names BOTH shapes (a message naming only a mobile is what made landlines unenterable).
+
+**DECISION — the canonical stored form is the national leading-zero form (`03001234567`), NOT
+E.164.** Recorded because it is the load-bearing choice: every stored row and every digits-based
+matcher already speaks that form, and §2 forbids rewriting existing rows, so E.164 would have made
+every new row fail to match every old one. `pkPhoneE164()` exists for gateways; nothing stores it.
+
+**The old-vs-new seam, and how it is closed without a migration.** New rows are canonical; old
+rows hold whatever was typed. So the LOOKUPS became spelling-blind: `pkPhoneKey` (the national
+significant digits) in memory, and `pkPhoneVariants` (≤8 written forms, so the query stays an
+index probe) in the `IN (...)`. Applied to `importCustomers`, `existingCustomerKeys`,
+`importSuppliers`, `existingSupplierPhones`, both importers' `keyFor`, `purchase.importer`'s
+`digits()`, and both fakes. Without this, a re-import would have created a duplicate for every
+pre-existing customer and supplier.
+
+Wired to every phone field: pharmacy customer create/patch, supplier create/patch (both the
+pharmacy DTO and the purchase-desk DTO), the POS walk-in customer on the sale payload, staff users
+(`admin.dto`), patients (`patients.dto`), the store/tenant details (`storeFormErrors` +
+`storePatchPhoneError` + `parseStoreProfilePatch`, raised in `brand.dto`), and the four importers
+(customer, supplier, patient, purchase-file supplier matching). Browser side: CustomersClient,
+SuppliersClient, PharmacyPurchaseClient, PurchaseClient, PosClient walk-in capture, UserManager,
+StoreSection — each validating with the same function and normalising before the request, so a
+value the form accepts can never be one the API rejects. i18n: `phonePkInvalid`,
+`setgErrPhonePk`, `pharmacyPos.v2.phonePk`, EN + UR.
+
+**The count §2 asks for could not be measured from this session** — the repo holds no credentials
+(standing rule), so a session that writes code cannot query the database. Shipped instead as a
+read-only script, `packages/db/scripts/count-non-pk-phones.ts`, run with
+`pnpm --filter @mp/db exec tsx scripts/count-non-pk-phones.ts`. It reports, per table (Customer,
+Supplier, User, Patient): `ok` / `reshaped` (parses but is stored in a non-canonical spelling — a
+migration would tidy these; nothing is broken by them because every lookup is now spelling-blind)
+/ `failing` (does not parse — THIS is the number the owner needs, since editing one of those rows
+will now be refused), plus the one genuinely dangerous case: existing customer rows that this
+round's key already considers the same person.
+
+### §3 — Import dialog
+
+- **Mobile full width.** Cause found: `.mp-inv2.mp-inv2-import { max-width:min(720px, calc(100vw
+  - 32px)) }` — the DESKTOP dialog's cap from 263, with its gutter for a centred dialog — was also
+  matching the phone's `position:fixed; inset:0` layer, whose class list is
+  `mp-inv2 mp-inv2-import impfull`. The layer laid out 32px narrower than the screen and pinned to
+  the leading edge. Both full-bleed layers (`.impfull` and the `.mpick` field picker, which had
+  the identical defect) now opt out explicitly; the desktop dialog keeps the mockup's width.
+- **Desktop footer one row.** Dropped `me-auto` from "Run in the background", which in a
+  `justify-content:flex-end` foot had pushed it to the far left.
+
+### Tests
+
+New: `packages/ui/src/lib/phone-pk-274.spec.ts` (every listed format, the collapse-to-one-string
+assertion, the rejections and their reasons, the canonical-form decision, variants, legacy
+preservation, store form), `error-recovery-274.spec.ts` (the latch replayed as the owner's four
+steps, including the unlatched case that IS the regression), `global-fixes-274.spec.ts` (one
+surface; latch at module scope; the two recovery orderings; no document load; AppLink; the favicon
+React path and its parking order; both §3 rules).
+
+Updated, as superseded rather than weakened: `import-dialog-and-error-recovery-263.spec.ts` and
+`offline-recovery-267.spec.tsx` asserted 263's `let wasOffline` shape, which 274 §1.1 diagnoses as
+the defect — the same intent is now asserted against the module-scoped latch, plus a negative
+guard that the leaking shape does not return. The 263 `me-auto` assertion moved to the §3 markup.
+
+### Gates
+
+`pnpm lint` clean (one pre-existing, unrelated warning in `doctor-portal.repositories.ts:220`,
+confirmed present on a stashed tree). `pnpm typecheck` clean, 29/29. Targeted suites run to prove
+the new phone rule did not break fixtures: `packages/ui` 106 suites / 2394 tests green,
+`packages/i18n` 4/28 green, `apps/api` pharmacy + purchase + patients + admin + brand — 56 suites
+/ 939 tests and 11 suites / 130 tests green. Vendor untouched. No schema change, no migration.
+
+**Owner verification still outstanding**, and it is the part this round cannot self-certify: the
+four §1 behaviours and the favicon must be confirmed on the deployed page with the API down, on a
+real device, in both themes. The `[retry]` trace line now makes the next report diagnosable rather
+than a screenshot.
