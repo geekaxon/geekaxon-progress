@@ -14540,3 +14540,98 @@ warning in `doctor-portal.repositories.ts`, untouched). Full API suite 2239/2239
 `@mp/db` pglite specs green (the migration applies). Vendor untouched.
 
 **WORK TYPE: FEATURE (branch feature/270-void-payment-reversal-and-names)**
+
+## 271 — pricing-display-and-pos — DONE (2026-08-13)
+
+**Branch:** `fix/271-pricing-display-and-pos` (WORK TYPE: FIX). Spec: `/specs/271-pricing-display-and-pos.md`. No CODEREF in range. **No schema change, no RLS change, no pricing arithmetic change** — the 253 resolver, FEFO, allocation, decrement and idempotency are untouched; every new figure is display, resolved through the existing engine.
+
+### §1 View Item shows both true figures
+
+The owner's report (product added at cost Rs 150, bought in at Rs 900, drawer showed Rs 900) is a DISPLAY defect: `Medicine.costPrice` was never overwritten by a receipt, the drawer simply had one figure and no way to say which. Now:
+
+- `packages/shared/src/pharmacy-pricing.ts` gains `displayedFigure(productValue, lastValue) -> { origin: 'PRODUCT' | 'LAST' | 'NONE', value, last }` — the owner's three cases in one pure function, `> 0` counts as "set" (the same rule `usablePrice` has always applied). It decides only what is SHOWN; it can never be mistaken for `resolveLinePricing`.
+- API: new repo reader `latestBatch(tenantId, branchId, medicineId)` — newest lot by `createdAt`, **deliberately not filtered by qty** (a sold-out lot still answers "what did we last pay?"). Added to `PharmacyRepo`, `PrismaPharmacyRepo` and `FakePharmacyRepo`. `medicineDetail` now returns `lastPurchase: { batchNo, at, costPrice, salePrice, discountPct } | null`, every figure resolved by `resolveEffectiveCost` / `resolveUnitPrice` **against the lot alone** (product rung passed as null, so the footnote can never repeat the figure it sits under).
+- Web drawer: the pricebox is now four cells rendered by one `PriceCell` — Cost, Sale, Discount, Margin. Product figure leads with "Last purchased Rs 900" small + muted beneath; with no product figure the LABEL changes ("Last cost / tab", "Last sale price / tab"); with neither, the em dash as before.
+- **Margin now comes from `marginVerdict`** instead of the screen's own `(sale − cost) / sale`. That changes the printed percentage to the resolver's `(net − cost) / cost` (253 §2's own worked example) and makes it honour the displayed concession. Decision recorded: one engine beats a familiar number. Negative renders `.is-negative` (var(--danger)), positive keeps `.is-accent` (var(--success)).
+
+**AUDIT — every product-level field a batch can override (the spec's requested list):**
+| Field | Product | Batch override | Treatment |
+|---|---|---|---|
+| Sale price | `Medicine.salePrice` | `Batch.salePrice` | three cases, in the pricebox |
+| Cost | `Medicine.costPrice` | `Batch.costPrice` / `Batch.effectiveUnitCost` | three cases, in the pricebox (effective cost wins, per 253 §4) |
+| Sale discount | `Medicine.discountPct` | `Batch.saleDiscountPct` | three cases, in the pricebox (new cell — the drawer never showed discount before) |
+| Tax | `Medicine.taxRate` | **none** — no batch column exists | unchanged: its KV row already says "Default" when the tenant rate applies |
+| Sell priority / expiry / location | — | batch-only, no product rung | not applicable |
+
+Noted and NOT changed: with a product price set the pricebox leads with it while POS charges the LOT's price. That is the owner's stated table (§1), and the per-lot truth is on the batch table below plus the new footnote; §2 is where the POS-facing guarantee lives.
+
+### §2 The unit selector quotes what will be charged
+
+- Shared: `resolvedPriceRange(input)` runs `priceAllocatedLine` in SPLIT mode over the FEFO draws and returns `{ min, max, single }`. `single` is decided at TWO DECIMALS — two prices that print identically must not print as a range. `priceAllocatedLine`'s parameter object was extracted as `AllocatedLinePricingInput` so both callers share one shape (no behaviour change).
+- POS: `unitPriceBand(line, unit)` allocates `max(1, qty) × baseFactor` FEFO, resolves with the unit's own price divided back to base as the PRODUCT rung (exactly what `linePerBasePrice` feeds the cart), then scales the endpoints back into the chosen unit. `unitPriceText` prints one figure or `rsRange` ("Rs 15.00 – 18.00", one currency mark, en dash). Wired into all three surfaces: desktop trigger, desktop menu rows, phone sheet rows. Endpoints come only from lots FEFO would really draw from — a dearer lot the quantity never reaches does not widen the band. Unpriceable line → falls back to the old text; the row's own 192 §3 error state is unchanged.
+
+### §3 The split-line display
+
+`fefoPriceMode` was already surfaced in Settings → pricing group (253 §5) with the consequence in plain words, default SPLIT; no change needed, confirmed by inspection. Honoured end-to-end by construction: both commit paths pass `settings.fefoPriceMode` into `priceAllocatedLine`, and the receipt, returns and reports all read the STORED lines. Tests assert SPLIT (3 lines) vs BLENDED (1 line) on the same pick totalling identically (Rs 534.35 from 7×15.55 + 11×17.35 + 13×18.05), identical stock movement, identical `saleDetail.profit`, and return matching under both modes.
+
+**Finding, out of scope here (no arithmetic change permitted this step):** a BLENDED line's `unitPrice` is stored unrounded (Decimal(12,2) rounds it on write), while a return refunds `round2(netUnitPrice(...)) × qty`. For a blend that is not exact at two decimals, a full return can differ from the sale total by a few paisa. The SPLIT default is unaffected. Worth a future step.
+
+### Files
+- `packages/shared/src/pharmacy-pricing.ts` — `AllocatedLinePricingInput`, `displayedFigure`, `resolvedPriceRange`, `FigureOriginLit`, `DisplayedFigure`, `ResolvedPriceRange`.
+- `apps/api/src/pharmacy/pharmacy.repositories.ts` — `latestBatch` (abstract + Prisma).
+- `apps/api/src/pharmacy/__fakes__.ts` — `latestBatch`.
+- `apps/api/src/pharmacy/pharmacy.service.ts` — `LastPurchaseFigures`, `MedicineDetailView.lastPurchase`, `lastPurchaseFigures`.
+- `apps/web/app/(app)/pharmacy/inventory/PharmacyInventoryClient.tsx` — `PriceCell`, `pct`, four-cell pricebox, resolver margin.
+- `apps/web/app/(app)/pharmacy/pos/PosClient.tsx` — `amount`, `rsRange`, `unitPriceBand`, `unitPriceText`, three selector surfaces.
+- `apps/web/app/globals.css` — pricebox auto-fit grid, `.is-negative`, muted 10.5px sub-line (the kit's existing `.uqcell small` figure).
+- `packages/i18n/src/messages/{en,ur}.json` — `pinvLastPurchased`, `pinvLastCostPerUnit`, `pinvLastSalePerUnit`, `pinvDiscount`, `pinvLastDiscount`.
+- `apps/api/src/pharmacy/pricing-display-271.spec.ts` — NEW, 26 cases across §1/§2/§3.
+
+### Gates
+`pnpm lint` and `pnpm typecheck` run once at the end: both clean (one pre-existing unused-eslint-disable warning in `doctor-portal.repositories.ts`, untouched). Per AGENT.md the unit/e2e suites and the build are left to the controller. Design self-check by inspection: tokens only, both themes, no bespoke sizes (10.5px is the sub-line figure this screen already uses), the phone sheet inherits the same `.mp-inv2` pricebox rules.
+
+## 271 — pricing-display-and-pos — GATE FIX (2026-08-14)
+
+`pnpm test:unit` failed on one assertion of `apps/api/src/pharmacy/pricing-display-271.spec.ts`:
+"the profit REPORT measures the same sale identically under either mode" — expected 163.35,
+received −1325.65.
+
+**What was actually wrong (not a test problem).** Under `fefoPriceMode: BLENDED` a pick spanning
+several lots becomes ONE sale line at a weighted-average price, and such a line names no batch
+(`batchId: null`) because it came off three of them. Every cost reader — `saleView` and the owner
+report's `costOf` — costed a line from its lot and fell back to the *product's* catalogue cost
+when there was none. So the blended sale was costed at 31 × Rs 60 (the catalogue figure) instead
+of the Rs 371 the lots actually cost, and the same sale, the same stock and the same money taken
+reported a different profit depending on a DISPLAY setting. Spec §3 requires `fefoPriceMode` to be
+honoured in reports without moving a paisa; a display switch that moves reported profit is the
+opposite of that.
+
+**Fix, in three parts:**
+
+1. `packages/shared/src/pharmacy-pricing.ts` — `blendedCost()` no longer `round2()`s the
+   quantity-weighted average, for exactly the reason the blended unit PRICE is unrounded: profit
+   is `(price − cost) × qty`, so a cost rounded to the paisa multiplies back out to a COGS the
+   lots never had (163.28 instead of 163.35 on the suite's numbers). Money is still rounded once,
+   downstream, by `lineProfit`/`saleProfit`.
+2. `sale_items.unit_cost` — a new NULLABLE `DECIMAL(12,4)` column
+   (`packages/db/prisma/migrations/20260813020000_sale_item_unit_cost/`, plus `SaleItem.unitCost`
+   in `packages/db/prisma/schema.prisma`). Additive only: NULL on every existing row, so every
+   sale already on the books reads back byte-identically. Four decimals because a blended cost is
+   an average and does not land on the paisa. Carried through `pharmacy.repositories.ts`
+   (`SaleItemRow`, `NewSaleItem`, `SALE_ITEM_SELECT`, `PrismaSaleItem`, `toSaleItem`, the
+   `createSale` insert) and the fake repo.
+3. `pharmacy.service.ts` — both `createSale` call sites (POS commit and cashier finalize) now
+   write `unitCost: priced.effectiveUnitCost`, the SAME resolver figure the line was priced with;
+   `saleView` and the report's `costOf` read `lot ?? unitCost ?? product`. Lot-first keeps every
+   batched line byte-identical to what it was; the new rung only fills the hole a lot-less line
+   left, and a pre-271 row (NULL cost) falls through exactly as before.
+
+Nothing about what is CHARGED moved: prices, FEFO, the decrement, totals and idempotency are
+untouched — only the cost side of the profit view, and only for a line that names no lot.
+
+**Gates:** `pnpm prisma generate` clean; `pnpm lint` clean (one pre-existing unrelated warning in
+`doctor-portal.repositories.ts`); `pnpm typecheck` clean. Targeted jest: `pricing-display-271` +
+`pricing-in-screens` 70/70 pass; `reports`, `pos-screen-v2`, `unit-aware-purchases-returns-reports`,
+`pharmacy-helpers` 63/63 pass. Full `test:unit` left to the controller.
+
+WORK TYPE: FIX (branch fix/271-pricing-display-and-pos)
