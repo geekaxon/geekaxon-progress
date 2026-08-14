@@ -14635,3 +14635,107 @@ untouched — only the cost side of the profit view, and only for a line that na
 `pharmacy-helpers` 63/63 pass. Full `test:unit` left to the controller.
 
 WORK TYPE: FIX (branch fix/271-pricing-display-and-pos)
+
+## 272 — purchase-invoice-to-mockup — DONE (2026-08-14)
+
+**Branch:** `fix/272-purchase-invoice-to-mockup` · **Work type:** FIX · **Schema:** none · **RLS:** unchanged.
+
+Spec `/specs/272-purchase-invoice-to-mockup.md`. Read off the owner's own produced
+`Purchase_invoice_OPENING-20260813.pdf`, not guessed. No CODEREF covers 272.
+
+### §1/§2.2 — "ATR": the cause, diagnosed and recorded
+
+The logo NEVER failed to resolve. `.mp-pur2 .a4mark img` carried
+`width:100%; height:100%; object-fit:cover` inside the mockup's 44x44 square. The tenant's mark
+is a WIDE WORDMARK, so `cover` scaled it up until it filled the square and cropped everything
+outside — leaving the three letters that happened to sit in the middle of "Ganatra": **ATR**.
+A fragment of the tenant's own name, printed on their invoice, with nothing broken anywhere.
+
+Fixed on both sides:
+
+* **Presentation** — `object-fit:contain` with `max-width/max-height:100%`, plus a new
+  `.a4mark--art` (width:auto, min 44px, max 200px, `background:none`, `border-radius:0`) so real
+  artwork sizes the mark instead of the mark cropping the artwork. A square insignia still fills
+  the square. The mockup declares no `img` rule at all — both are the app's own; the `.a4mark`
+  box they sit in is the mockup's, untouched, and still passes the declaration diff.
+* **Data** — new `resolvePrintMark()` in `@mp/brand`: the print surface's own slot
+  (`logoVariantFor('print')` -> horizontal), then the insignia, then the letterhead logo only
+  when `isRenderableAssetUrl()` says a browser can fetch it, then the tenant INITIAL in the
+  tenant's own palette, and the platform mark only for a tenant with neither artwork nor a name.
+  The service puts the resolved `BrandMark` on the invoice payload, so the document paints what
+  it is handed and a stored asset key can never reach an `<img src>` again. New `A4Mark`
+  component; `renderableLogo` in the client is gone.
+
+### §2.2 — two names, never the same one twice
+
+`PurchaseInvoiceView.platformName` is new and is `DEFAULT_BRAND.identity.appName` (config). The
+footer read `Powered by {invoice.appName}` — the TENANT's own app name — which is how the PDF
+printed "Ganatra Clinics · Powered by Ganatra Clinic". The tenant now names itself on the left
+of `.a4legal`; the credit is its own element wearing new `.a4legal__by` (8.5px vs the line's
+9.5px, opacity .72) — the modest attribution the owner asked for.
+
+Contract change: the old "nothing in the payload says Marham Patti" assertions become "nothing a
+TENANT OWNS says it" (`void-purchase-261.spec.ts`, `purchase-entry.spec.ts` updated in place).
+
+### §2.3 — opening stock is not a paid invoice (owner decision, recorded)
+
+New `isOpeningStockInvoiceNo()` in `pharmacy.repositories.ts` — `/^OPENING-\d{8}$/`, read off
+the order column with the meta note as fallback. The eight digits are what tell the RUN number
+apart from 268's per-product LOT number `OPENING-00001`, which shares the prefix.
+
+* **The paper**: eyebrow "Opening Stock", a neutral `.a4stamp--opening` reading "Opening
+  balance" (the gold stamp reads as money outstanding), the terms block states
+  "Opening balance — no supplier payment" with the value and "Nothing was paid to a supplier",
+  the grand-total row is labelled "Opening stock value", and the "Amount paid" / "Balance" rows
+  and the tender line are ABSENT. Saved-file name is "Opening stock <no>", not "Purchase invoice".
+* **The books**: the import's settling `SupplierPayment` STAYS (262 §3.2's reasoning holds — it
+  is what keeps the system supplier off the Overdue KPI). It is excluded from what is SHOWN,
+  PAIRED with its charge, in `assembleLedger` and `listSupplierSummaries`: equal and opposite, so
+  outstanding, ageing and the payable are byte-identical while no cash that never moved appears
+  in payment history or in "paid this month".
+* **The other reader**: `purchase/purchase.service.ts` (the legacy procurement supplier ledger,
+  a live surface at `/purchase`) read the same table and would have shown the settlement as a
+  PAYMENT with no charge behind it. It now excludes it too, via `openingStockOrderIds()` which
+  decodes the number off the order note (this module has no repo seam to the pharmacy one, so
+  the shape test is restated rather than imported). This is the "verify no report counts it as a
+  payment" clause.
+
+### §2.4 / §2.5 — already true, now asserted
+
+"Received by" and the signature block resolve through `staffName()` (270 §2) — asserted on the
+payload, including that a deleted account is described and never a cuid. Save PDF has come off
+the browser's own print pipeline since 264 §6 (same document, no rasteriser); the pagination,
+repeating `thead` and per-sheet legal line are asserted for the 11-page case.
+
+### Files
+
+* `packages/brand/src/index.ts` — `resolvePrintMark`, `isRenderableAssetUrl`, `PrintMarkInput`.
+* `apps/api/src/pharmacy/pharmacy.repositories.ts` — `isOpeningStockInvoiceNo`.
+* `apps/api/src/pharmacy/pharmacy.service.ts` — `platformName` / `mark` / `opening` on the
+  invoice view; `openingStockPurchaseIds` + `settlesOpeningStock`; ledger and stats exclusions.
+* `apps/api/src/purchase/purchase.service.ts` — the legacy ledger's own exclusion.
+* `apps/web/app/(app)/pharmacy/purchase/PharmacyPurchaseClient.tsx` — `A4Mark`, the opening
+  wording throughout, the split footer.
+* `apps/web/app/globals.css` — `.a4mark img` / `.a4mark--art` / `.a4mark b` /
+  `.a4stamp--opening` / `.a4legal__by`, with the ATR cause in the comment.
+* `packages/i18n/src/messages/{en,ur}.json` — six `pdA4Opening*` keys, both catalogues.
+
+### Tests
+
+* `apps/api/src/pharmacy/purchase-invoice-272.spec.ts` — mark resolution (key vs URL vs asset vs
+  initial), the two names, the two-tenant render, the opening document and its absence from
+  payment history / paid-this-month with the payable still zero, names not ids.
+* `apps/api/src/purchase/opening-stock-ledger-272.spec.ts` — the legacy ledger's exclusion, and
+  that a real payment and a LOT-numbered document are untouched.
+* `packages/ui/src/lib/purchase-invoice-272.spec.tsx` — the `.a4*` family by per-declaration
+  diff (desktop + the phone's two rules), the ATR cause pinned, the discreet credit, the opening
+  wording, i18n parity, Save PDF and pagination.
+* Updated in place: `purchases-void-261.spec.tsx` (the mark is `invoice.mark` now),
+  `purchases-desktop-r2-264.spec.tsx` (the file name is kind-aware), `void-purchase-261.spec.ts`
+  and `purchase-entry.spec.ts` (the platform name is a field of its own).
+
+### Gates
+
+`pnpm lint` clean (one pre-existing warning in `doctor-portal.repositories.ts`, untouched).
+`pnpm typecheck` clean, 29/29. Per AGENT.md the unit suite is the controller's gate, not run here.
+No schema change, so no `prisma generate`. Vendor untouched.
