@@ -15454,3 +15454,110 @@ What actually disturbed the document is that it renders inside the two SCREEN sc
 
 ### Awaiting
 Nothing hardware-dependent in this step. Visual confirmation of the produced PDF and both themes on the deployed page is the owner's.
+
+---
+
+## 280 — escpos-rendering — DONE (2026-08-15)
+
+**Work type:** FEATURE. **Branch:** `feature/280-escpos-rendering`. **Spec:** `/specs/280-escpos-rendering.md`.
+**Schema:** none. **RLS:** unchanged. **Migrations:** none. **No CODEREF covers 280** (the last is 113-121).
+
+### Decision 1 — a dedicated package, `@mp/escpos`, not a folder inside `@mp/shared`
+The spec allowed either and asked for the choice to be stated. `@mp/shared` has no test runner of its own
+(its only devDependency is typescript) and its `build` compiles everything under `src`, so golden-byte specs
+and their committed fixtures would have shipped inside the browser bundle. `packages/escpos` mirrors
+`@mp/import`: `tsc -p tsconfig.build.json` (which excludes `**/*.spec.ts` and `**/test-*.ts`) for the build,
+ts-jest + `jest.config.js` for the tests. The package was added to the workspace and `pnpm install` linked it.
+
+### Decision 2 — the document models are IMPORTED, as types only
+`SaleReceiptDoc extends ThermalReceiptModel` (102/253), `ZReportDoc extends ZReportModel` (110), and
+`RefundSlipDoc` mirrors the shape the Returns screen's thermal overlay already renders. All of it arrives via
+`import type { ... } from '@mp/shared'`, which erases at compile time. That gives spec §2's "one content
+contract, two presentations" a compiler-enforced meaning while leaving the built module with **zero runtime
+imports** — which is how Acceptance §6 ("no browser API, no network, no printer — provable by its imports")
+is actually proved rather than asserted. Two small things are deliberately re-declared locally instead of
+imported at runtime: the payment-method wording (the slip says "Udhaar (credit)", which the screen's
+`posPayMethodLabel` does not) and `isInternalId`, a copy of `@mp/shared`'s `isInternalReference` rule (270 §2)
+kept local so the zero-import property holds. The copy carries a comment pointing at the original.
+
+Fields paper needs that the browser models do not carry (the page around them supplies these) are optional
+additions: the tenant's `phone`, the customer's `customerBalance` (old udhaar), and the shift's `openedAt`.
+
+### Decision 3 — width is a parameter everywhere; 58mm degrades, it does not truncate
+`columnsFor()` is the only source of line width (48 at 80mm, 32 at 58mm). At 80mm an item row is a genuine
+three-column line (name · `2 box x 850.00` · `1,700.00`) with a header laid out to the *same* column widths;
+at 58mm the row stacks — name on its own line, quantity and amount indented beneath — and the three-column
+header is not printed, because a header that labels nothing is worse than none. When a label/value pair will
+not fit, the LABEL wraps and the value lands right-aligned; the value is never shortened. Leading spaces on a
+label are treated as a deliberate indent and survive the whitespace fold, which is what keeps stacked
+quantity lines and per-line discounts hanging under their item.
+
+### Decision 4 — ASCII first, then the column maths
+`toAscii()` folds to printable ASCII (NFD, combining marks stripped, a transliteration table for `₨`→`Rs`,
+`×`→`x`, dashes, quotes, fractions), and `field()` additionally collapses whitespace. Both run **before**
+anything is padded, so a dropped diacritic can never shift a money column. A value that transliterates to
+nothing (a name written wholly in Urdu script) becomes `?` rather than collapsing into the column beside it.
+`toAscii` is idempotent on ASCII, so the builder runs it once more over already-padded lines as a guard.
+Money is formatted by hand (`1,700.00`) and timestamps in a fixed UTC offset defaulting to +300 (PKT) —
+`toLocaleString` was avoided on purpose: it varies with the host's ICU data and would make golden bytes
+environment-dependent.
+
+### Decision 5 — proof shape: two golden files per document, plus a strict decoder
+Each document is committed twice under `src/__golden__/`: `.txt` is the decoded rendering (so a receipt
+change reads in review as changed paper) and `.hex` is the raw stream (so nothing shifts under a decoder that
+happens to render it the same). Regenerate with `UPDATE_GOLDEN=1 pnpm test` inside the package. The decoder
+understands **exactly** the vocabulary `commands.ts` emits and throws on anything else — a new command added
+without a decoder case fails loudly instead of vanishing from the golden file.
+
+### What was built
+- `ascii.ts` — the ASCII fold and `field()`.
+- `layout.ts` — `columnsFor`, pad/centre/rule/wrap, `twoColumn`, `itemRow`, `itemHeaderRow`, `subRow`,
+  `amount`/`money`/`signedMoney`, `formatDateTime`/`formatDate`.
+- `commands.ts` — `ESC @`, `ESC t`, `ESC a`, `ESC E`, `ESC -`, `GS !` (double **height** only, so the column
+  budget survives the grand total), `ESC d`, `GS V` (full/partial cut), `ESC p` (drawer kick, 0/25/250),
+  `GS h/w/H/f` + `GS k` (CODE39 m=69, CODE128 m=73 with the `{B` prefix). Standard ESC/POS only.
+- `builder.ts` — `EscPosBuilder`: primitives in, `Uint8Array` out.
+- `documents.ts` — the three document models, `PrintLabels` + `DEFAULT_LABELS` (English ASCII, fully
+  overridable through `RenderOptions.labels` so 281/282 can pass the tenant's copy), method and reason
+  wording, `isInternalId`.
+- `render.ts` — `renderSaleReceipt`, `renderRefundSlip`, `renderZReport`.
+- `decode.ts` — `decode`/`decodeLines`/`printedLines`/`toHex`.
+- `index.ts` — the public surface.
+
+### Document notes
+- **Sale receipt:** letterhead from resolved branding + optional phone; REPRINT mark above the invoice line
+  (237 §5); date/invoice/cashier/counter/customer; item rows with unit and quantity and per-line discount;
+  **split-batch lines print one per lot exactly as the cart showed them** (253/271 — the model already
+  carries them separately and nothing is folded together); subtotal/discount/tax; **grand total bold and
+  double-height**; tender split with udhaar wording; change; applied advance (227 §2.4); previous udhaar;
+  Rx note; footer, powered-by (only where the tenant keeps it) and a CODE128 invoice barcode.
+- **Refund slip:** REFUND SLIP subtitle, original invoice, processed-by, slip reason plus any per-line reason
+  that differs, negative line amounts, items subtotal, restocking fee, double-height net refund, method. The
+  return's own id is printed only when it is a human number (270 §2); the barcode keeps it either way.
+- **Z-report:** business date, counter, cashier, open/close, status; sales split and totals; refunds; opening
+  float, expected and counted; then the variance as **three visibly distinct blocks** — BALANCED is a quiet
+  centred bold pair, OVER is double-height ruled off with `=`, SHORT is double-height ruled off with `#`
+  (110's principle carried onto paper). Counted denominations follow. No barcode: nobody scans a Z-report.
+
+### Tests — 67, all green (3 suites)
+`golden.spec.ts` (10) — all three documents at both widths plus reprint, over/balanced variants and a
+second tenant, each against both committed goldens. `primitives.spec.ts` (30) — the ASCII fold, the column
+maths, the byte sequences, and a decoder round-trip over every primitive including its refusal of unknown
+bytes. `properties.spec.ts` (27) — per width: no line over the roll, a cut terminates every document, exactly
+one initialise and it is first, every style closed; drawer kick present only where asked and with the right
+pin; totals balance on all three documents; grand total double-height; split-batch lines intact; reprint
+marked only on a reprint; `Rs` never `₨`; alignment survives a non-ASCII name; 58mm stacks rather than
+truncates; the three variance states distinct; two tenants render differently with neither carrying the
+other and the powered-by mark honoured; and the purity scan — every import in a shipped file is relative or
+type-only, no `require`/dynamic import, no host object, with a non-vacuity guard on the scan itself.
+
+### Gates
+`pnpm lint` — clean (17 tasks). `pnpm typecheck` — clean (30 tasks). `tsc -p tsconfig.build.json --noEmit`
+in the package — clean, confirming the shipped build excludes the specs and fixtures. Per CLAUDE.md §6 the
+agent did not run `test:unit`/`build`; the package suite was run directly with its own jest binary (67
+passed). Vendor untouched. No schema, no migration, no app or API change — the transport is 281 and the
+wiring is 282, and this step deliberately touches neither.
+
+### Parked (recorded, not attempted)
+Raster/graphic tenant logos and QR codes on thermal paper: they need per-model image handling and are not
+what a counter is waiting on. Standard ESC/POS text, rules, barcode, cut and drawer kick cover the market.
