@@ -14965,3 +14965,100 @@ the new phone rule did not break fixtures: `packages/ui` 106 suites / 2394 tests
 four §1 behaviours and the favicon must be confirmed on the deployed page with the API down, on a
 real device, in both themes. The `[retry]` trace line now makes the next report diagnosable rather
 than a screenshot.
+
+## 275 — purchase-invoice-to-print-mockup — DONE (2026-08-15)
+
+**Branch:** `fix/275-purchase-invoice-to-print-mockup` (WORK TYPE: FIX + a small feature — the two document-logo settings).
+**Spec:** `specs/275-purchase-invoice-to-print-mockup.md`. **Mockup:** `specs/mockups/pharmacy/print-invoice.html` (committed with this round).
+**Gate:** the mockup carries `.lock__slot` (16 occurrences) and `.pill--opening` (2) — passed, so the step proceeded.
+
+### §1 The header lockup — one implementation, three exclusive conditions
+The print path held its OWN logo chain (`resolvePrintMark` in `@mp/brand`), whose fallback was a coloured initial
+tile — not one of the three conditions the owner ruled on — and the document painted the pharmacy NAME beside
+whatever it resolved. That is why the produced PDF printed a horizontal logo AND the name.
+
+- `resolvePrintMark` and `PrintMarkInput` are **DELETED**. The three conditions moved out of
+  `packages/ui/src/lib/auth-lockup.ts` into `@mp/brand` as `resolveLockup(brand, mode, primary)`; `authLockup` is now a
+  one-line wrapper over it, so the auth card, the reset card, the invite screen, the error pages and the invoice all
+  read the SAME function. It had to move to `@mp/brand` because `apps/api` builds the document's payload and does not
+  (and should not) depend on a React package.
+- The server resolves it at `'light'` from the STRICT per-theme asset set (166 §2), so dark-only artwork is never
+  borrowed onto white paper. The payload now carries `lockup` instead of `mark`.
+- The document draws through the shared `LockupMark` (232 §2 — an explicit height, so a viewBox-only SVG lays out).
+  `LockupMark` gained a `maxWidth` prop and accepts a tenant-set height; the sheet passes the mockup's 260px band
+  (or the band height for a square insignia) instead of the card-safe `100%`.
+- Condition A renders NO name node at all — asserted by slicing that branch and proving `lock__name` is absent.
+
+### §2 The two document settings (the one migration)
+**Verdict on what branding already carried, as the spec asked: nothing fits.** `LogoSize` (sm|md|lg) is a per-surface
+multiplier that is never persisted, and `logoVariantFor('print')` is a constant, not a choice.
+
+- Migration `20260815000000_document_logo_settings` — two nullable columns on `branding_profile`
+  (`doc_logo_variant TEXT`, `doc_logo_height INTEGER`). Additive, no backfill: null reads as Horizontal at 44px, which
+  is exactly today's rendering.
+- `@mp/brand`: `DocLogoVariant`, `DEFAULT_DOC_LOGO_VARIANT = 'HORIZONTAL'`, the 24–56px band, `normalizeDocLogoVariant`,
+  `normalizeDocLogoHeight` (clamped + rounded), `docLogoSlot`, and `ResolvedBrand.docLogo`. The DTO REJECTS an
+  out-of-band height rather than silently clamping it, so a tenant who types 200 is told why their logo did not grow.
+- Repo row/input/SELECT/toData/toRow, the brand service's `toOverrides`, the fake repo and the admin editor
+  (`BrandManager`) all carry the pair; the helper text states the recommendation (an A4 header is wide and short) and
+  that the size is ONE size for every document.
+
+### §3–§7 The sheet
+- The `.a4*` family is gone from `globals.css`, replaced by the mockup's own anatomy transcribed under
+  `.mp-pur2 .docsheet` — `.mh*`, `.lock*`, `.pill--*`, `.parties`/`.party*`, `.facts`, `.tbl`/`li-*`, `.contline`,
+  `.carried`, `.close`, `.notes`/`.paybox`/`.callbox`, `.totals`/`.trow`/`.tgrand`/`.tpay`/`.tstate*`/`.tnote`,
+  `.sigs`/`.sig*`, `.pfoot*`, `.voidstamp`/`.voidbar`, `.obbar`, `.mh--cont`.
+  **ONE deliberate rename, recorded:** the mockup's root class is `.sheet`, which this app already owns for the mobile
+  bottom sheet the phone opens this very document inside (`.mp-mobile .sheet`, `.mp-inv2 .sheet …`). Two different
+  boxes cannot share a class in one document, so the root is `.docsheet`; everything under it keeps the mockup's name.
+  Scoping every rule under `.docsheet` also protects generic names (`.pill`, `.cap`, `.close`, `.notes`, `.totals`)
+  from the app families that already use them — `.mp-inv2 .pill` would otherwise have restyled the document's badges.
+- The rule under the masthead and the eyebrow take `var(--tenant)`, set per sheet from `paperInk(brand.colors.brandTeal)`
+  — the tenant's primary DARKENED (one direction only) until it reaches 3:1 on white. Two palettes give two rules;
+  a near-black brand passes through untouched.
+- Page rhythm: the sheet is 794 × 1122px with a hard 714 × 992px well and the closing element on `.pushdown`
+  (`margin-top:auto`), so 40 + 992 + 26 + 30 + 34 = 1122 and the gap above the footer is 26px on EVERY page. `@page`
+  margin is now 0 (was 12mm): the sheet carries its own margins, and a browser-applied margin re-flowed the well.
+- `SHEET_COLS` = 20+172+124+52+102+82+62+100 = 714, drawn once into a `<colgroup>` with `table-layout:fixed`. The
+  mockup's 32px tax column became 62px for the DISCOUNT this document carries instead, with the 30px taken off batch
+  and quantity (both still wider than their worst case: `AUTO-20260814-00048` measures ~113px in a 124px column).
+- Pagination is by WEIGHT, not by count: 13 rows on page one, 18 on a continuation, 11 on the last, 7 when there is
+  only one sheet — the 42-line reference invoice pages exactly as the mockup does. A name that wraps counts 1.45, so
+  a well that CLIPS (which is what keeps every page the same height) cannot silently swallow the last row. The loop
+  takes `min(MIDDLE, rest - 1)`, which is what guarantees a last page exists to carry the closing block.
+- Footer: pharmacy · Powered by <platform, from config> · page n of m, `1fr auto 1fr` so the credit centres on the
+  SHEET. `pdA4PageLast` — "computer-generated, valid without signature" — is deleted from both catalogues.
+- Signatures: Received by = the resolved staff NAME; Checked by = deliberately blank with a rule (recorded for the
+  owner: it is a PEN field, signed after physically verifying the goods); Supplier representative = the supplier.
+  Void and opening documents re-purpose the three areas the way the mockup does.
+- States: paid · partial · unpaid · void (stamp, reason bar, struck-through lines, dimmed signatures) · opening
+  balance. An opening document prints `.pill--opening`, an `.obbar` saying it is not a purchase invoice, and
+  "Payable created — None": no tender line, no amount paid, no balance, and never "Paid" or "Settled in full".
+
+### i18n
+46 new keys in EN and UR (both catalogues, parity verified: 3809 = 3809, symmetric difference empty), covering the
+new document lines, the states and the two branding settings. `pdA4PageLast` removed from both.
+
+### Tests
+- NEW `packages/ui/src/lib/purchase-invoice-275.spec.tsx` — the gate, the three lockup conditions exercised against
+  the REAL resolver (including the exclusivity and the light-only rule), the settings (schema, migration, defaults,
+  clamp, DTO rejection, admin surface, parity), the brand rule and its ink clamp, a 63-family per-declaration diff
+  against `print-invoice.html`, the column arithmetic, the 26px gap arithmetic, the paginator's guarantees, the
+  footer, the signatures, every state, Save PDF and money-formatter identity.
+- `apps/api/src/pharmacy/purchase-invoice-272.spec.ts` — its `resolvePrintMark` cases are superseded IN PLACE by the
+  same claims against `resolveLockup`; the two-tenant test now compares `lockup`.
+- 261 / 264 / 272 (UI): the `.a4*` per-declaration lists are retired with a recorded reason and every behavioural
+  claim retargeted at the new markup. Nothing was deleted without being re-asserted somewhere.
+- Six `BrandService` stubs in the API specs gained `resolveAssetSetStrict` (and, where they were bare literals,
+  `colors` + `docLogo`), because the document now asks the brand service for the tenant's strict light asset set.
+
+### Gates
+`pnpm lint` clean (one pre-existing warning in `doctor-portal.repositories.ts`, untouched). `pnpm typecheck` clean,
+29/29 tasks. Per-declaration diffs verified mechanically against the mockup before commit. Vendor untouched; no
+secrets; RLS unchanged. Money figures byte-identical — every figure still comes off the same `money()` formatter,
+asserted over the whole document slice, with no local rounding and no second formatter.
+
+### Not verified here
+The spec's §9 asks for confirmation on the DEPLOYED page by generating real PDFs (three lockup conditions, two
+palettes, a three-page invoice, both logo variants). That is a deploy-time check the controller runs; nothing in
+this session rendered a real PDF. Recorded rather than claimed.
