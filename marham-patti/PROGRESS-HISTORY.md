@@ -15561,3 +15561,100 @@ wiring is 282, and this step deliberately touches neither.
 ### Parked (recorded, not attempted)
 Raster/graphic tenant logos and QR codes on thermal paper: they need per-model image handling and are not
 what a counter is waiting on. Standard ESC/POS text, rules, barcode, cut and drawer kick cover the market.
+
+---
+
+## 281 — bluetooth-transport-and-settings (DONE, 2026-08-15)
+
+**Branch:** `feature/281-bluetooth-transport-and-settings` — WORK TYPE: FEATURE.
+**Spec:** /specs/281-bluetooth-transport-and-settings.md. No CODEREF in range.
+
+### What was built
+
+**§1 The transport — `packages/ui/src/lib/print-transport.ts` (exported from `@mp/ui`).**
+A framework-free `PrintTransport` class owning one Web Bluetooth session: `pair()` (chooser with
+`acceptAllDevices` + the four printer service UUIDs as `optionalServices` — deliberately NOT a
+filter, because a filter hides the very printer the owner is holding), `reconnect()` (Chrome's
+`getDevices()`, no prompt), `forget()`, `send()` and `dispose()`. State machine exactly as the spec
+names it — `unsupported · no-printer · connecting · ready · printing · error` — exposed through
+`subscribe()`. Bluetooth, storage, chunk size, pacing and the clock are all injected, which is what
+makes the whole thing testable with no printer. Sends are chunked (default 128 bytes) and paced
+(20ms between chunks, never after the last), preferring the ACKNOWLEDGED write: fire-and-forget is
+how a long receipt silently truncates on a cheap head. A `gattserverdisconnected` mid-print flips
+the state and the in-flight write reports its own failure; `send()` never throws.
+
+**§3 The fallback contract.** Two pure pieces: `choosePrintRoute(behaviour, state)` (SILENT prints
+only from `ready`/`printing`; everything else, and DIALOG always, is the browser dialog) and
+`printOrFallback({transport, behaviour, bytes, dialog, onFellBack})` — the ONE function every
+printing surface uses, so the contract cannot be half-implemented in one screen. A failed send calls
+`onFellBack` (the web layer raises the translated toast) and then opens the dialog anyway.
+
+**§2 Settings — schema.** One additive migration, `20260815010000_printing_settings`: `PrintMode`
+enum (`SILENT|DIALOG`) plus `cash_drawer_kick BOOLEAN NOT NULL DEFAULT false` and `print_mode
+"PrintMode" NOT NULL DEFAULT 'SILENT'` on `pharmacy_settings`. DECISION: they ride that table rather
+than a new one because it already carries the `(tenant_id, branch_id)` unique AND the forced tenant
+RLS policy — the per-branch override the spec asks for is already that row's job, and a new table
+would have been a new isolation story to get right. Both defaults reproduce today's behaviour
+exactly (no drawer pulse; SILENT with nothing paired IS the dialog).
+
+DECISION — two things are deliberately NOT columns. (a) The PAPER WIDTH: it has lived on the
+branding letterhead (`StoreProfile.receiptWidth`) since 220 and two panes already edit it; one
+printer, one roll, one stored number, so the Printing pane edits that same value rather than a
+second copy that could disagree. (b) The PAIRED PRINTER: a Web Bluetooth device id is minted per
+browser profile per origin and means nothing on another machine, so storing it against the tenant
+would be a promise the platform cannot keep. Pairing is remembered in `localStorage`, scoped
+`mp.print.printer.v1:<tenant>:<branch>`, and the pane says so in one plain sentence.
+
+**§2 Settings — API + shared.** `EffectivePharmacySettings` gains `cashDrawerKick` + `printMode`
+(defaults, row shape and the branch→tenant→defaults resolver, all in `@mp/shared`); a new
+`packages/shared/src/printing.ts` carries `PRINT_MODES`/`isPrintMode` and `printRenderOptions()`,
+the pure mapping from stored choices to 280's `RenderOptions` (width through, drawer only on a cash
+sale that is not a reprint). DTO parses both fields as ADDITIVE on the wire (a pre-281 client keeps
+the defaults; an unrecognised mode is a 400, never a guess). Repo select/upsert extended; `PrintMode`
+re-exported from `@mp/db`.
+
+**§2 Settings — screen.** `apps/web/app/(app)/settings/sections/PrintingSection.tsx`, one new
+registry entry (`printing`, group pharmacy, `pharmacy.pos` + `pharmacy.settings.manage`) and nothing
+else — the rail row, the phone drilldown line and `/settings?s=printing` all came from that entry.
+Three cards: the printer (StatusPill state, paired name, Pair / Forget / Print a test), paper and
+drawer (width Seg + drawer switch), print behaviour (SILENT/DIALOG Seg). Device actions sit in the
+card, not the save bar, because they act on this browser rather than on the form. `apps/web/lib/
+printing.ts` is the app seam: one transport per tenant/branch scope in module scope (Settings and,
+at 282, the POS share the radio), visibility-change reconnect, and the translated fallback toast.
+41 new EN/UR keys; the now-false "printing is parked" copy in Receipts was rewritten to point at
+the Printing pane (a stale apology in one screen contradicting another is drift).
+
+**Test page.** `renderTestPage()` added to `@mp/escpos` — the transport takes bytes and never
+composes them, so a hand-rolled "few bytes of test text" in the settings screen would have been a
+second private ESC/POS writer. English/ASCII labels by default (a thermal head has no Urdu font);
+the timestamp is formatted `en-PK` for the same reason.
+
+### Gate results
+- `pnpm lint` — clean (one pre-existing unused-eslint-disable warning in doctor-portal, untouched).
+- `pnpm typecheck` — clean, 31/31.
+- Targeted suites run: `print-transport.spec.ts` 20/20, `printing-settings-281.spec.ts` 12/12,
+  `test-page.spec.ts` 4/4, `pharmacy-settings.service.spec.ts` 45/45 (6 new),
+  `printing-settings-isolation.spec.ts` 6/6 (real migrations in pglite), i18n parity 3/3,
+  `settings-mobile` + `settings-nav` + `drift-guard` 73/73. Full `pnpm test:unit` is the
+  controller's gate, per the standing rule.
+- `pnpm prisma generate` run after the schema change. `pnpm install --offline` run to link the new
+  `@mp/escpos` dependency of `@mp/web` (lockfile updated; no package downloaded).
+
+### AWAITING HARDWARE (the 148 rule — none of these is marked passed)
+Each names the exact step to run when the printer arrives:
+1. **Pairing on a real device.** Android Chrome → Settings → Printing → "Pair a printer"; the
+   chooser must LIST the printer (Xprinter/Goojprt/Black Copper). If it does not appear, the
+   `acceptAllDevices` chooser is not the problem — check the printer is in pairing mode.
+2. **Test print.** Press "Print a test" with the printer on. Expect: store name in double height,
+   "PRINTER TEST", paper width, printer name, timestamp, the proof line, a feed and a cut.
+3. **Roll width.** Set 58mm, test-print again; nothing may wrap or overflow the narrow roll.
+4. **A long receipt.** Ring a sale with 25+ lines (at 282) and print: the LAST line and the total
+   must be on the paper. This is the chunking/pacing check — if it truncates, raise `chunkDelayMs`
+   before touching `chunkSize`.
+5. **Cash drawer.** Turn the drawer switch on, settle a sale in cash: the till must pop, and must
+   NOT pop on a card/credit sale or on a reprint.
+6. **Out of range.** Walk the printer out of range mid-print: expect the "Printer not reachable"
+   toast AND the browser print dialog, and the sale unaffected.
+7. **Reconnect.** Lock the phone, come back to the tab: state returns to `ready` with no prompt.
+8. **iOS Safari.** The Printing pane must show "Not supported" and the explanation, and printing
+   must still work through the dialog.
