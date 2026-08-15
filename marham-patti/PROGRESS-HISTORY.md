@@ -15062,3 +15062,64 @@ asserted over the whole document slice, with no local rounding and no second for
 The spec's §9 asks for confirmation on the DEPLOYED page by generating real PDFs (three lockup conditions, two
 palettes, a three-page invoice, both logo variants). That is a deploy-time check the controller runs; nothing in
 this session rendered a real PDF. Recorded rather than claimed.
+
+---
+
+## 276 — medicine-select-and-purchase-desktop — DONE (2026-08-15)
+
+**WORK TYPE:** FIX · **Branch:** `fix/276-medicine-select-and-purchase-desktop` · **Spec:** `specs/276-medicine-select-and-purchase-desktop.md` (no CODEREF in range) · **Phase 23**, group 275 → **276** → 277 → 278.
+**Schema:** none. **RLS / auth / permissions / flags:** unchanged. **Endpoints:** unchanged. **Mockup gate:** `specs/mockups/pharmacy/purchases-suppliers-desktop.html` carries `.lineitems__scroll` (6 occurrences) — gate passed.
+
+### §1 — the medicine select lost its label past the first page
+
+**Cause, confirmed.** `SearchSelect` rendered its trigger from `flatten(allGroups).find(o => o.value === value)`. Since 228 §1 the option list is a server-paged WINDOW and `allGroups` is only the OFFLINE fallback list, so a product resolved through a later page or a server search is not in it once the list resets: the lookup returns nothing and the trigger falls through to its placeholder while the line still holds the id. `selectedOption` existed as a per-caller patch and only two callers in the app ever passed it (Inventory's item picker, the phone's purchase card) — the desktop purchase grid did not.
+
+**Fix, in the shared components so every consumer inherits it:**
+- `SearchSelect` REMEMBERS the picked row (`remembered` state) and resolves the trigger as loaded-option → caller's `selectedOption` → remembered. A caller with a fresher row (a rename) still wins; a caller with nothing at all is no longer blank.
+- `onChange` now carries the picked `SelectOption` as a second argument (optional — every pre-276 caller is untouched), so a consumer can store the TEXT with the id. Clearing carries `null`.
+- `MultiSearchSelect` keeps a per-value map for the same reason: a chip derived from the current list vanishes when its row leaves it.
+- `PosSelectField` (the POS/supplier `.pos-sel` composition) hands the picked row to `onPick(id, option)` and its option gained a plain-text `label`.
+- Purchase entry's `LineDraft` gained `medicineLabel` + `medicineHint`, written by one shared `productPickPatch()` on BOTH surfaces. The phone card's head no longer reads `med?.brandName ?? "Pick a product"`, and its `selectedOption` no longer falls back to the raw uuid as a label.
+
+**Grep of every consumer that derives a label by lookup (spec asked for the list):**
+- *Windowed and broken — fixed here:* purchase entry's item picker, desktop grid AND phone cards.
+- *Windowed and already safe, verified:* POS customer select — every landed page is folded into `customers` (PosClient's merge effect), so any row the cashier can see is in the list all the lookups read; Inventory's item picker — `selectedOption` comes from the fetched `detail`, not from the page.
+- *Bounded, no window (lookup is sound):* purchase supplier, the unit chains, Inventory's category / base-unit / product-type / form pickers, CatalogueIO's field picker, the counter select, rows-per-page.
+
+**Blocking an unnameable line (192 §3).** `EntryLineState` gained optional `productResolves`; omitted means "resolves", so every pre-276 caller is unchanged. `entryLineIssues` pushes the previously-unused `'product'` issue FIRST (it makes every other clause meaningless), `canSaveEntry` refuses, and the line's read-out states `pdErrProductLost` in words rather than showing a blank field or a uuid.
+
+### §1.3 — the zero-cost finding (recorded, as the spec requires)
+
+**The cost is NOT lost on save.** The entered string is parsed once at the boundary (`costPrice: num(l.cost)`) and sent as typed; nothing rounds, defaults or re-derives it. So this is not the higher-priority bug §1.3 anticipated.
+**What IS the same class of defect:** the cost PREFILL read the same window — `medicines.find(x => x.id === v)?.costPrice` — so a product chosen beyond the loaded page silently got no suggested cost at all, exactly as it silently got no label. A rushed operator saving the line then stores Rs 0.
+**Judgement call (decided, not escalated):** the picker endpoint deliberately carries no cost — 228 §1 records "identity and display ONLY… a payload that also states its margin is a catalogue export behind a dropdown" — so widening its projection to restore the prefill was rejected. The answer is to stop being silent instead: `isZeroCostLine()` in `@mp/shared` (one rule, both surfaces) and `pdZeroCostWarn` — "No cost entered — this stock will report 100% profit" — in the line read-out, in the warning tone with the alert mark. It WARNS and never blocks: free goods and samples are real, and a system that refuses the save only teaches staff to type a fake cost (the same reasoning 253 §2 recorded for below-cost lines).
+
+### §2 — the placeholder
+
+`.pos-sel__val` aligns on the BASELINE, which is right for a filled trigger (name + small terms on one line) and wrong for an empty one, which has no second child to align with. `align-items:center` is applied to `.is-empty` ONLY, in every scope the field is worn in (`.mp-pur2`, `.mp-pos2`, `.mp-inv2`, `.mp-inv2-import`, `.mp-mobile`), so nothing moves vertically when a value is finally chosen.
+
+### §3 — the line table
+
+- **One baseline:** every line cell is `.lfield`, a 28px control row over a RESERVED 16px hint row (`.lfield__hint`). A line with four hints and a line with none are the same height, and switching a discount from percent to rupees no longer moves the inputs.
+- **The basis toggle** moved into that reserved row as the mockup's own `.dtog` atom. The phone card keeps `.dtoggle`, which is a thumb target at 22px — two atoms for two surfaces, each declared exactly once, rather than one atom with two dresses (265 §5's rule survives intact). The now-dead `.lineitems--tight .dtoggle` placement rule was deleted, not overridden.
+- **Widths + scroll:** `LINE_COL_WIDTHS` (34·260·120·76·118·108·118·108·86·136·118·116·48 = 1,446px) in a `<colgroup>` under `table-layout:fixed`; `.lineitems--wide` clips and `.lineitems__scroll` takes the overflow, so the TABLE scrolls and the page never does. `#` and Item are `position:sticky` with logical `inset-inline-start` (the mockup is LTR-only, this app is not); the divider earns its shadow only once `is-scrolled` (driven by an `onScroll` reading `scrollLeft > 0`).
+- **The margin line** stays one `colSpan={13}` cell and is sticky at the scroller's start, so the conversion and the margin stay readable at any scroll position.
+- **Tone:** `--neg` paints the mark and the verdict in `--danger` when the line LOSES money (`perUnit < 0`), which 271 §1 asked for and did not get — it was wearing the same amber as a merely-thin margin. Break-even (`belowCost && !negative`) is `--flat`, said out loud but not painted as a loss; the sentence and the alert mark are still driven by `belowCost`, so nothing else changed. `.mg--quiet` was renamed to the mockup's `.mg--wait`.
+
+### §4 — full-file diff, changed-selector list
+
+`.pos-sel__val.is-empty` (new, 5 scopes) · `.lfield`, `.lfield__ctl`, `.lfield__hint`, `.lfield__hint--r` (new) · `.dtog`, `.dtog button`, `+ button`, `:hover`, `.is-on`, `:focus-visible` (new) · `.lineitems--wide` and its `table`/`th`/`td`/`tr.lrow`/`tr.lnote`/`.c-item`/`.rownum`/`.is-scrolled` family (new) · `.lineitems__scroll` (completed: thin tokenised scrollbar, `overflow-y:hidden`) · `.mgline--neg`, `.mgline--flat`, `.mmargin--neg`, `.mmargin--flat`, `.mg--wait` (new) · `.lineitems--tight .dtoggle` (removed, dead) · `.mg--quiet` (removed, renamed).
+**Deliberate divergences recorded:** `overflow:clip` where the sheet writes `hidden`; logical `inset-inline-start`/`padding-inline` throughout; `--radius-pill` where the sheet writes `99px`; the sheet's `.lineitems--guide` dashed alignment guide is spec-sheet chrome and is NOT shipped; the tax column stays (the sheet drops it, but removing it would remove the only way a tenant records GST on a delivery — a capability change a presentation step may not make).
+**Deferred with reason:** the sheet's `.ledtbl--fit` / `.ledtbl__scroll` "drawer tables fit 700px" family belongs to the SUPPLIER drawer in `SuppliersClient`, not to this screen, and needs per-tab colgroups in that file — 277 (`purchases-mobile-and-supplier-tabs`) owns that surface, and shipping the CSS here without the markup would be dead rules. Noted in PROGRESS.md Parked.
+
+### Files
+
+`packages/ui/src/components/search-select.tsx` · `apps/web/components/pharmacy/PosSelectField.tsx` · `packages/shared/src/pharmacy-purchase-desk.ts` · `apps/web/app/(app)/pharmacy/purchase/PharmacyPurchaseClient.tsx` · `apps/web/app/globals.css` · `packages/i18n/src/messages/{en,ur}.json` (+`pdErrProductLost`, +`pdZeroCostWarn`, parity verified) · new `packages/ui/src/lib/medicine-select-276.spec.tsx` (33 cases) · superseded guards updated with their reasons in place: `purchases-desktop-r2-264`, `purchases-mobile-260`, `purchases-screens-273`.
+
+### Gates
+
+`pnpm lint` and `pnpm typecheck` clean (run once, at the end). The new suite and every purchase/select/picker/POS/inventory suite were run to prove the shared-component change broke nothing: 377 passing in the purchases/select set, 990+ across the wider pos/inventory/picker set, api purchases suites 49/49, i18n parity 28/28. Vendor untouched; money figures byte-identical (no arithmetic changed — `entryLineMoney`, `purchaseEntryTotals` and the submit payload are untouched).
+
+### Self-checks (by inspection)
+
+i18n EN+UR parity ✔ · isolation ➖ (presentation + one client-side validator) · flags/permissions unchanged ✔ · design: tokens only, no hex literal, both themes, reduced-motion honoured on the sticky divider's transition ✔ · white-label ➖ · accountability ➖ (no state change) · offline: the picker's offline fallback path is untouched and now ALSO keeps its label ✔.
