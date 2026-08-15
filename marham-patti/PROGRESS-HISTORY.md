@@ -15294,3 +15294,163 @@ variant — the mockup's own markup does not use it.
 tenant-english-only, tenant-search-select and tenant-page-titles all pass. Per AGENT.md §4A the unit,
 build and e2e suites are the controller's to run. Vendor untouched; no secrets; `.env.example`
 unchanged (no new configuration).
+
+---
+
+## 278 — round-13-verification — DONE (2026-08-15)
+
+**Branch:** `fix/278-round-13-verification` · **WORK TYPE:** FIX (verification block-final)
+**Schema:** none. **RLS:** unchanged. **Auth/permissions/flags:** unchanged. **Endpoints:** none added. **i18n:** no new keys.
+
+### What this step is
+The deliberately-last step of Phase 23. Phase 23 changed batch identity, the stock/lot invariant,
+how a void unwinds money, and how prices resolve and display — the parts of the system that hold
+the tenant's money. 278 proves them rather than assuming them, and records each of the 35 numbered
+checks in §1–§7 as pass / fixed / unverified (the 148 rule: an unverified item is never recorded
+as passed).
+
+### The constraint this session worked under, stated plainly
+**No database and no browser were reachable.** The repository `.env` carries placeholders only, so
+nothing was run against the deployed staging database. That is recorded rather than worked around:
+every check that genuinely needs the tenant's own data, a load run, or rendered pixels is marked
+UNVERIFIED in the report, not quietly passed.
+
+It is worth saying what this did NOT prevent. `packages/db/src/batch-identity.spec.ts` executes the
+REAL migrations inside an in-process PostgreSQL (pglite), which is exactly what §1.4 means by "a
+real database, not a mock". So the batch-identity, concurrency, repair and invariant checks are
+executed evidence, not inspection — they simply run against a fresh database rather than the
+tenant's.
+
+### Deliverables
+
+**1. `docs/278-round-13-verification-report.md`** — the round's record. All 35 checks in a table
+with an explicit status (PASS executed / PASS inspection / UNVERIFIED) and the named suite, source
+line or migration behind each. Also carries the two read-only SQL queries whoever holds the
+staging database needs: the repair-report query and the tenant-wide invariant query.
+
+**2. `apps/api/src/pharmacy/round-13-verification-278.spec.ts`** — the three checks that had no
+executable evidence behind them:
+
+  - **§5.25 — an imported product sells at POS.** This was the real gap. Every import suite
+    (254 / 266 / 269) stopped at the rows the import wrote; whether the catalogue it opened could
+    then be RUNG UP was asserted nowhere, and that is the only question the owner actually asks of
+    an import. The new tests import a catalogue with an opening quantity and then sell it: the
+    price comes off the imported lot, the lot is the `OPENING-` one the labelled "Opening stock"
+    purchase received, and selling the WHOLE opening quantity leaves both the aggregate and the
+    lots at zero (no phantom units).
+  - **§3.13 — one transaction.** 270 proved all three legs happen. Nothing pinned that they are
+    handed to the writer as ONE act, and atomicity is a property of the call shape: a second call
+    for the money is a window in which the stock is back and the payment still stands. The new
+    test spies the repo and asserts a single `voidPurchase` write carrying both the stock
+    reversals and the payment reversals.
+  - **§3.16 — the day-close half.** 270 covers supplier balance, paid/balance and list stats;
+    day-close was checked by nobody. Supplier money is not the counter's drawer, so the correct
+    answer is that the day's figures do not move — and an untested "it does not move" is exactly
+    how a figure starts moving. Now asserted for both the void path and the standalone reversal.
+
+### Findings
+
+**No defect was found.** Every check with executable or inspectable evidence behind it passed as
+specified. The gaps found were gaps in EVIDENCE, not in behaviour, and the two that could be
+closed in code were closed (above).
+
+Check 28 was re-verified by fresh grep rather than trusted from 276: only three consumers are
+server-windowed via `usePagedOptions` — the purchase item picker (covered by 276's suite), the
+inventory-adjust item picker, and the POS customer chooser. The inventory picker feeds
+`selectedOption` from the FETCHED detail rather than a window lookup; the POS chooser folds every
+landed page into the counter's own customer list before any label is read. Neither can go blank.
+The remaining ~40 `SearchSelect` consumers pass a complete options array, so the window class of
+defect cannot reach them at all.
+
+### The ambiguous-lot count — the judgement call, recorded
+§1.6 and §9 require the repair report's ambiguous count to be "stated plainly for the owner". The
+number is DB state: the 268 migration computed it on deploy and wrote it per tenant into
+`audit_log` under `stock.batch.repair.summary`, with each individual finding under
+`stock.batch.repair.ambiguous`. It cannot be read from this session.
+
+Two options were weighed. Building an owner-facing screen for it would invent a feature no spec
+asks for, in a verification step whose work-type is explicitly "no new features". Reporting a
+guessed or assumed count would break the 148 rule this very spec is built on. So the third option
+was taken: the report states exactly what the number MEANS in plain words — the count of lots that
+more than one purchase fed through the old date-only batch number and out of which stock has since
+moved, left intact rather than split on a guess, i.e. the number of places the historical data
+cannot be fully reconstructed — and carries the exact read-only query that produces it. The number
+is one query away for whoever holds the database; what is NOT done is pretending to know it.
+
+### What the round leaves open, in order of weight
+1. **The 50,000-row import has never been timed** (check 23). The only performance claim in Phase
+   23 with nothing behind it. What IS proved is the structural precondition: a chunk costs a fixed
+   handful of statements and does not grow with the chunk (269).
+2. **The repair report and the tenant-wide invariant have not been run against staging** (checks 6
+   and 7). Both queries are in the report; both are read-only.
+3. **No rendered three-page PDF has been eyeballed** (check 34). The table-to-footer constant is
+   proved arithmetically (275 §4); the pixels are not.
+
+Also carried forward unchanged from §8: the pricing/discount model end to end in real use, and
+thermal printing (not built — the transport is next in the sequence).
+
+### Gates
+`pnpm lint` clean (one pre-existing unrelated warning in `doctor-portal.repositories.ts`).
+`pnpm typecheck` clean. Vendor untouched. No schema change, so no `prisma generate` needed.
+
+### Sequence from here (spec §10, per the owner)
+thermal printing (raw ESC/POS, Bluetooth and wired) -> keyboard shortcuts -> Returns -> Customers
+-> Recent Sales testing -> Settings testing -> Day-close -> Accounting -> Prints -> Dashboard ->
+final Pharmacy audit -> whole-app consistency audit. Numbering is continuous: the next spec takes
+279. Parked, unchanged: per-page menu visibility by permission; the deferred shortcut bindings
+(201 §3).
+
+---
+
+## 279 — drawer-tables-invoice-and-css-fixes — DONE (2026-08-15)
+
+**WORK TYPE:** FIX. Branch `fix/279-drawer-tables-invoice-and-css-fixes`. Spec `/specs/279-drawer-tables-invoice-and-css-fixes.md`. Presentation only — no money logic moved, no schema, RLS unchanged.
+
+**GATE.** `.dtbl--pay` is present in the recommitted `specs/mockups/pharmacy/purchases-suppliers-desktop.html` (8 occurrences), so the round proceeded.
+
+### §1 — the three drawer tables, to the recommitted `.dtbl` family
+Transcribed the mockup's "supplier drawer tables" sheet into `globals.css` under `.mp-pur2`, replacing 277 §4's `.dtbl--fit` (one shared 520px floor for two tabs, with the Ledger still on `.ledtbl`).
+- Per-tab variants with explicit column widths summing to the file's own 657px budget (700 - 1 border - 40 body padding - 2 card border): `--ledger` 90/auto(185)/126/126/130, `--purch` 90/auto(269)/68/126/104, `--pay` 90/auto(211)/132/126/98. `min-width` is per-variant (`--dt-inner` 590/532/580) — the fixed columns plus a reference floor — so a drawer a pixel off budget SHORTENS the reference instead of raising a scrollbar.
+- `--dt-row: 52px` on all three tabs; `--dt-row-tall: 70px` is the single sanctioned exception (the reversal note).
+- `.dt` — a fixed short date ("13 Aug 26"). This is the direct fix for the owner's "Aug 13, 202PI-00009": a long locale date overflowing a 90px cell into the reference beside it.
+- `.refcell` / `.refcell__tx` / `.methcell__tx` — the reference and method cells truncate with the full value on `title`; money is right-aligned, tabular and nowrap, sized for Rs 9,999,999.99.
+- `.revchip` moved INTO the action column (the same 98px slot the reverse control occupies) so the grid does not shift as rows change state; `.revnote` is a third line inside the reference column; `ReverseAction` now emits `.rowact` (26px glyph, 44px hit area via `::after`) instead of a `<Button>` + `.pill`.
+- The LEDGER tab left `.ledtbl` and joined the family, which is what actually fixes 265 §8's oversized sort arrows: they were a second table wearing a second head, not a sizing bug.
+- `.dtbl__scroll` on every tab (4 in the file); `.dtbl__empty` for the three empty states; `.sk` / `.sk--sub` / `.sk-row` / `.sk-tag` skeletons that keep the real head, widths and row height. `skelBar` deleted.
+- **DELIBERATE DEVIATION, recorded:** the mockup's `.dtbl` writes `overflow:hidden`; implemented as `overflow:clip` (264 §1 — `hidden` creates a scroll container that can strand content, `clip` keeps the radius without one). The intent is honoured; the scrolling `hidden` would have implied is done properly by `.dtbl__scroll`.
+- **Deviation, minor:** `.dtbl__empty` renders the icon + `<h4>` only, not the mockup's explanatory `<p>` — that copy exists in neither catalogue and inventing an Urdu string was not this step's call.
+
+### §2 — the invoice: WHY 275 DIVERGED (the evidence rule)
+**Finding: 275's transcription was correct. The cascade was not.** A per-declaration diff of the `.mp-pur2 .docsheet` block against `print-invoice.html` — run this round over both files, 111 selectors — came back clean but for the two already-recorded deviations (`overflow:clip` on `.facts`, and a print-media `!important`). The mockup WAS consumed and the families WERE applied in full.
+
+What actually disturbed the document is that it renders inside the two SCREEN scopes the overlay wears (`.mp-inv2 .mp-pur2 .printscrim`) while reusing class names those screens already own — `.tbl`, `.totals`, `.pill`, `.cap`, `.num`, plus plain `table`/`th`/`td`/`tr`. Every screen rule ending on one of those matched the paper and won every property the document block does not itself restate:
+- `.mp-pur2 .totals` -> a 320px card with `--surface-card` behind it, a border, a radius and a shadow, on a totals stack the mockup gives only `align-self:start`. In dark theme: a dark box on white paper.
+- `.mp-inv2 table.tbl td` -> `color:var(--text-primary)` — themed ink on a sheet that fixes its own `--ink`; white text on white paper in dark theme.
+- `.mp-inv2 table.tbl th` -> `background:var(--surface-sunken)`, a themed band behind the line-table header.
+- `.mp-inv2 table.tbl tbody tr:hover` -> a hover highlight on a document; `.mp-inv2 .pill::before` -> a 6px status dot the printed badge never had.
+
+275 diffed the block and found it clean; it never asked what ELSE was selecting the document, and a per-declaration diff structurally cannot see that — the offending declarations are not in the block being diffed.
+
+**Fix:** one isolation rule ahead of the document's own — `.mp-pur2 .docsheet.docsheet *`, the class deliberately doubled so every descendant is matched at (0,3,0): above every leak (they top out at (0,2,2), and every 3-class screen rule needs an intermediate class the document does not carry) and at or below every document rule (all (0,3,0)+ and all following it). It resets background, colour, border, radius, shadow, box metrics, overflow, cursor, transition, animation, transform, filter, opacity and the inherited text properties; it deliberately does NOT touch `display`/`flex`/`grid`/`font-family`/`font-weight`, because structure and plain `<b>` emphasis are the mockup's. `.mp-pur2 .docsheet__well` was restated at three classes so the reset cannot take its 992px height. **Light only:** `color-scheme:light` pinned on the sheet; no dark-mode rule reaches it, and the surrounding dialog still themes normally.
+
+### §3 — Save PDF is a download
+**Chosen: CLIENT-SIDE, measured off the sheets already rendered.** Rejected server-side for the reason §2 exists: a second renderer is a second layout, and a document laid out twice is a document that disagrees with itself. It also needs no headless browser on the host, no new dependency and no new endpoint (hence no new tenant/permission surface — the payload is already the caller's, already scoped).
+- `packages/ui/src/lib/pdf-writer.ts` — a pure PDF 1.4 writer (rects square/rounded, lines, positioned text, JPEG passthrough, base-14 fonts with WinAnsi, classic xref). No DOM, no globals, no clock; hand-rolled UTF-8 because `TextEncoder` is a platform global the unit runner's jsdom does not carry.
+- `packages/ui/src/lib/dom-to-pdf.ts` — walks the live `.docsheet` nodes with `getBoundingClientRect()` / `Range.getClientRects()`, so line breaks, column widths and page boundaries are the browser's own. Each text run is horizontally scaled (`Tz`) to the width the browser measured, so a base-14 cut lands in exactly the box Inter occupied. Translucent inks are composited onto white (paper is opaque). `downloadPdf` hands over a Blob with the document's filename — no dialog anywhere in the path.
+- Print keeps `window.print()`; that is what Print is.
+- **THE ONE LIMIT, recorded:** the base-14 fonts cannot represent a script needing contextual shaping. `renderSheetsToPdf` refuses BEFORE writing anything when the document is in one, and the button falls back to the print dialog with `pdA4SavePdfHint` — the string 264 §6 wrote for exactly that instruction, now said only where it is true. Removing the limit means embedding a shaped font, which is a font-engine's job.
+
+### §4 — the owner's four corrections, verbatim, in the shared components
+`.splitwrap__cap { margin-bottom:2px }`; `.splitline { align-items:center }`; `.splitline > .q { text-align:start }`; and `.pos-sel__val { align-items:center }` for the FILLED state across `.mp-pur2`/`.mp-pos2`/`.mp-inv2`/`.mp-mobile`. `.mp-inv2-import` is deliberately excluded and the reason is stated in the file: its trigger is `flex-direction:column`, where `align-items` is the horizontal axis, so the same declaration there would centre two left-set lines.
+
+### §5 — the expiry column
+`LINE_COL_WIDTHS[10]` 118 -> 136. The mockup draws "03 / 2028" in its 118px cell; this app's `<DatePicker>` states the whole stored date behind a calendar glyph and a chevron, leaving ~70px of text room for ~83px of date — so a SELECTED expiry ellipsised while the placeholder fitted. 136 is the width the same colgroup gives Batch no. — the file's own next size up, not a number invented for this cell. Grid total 1,446 -> 1,464px; still scrolls inside `.lineitems__scroll`. Added `.mp-pur2 .lineitems--wide .dtrig { min-width:0; width:100% }` so the trigger fills its track.
+
+### §6 — full-file diff, changed selectors
+`.dtbl--fit` (+ `--ledger`/`--purch`/`--pay` col rules and `--dt-inner`), `.dtbl.dtbl--fit table`, `.dtbl.dtbl--fit thead th` (+ edges/`th.num`), `.dtbl.dtbl--fit tbody td` (+ edges/`td.num`/`td.act`), `.dtbl--fit tbody tr:last-child td`, `.dtbl--fit tbody tr:hover`, `.dt`, `.dtbl--fit .date`, `.dtbl--fit .muted`, `.refcell`, `.refcell__tx`, `.refcell b`, `.refcell small`, `.methcell`, `.methcell__tx`, `.methcell b`, `.methcell small`, `.amt` (+ `--open`/`--late`/`--paid`), `.led-debit`, `.led-credit`, `.led-run`, `.qty`, `td .pill`, `tr.is-reversed td`, `tr.is-reversed .refcell b`, `tr.is-reversed .amt`, `.revnote` (+ `svg`/`span`), `.revchip`, `.rowact` (+ `::after`/`:hover`/`:active`/`:focus-visible`), `.dtbl__empty` (+ `.ic`/`h4`/`p`), `.sk`, `.sk--sub`, `.sk-row`, `.sk-tag`, `.sk-tx`, `@keyframes dt-pulse`, `.dtbl--fit tfoot td` (+ edges/`.num`), `.dtbl--fit .pager*`, `.dtbl--fit .sorth`/`.sorth__arr svg`, `.dtbl--fit .dtbl__scroll` (+ webkit thumbs); `.docsheet.docsheet *` (new), `.docsheet` (`color-scheme`), `.docsheet .docsheet__well` (re-specified); `.splitwrap__cap`, `.splitline`, `.splitline > .q`, `.pos-sel__val` (4 scopes); `.lineitems--wide .dtrig`. `.ledtbl--fit` rules kept for the surfaces that still use them, with the paired `.dtbl--fit` halves removed. The 273 §6 recorded divergences were re-verified unchanged.
+
+### Gates
+`pnpm lint` clean (one pre-existing unrelated warning in `@mp/api`). `pnpm typecheck` clean, 29/29. `@mp/ui` Jest: **111 suites / 2,535 tests, all passing**, including the new `drawer-tables-invoice-and-css-279.spec.tsx` (33) and `pdf-writer-279.spec.ts` (13). Six older guard suites were updated to the 279 contract rather than deleted — 275/272/264 (Save PDF's exit changed; `docsheet__well` gained a class), 277 and 250-r4 (the three tabs are one family now), 276 (the expiry width). Money formatting and `paymentAmount` untouched; the drift guard and both mockup-fidelity suites still pass.
+
+### Awaiting
+Nothing hardware-dependent in this step. Visual confirmation of the produced PDF and both themes on the deployed page is the owner's.

@@ -2,24 +2,26 @@
 
 # PROGRESS.md — Marham Patti Build Tracker (SHORT)
 
-> SHORT tracker; full detail in PROGRESS-HISTORY.md. A completed step is NEVER rebuilt — a dangling "Next" means [HUMAN_REQUIRED].
+> SHORT tracker; full detail in PROGRESS-HISTORY.md. Keep under 1.5 KB. A completed step is NEVER rebuilt — a dangling "Next" means [HUMAN_REQUIRED], not an earlier step.
 
 ## Current Status
 - **Project:** Marham Patti — multi-tenant white-label healthcare platform.
-- **Phase:** **PHASE 23** — data integrity; invoice, select and mobile finish.
-- **Last completed:** **277 — purchases-mobile-and-supplier-tabs**.
-- **Next:** specs/278-round-13-verification.md
-- **Group order:** 275 → 276 → 277 → 278. One step, then stop at the checkpoint.
-- **278 is verification** — every check recorded pass / fixed / unverified, never assumed.
-- **BRANCH RULE:** create and switch to the spec's own branch BEFORE any commit.
-- **EVIDENCE RULE:** capture before fixing; a 3rd attempt records a cause.
+- **Phase:** **PHASE 23 → 24** — closing fixes, then thermal printing.
+- **Last completed:** **279 — drawer-tables-invoice-and-css-fixes**.
+- **Next:** specs/280-escpos-rendering.md
+- **Group order:** 280 → 281 → 282. One step, then stop at the checkpoint.
+- **280 is pure logic** — bytes out, golden tests, no printer, no browser API.
+- **282's rule:** a printer never blocks money.
+- **Hardware checks are recorded "awaiting hardware"**, never passed (148 rule).
+- **BRANCH RULE:** switch to the spec's own branch before any commit.
+- **EVIDENCE RULE:** capture before fixing; 2nd attempts record why the first missed.
 - **Numbering is continuous — never skip a number.**
-- **After this group:** thermal print → shortcuts → Returns → Customers → Settings → Day-close → Accounting → Prints → Dashboard → audits.
-- **Parked:** per-page menu permissions; deferred shortcuts; the ledger's day-range calendar sheet.
+- **After this group:** shortcuts → Returns → Customers → Recent Sales → Settings → Day-close → Accounting → Prints → Dashboard → audits.
+- **Parked:** wired-print helper; thermal logos/QR; per-page menu permissions; deferred shortcuts.
 
 ### Recent steps
-- **277 — purchases-mobile-and-supplier-tabs** — DONE (2026-08-15) — a header that no longer jumps, and three supplier tabs you can reach the money in.
-- **276 — medicine-select-and-purchase-desktop** — DONE (2026-08-15) — a product keeps its name past the first page; a line that reads straight.
-- **275 — purchase-invoice-to-print-mockup** — DONE (2026-08-15) — one shared header lockup and a tenant-chosen mark on the document.
+- **279 — drawer-tables-invoice-and-css-fixes** — DONE (2026-08-15) — one table family for all three tabs; paper isolated from the screen; Save PDF downloads.
+- **282 — pos-print-wiring** — AUTHORED — one print entry point; the sale is never blocked.
+- **281 — bluetooth-transport-and-settings** — AUTHORED — pairing, printing settings, honest fallback.
 
 > Older steps in PROGRESS-HISTORY.md
