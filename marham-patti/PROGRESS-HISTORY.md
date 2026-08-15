@@ -15123,3 +15123,174 @@ this session rendered a real PDF. Recorded rather than claimed.
 ### Self-checks (by inspection)
 
 i18n EN+UR parity ✔ · isolation ➖ (presentation + one client-side validator) · flags/permissions unchanged ✔ · design: tokens only, no hex literal, both themes, reduced-motion honoured on the sticky divider's transition ✔ · white-label ➖ · accountability ➖ (no state change) · offline: the picker's offline fallback path is untouched and now ALSO keeps its label ✔.
+
+---
+
+## 277 — purchases-mobile-and-supplier-tabs — DONE (2026-08-15)
+
+**WORK TYPE:** FIX — branch `fix/277-purchases-mobile-and-supplier-tabs`.
+**Spec:** /specs/277-purchases-mobile-and-supplier-tabs.md. No CODEREF companion exists for 277.
+**Schema:** none. **RLS / auth / permissions / flags:** unchanged — this step is presentation only.
+**Endpoints:** none added or changed. **Money logic:** untouched; every figure is drawn by the same
+helper that drew it before (`lineTotalOf`, `money`, `paymentAmount`, `recentMonthsWindow`).
+
+### §1 — the POS split-batch breakdown
+
+**Report:** with several batches on one cart line the `.splitline` rows do not fill the card and
+carry a stray left indent, so the lot and the price do not line up with the line above.
+
+**Cause.** 253 shipped one rule for two different cart shapes. `.mp-pos2 .splitline` carried
+`grid-column:1/-1`, which spans the DESKTOP `.cart__row` (a grid) and means nothing at all inside
+the phone's `.mline` card (`display:flex; flex-wrap:wrap`). On the phone the list therefore sized
+to its content, and the `padding-inline:12px 0` that indented it under the desk's first column read
+as a stray left margin with the price floating short of the line total.
+
+**Change.** Adopted the recommitted mockup's anatomy (`.splitwrap` / `.splitline`, identical in
+`purchases-suppliers-mobile.html` and `purchases-suppliers-desktop.html` at 2482-2499):
+`.splitwrap` takes `flex:1 1 100%` AND `grid-column:1/-1`, so it claims a full-width line in both
+shapes, with no `padding-inline` at all; each `.splitline` is a `26px · minmax(0,1fr) · auto` grid
+whose trailing column ends on the card's own inline edge — the edge the line total is aligned to.
+`SplitLines` in PosClient now renders `.splitwrap__cap` + `.q` / `.lot` / `.amt`, and a lot with no
+expiry says so in `.noexp` tertiary ink instead of ending mid-sentence.
+
+**i18n:** `pharmacyPos.v10.noExpiry` (EN + UR).
+
+### §2 — the mobile header's date filter
+
+**Report (two screenshots):** the month-filter button does not match the search field's height,
+sits awkwardly beside it, and the header shifts when its sheet opens.
+
+**Cause A — the height.** `.mfilt` was declared TWICE in globals.css: 273's 46×46 rule (unscoped,
+so it would reach the portalled chrome) and an older 38×38 `.mp-mobile .mfilt` tile from 265,
+written for a different row. Two class selectors beat one, so the phone drew the 38px tile and
+273's fix never applied. Worse, `width:auto` on `.mfilt.is-on` (equal specificity, earlier in the
+sheet) lost to `.mp-mobile .mfilt { width:38px }`, so a chosen range squeezed its label into a 38px
+box — which is exactly the "sits awkwardly" in the screenshot.
+
+**Cause B — the shift.** `MobileSheet` renders a plain wrapper `<div>` around its fixed scrim and
+panel. `MonthRangePicker`'s sheet branch (273 §4) mounted that wrapper as a sibling of the trigger,
+i.e. as a THIRD FLEX ITEM inside `.mfiltrow`. The wrapper has no width of its own, but the row's
+`gap:8px` does not care: opening the sheet added one more gap and the search field beside it lost
+8px, every time. Nothing about the sheet's layout was wrong — it was in the wrong tree.
+
+**Change.** The control is now the mockup's `.mrangebtn`, one name and one declaration, scoped to
+`.mp-mobile .mchrome--pos` (deliberately NOT to `.mp-mobile` at large — the Suppliers ledger mounts
+a `.mrangebtn` of its own with a different job, and one name over two anatomies is what caused this
+in the first place). The row is `align-items:stretch` with `align-self:stretch` on the button, so it
+takes the search field's OWN height rather than guessing at 46px; the button holds the same 104px
+slot resting, set and open, so applying a range never resizes the field. The 38px `.mfilt` block is
+DELETED rather than left standing. `MonthRangePicker`'s sheet is `createPortal`-ed to
+`document.body` (host resolved in an effect so SSR and hydration agree), which is the rule the
+Suppliers range sheet has followed since 260 §5.
+
+**Judgement call — the month-swipe.** The spec asks for "month-swipe left and right like the touch
+date picker (196/230)". The picker already carries the SHARED `usePageSwipe` gesture; a page in a
+twelve-month grid is a YEAR, because that is the only page that grid has. Adding a separate month
+strip above a month grid would be two controls for one value, so the gesture stays as 273 built it.
+Recorded here rather than escalated.
+
+### §3 — the Reverse control in the ledger
+
+**Report:** the reverse action inside a payment row breaks the row's rhythm.
+
+**Cause.** 270 §1.3 placed `<ReverseAction>` inside `.mledrow__ft .run` — after the running balance,
+on the MONEY line — and as a full `Button`. A pill wedged between the amount and the balance pushed
+the balance out of the two-line rhythm every other row keeps.
+
+**Change.** The phone gets the mockup's own control: `.mledrow__rev`, a 26px glyph on the HEADER
+line with a 44px `::after` tap target, quiet (hairline + secondary ink) until pressed, danger tone
+only on hover/active/focus. All four states are drawn — a plain row, a reversible payment
+(`.mledrow--act`), an already-reversed payment (`.is-reversed` + `.revtag` + struck-through amount +
+a third quiet `.mledrow__revnote` line saying when), and a debit, which never offers the action at
+all (a purchase is undone by voiding the purchase). `RowText` gained an optional `badge` slot for
+the "Reversed" tag between the reference and the date; the reading itself is unchanged. Behaviour is
+270's, untouched: both tiers call the same `onReverse`, the endpoint is still permission-gated
+(`PHARMACY_STOCK_ADJUST`), the reason is still required, and it still writes a reversing entry
+rather than deleting anything. The desk keeps `ReverseAction` as 270 wrote it.
+
+**i18n:** `pdRevNote`, `pdRevMAction` (EN + UR).
+
+### §4 — the supplier drawer tables
+
+**Report (screenshot):** the Payments tab runs past the drawer edge with the amount column cut off
+and no way to scroll to it.
+
+**Cause.** `.mp-pur2 .dtbl { overflow:clip }` with no scroller inside it. `clip` is the correct
+choice for a card that must keep its radius — 264 §1 records exactly this distinction — but it only
+keeps the radius: it does not make an overflowing column reachable, and unlike `hidden` it cannot
+even be scrolled programmatically. The Ledger tab already had `.ledtbl__scroll` and so was never
+reported; the two tabs built on `.dtbl` had nothing at all.
+
+**Change.** All three tabs now carry the same two pieces, per the desktop mockup's §4 pane:
+`--fit` (`table-layout:fixed` over a per-tab `<colgroup>`; Date and the numeric columns fixed, the
+reference absorbing the remainder; Amount right-aligned, `nowrap`, always visible) and `__scroll`
+(`overflow-x:auto`, thin scrollbar, `min-width:520px` as the floor — below it the table scrolls
+INSIDE the drawer instead of being clipped unreachably). The card keeps `overflow:clip`; the
+scroller is its child. The reference truncates and carries its full value on `title` (250 §3's
+`RowText` has done this since it was written) — cutting an identifier is recoverable on hover,
+cutting the money is not. The Ledger skeleton got the same colgroup, so nothing changes shape when
+the book arrives. The Payments action column is 96px so the "Reverse" button and the "Reversed" pill
+that replaces it occupy the same width.
+
+**Ordering note (a real trap):** the `--fit` block had to be placed AFTER the `.dtbl` declarations.
+`.mp-pur2 .dtbl--fit td` and `.mp-pur2 .dtbl td` have identical specificity, so source order alone
+decides; written next to `.ledtbl` (where it reads better) every padding rule in it silently lost.
+
+### §5 — the three-month default, on its third report
+
+**Cause, which is what an item on its third report is owed.** 259 §4 shipped the month window with a
+CURRENT-MONTH default and persisted the user's choice under `mp.datalist.months.<list>`. 273 §4
+changed that default to three months — correctly; `recentMonthsWindow` has always returned
+*Jun – Aug 2026* and its unit tests have always passed. But a default is consulted in exactly one
+circumstance: when nothing is stored. Everyone who reported this had a single-month window sitting
+in that key from 259, because reporting it meant opening the picker. 273 changed the fallback and
+left the stored value in place, so on the reporter's own device the fix was invisible and the screen
+opened on one month for the third time running. **The defect is not the default — it is that a value
+written by the OLD default is indistinguishable from a value a user deliberately chose.**
+
+**Change.** The key is versioned: `mp.datalist.months.v2.<list>` is the only key read or written now,
+and a legacy `mp.datalist.months.<list>` is DISCARDED (and cleared, once) rather than migrated —
+migrating it would carry the exact windows that caused the report forward under a new name. The cost
+is one lost narrowing for the users who had genuinely chosen one; the alternative is a fix the person
+who asked for it cannot observe. Also on both surfaces: the mobile badge now reads the active range
+ALWAYS rather than only when the window differs from the default, since a default nobody chose is
+still the window the list is being read through; the tint continues to distinguish chosen from
+default, and the fixed 104px slot means stating it costs no reflow.
+
+### §6 — full-file diff, changed selector families
+
+Implemented / corrected: `.splitwrap`, `.splitwrap__cap`, `.splitline` (+ `> .q`, `> .lot`,
+`> .lot .noexp`, `> .amt`); `.mfiltrow` (stretch, chrome scope); `.mrangebtn`, `.mrangebtn__lbl`,
+`.mrangebtn.is-set`, `.mrangebtn.is-open`; `.mledrow--act`, `.mledrow--act .mledrow__hd`,
+`.mledrow--act .mledrow__hd small`, `.mledrow__rev` (+ `svg`, `::after`, hover/active/focus),
+`.revtag`, `.mledrow.is-reversed .mledrow__ft .amt`, `.mledrow__revnote`; `.ledtbl__scroll`,
+`.dtbl__scroll`, `.ledtbl--fit` and `.dtbl--fit` families.
+Retired: `.mfilt`, `.mfilt__lbl`, `.mfilt.is-on`, `.mp-mobile .mfilt` (and its `::after` / states),
+`.mchrome__srch:has(.mfilt)`, `.splitline__q`, `.splitline__m`, `.splitline__p`.
+Present in the mockup, NOT implemented, with the reason: `.mrgquick`, `.mmswipe*`, `.mcal__d.rg-*`,
+`.mrgsum` belong to a DAY-range calendar sheet for the Suppliers ledger; that control ships as a
+four-choice `.selsheet` list (250 §5.3 / 260 §5) and no § of this spec asks for it to become a
+calendar — parked, and recorded in PROGRESS.md. `.sheet__scrim--l2` / `.sheet--l2` already exist in
+this repo under the names `.selsheet__scrim` / `.selsheet__panel` (z-index 81/82); the mockup's names
+are not added as a second way to say the same thing. `.mledrow__main` is a vestige of an abandoned
+variant — the mockup's own markup does not use it.
+
+### Tests written (controller runs them)
+
+- NEW `packages/ui/src/lib/purchases-mobile-and-supplier-tabs-277.spec.tsx` — a source-reading guard
+  suite in the 195/196/242/244/248 style, one describe per §, including the two causes recorded
+  above pinned as assertions (no duplicate `.mfilt` rule may return; the legacy months key may not
+  be migrated).
+- `packages/ui/src/components/date-picker.spec.tsx` — a RENDERED proof for §2: the month sheet opens
+  outside the `.mfiltrow` the trigger sits in, and the row's child count does not change.
+- Superseded assertions updated to the 277 truth, not deleted: `purchases-mobile-r2-265`
+  (`.mfilt` → `.mrangebtn`), `purchases-screens-273` (badge always reads; the duplicate is gone),
+  `suppliers-drawer-and-mobile-r4` (`RowText` badge slot; `.dtbl dtbl--fit`),
+  `void-payment-reversal-270` (the phone draws `.mledrow__rev`, both tiers still call `onReverse`).
+
+### Gates
+
+`pnpm typecheck` clean (29/29). `pnpm lint` clean — design-drift, token-integrity,
+tenant-english-only, tenant-search-select and tenant-page-titles all pass. Per AGENT.md §4A the unit,
+build and e2e suites are the controller's to run. Vendor untouched; no secrets; `.env.example`
+unchanged (no new configuration).
