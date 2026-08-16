@@ -15914,3 +15914,133 @@ silence.
 `packages/ui/src/lib/css-cascade.ts` (new) · `packages/ui/src/lib/invoice-cascade-283.spec.tsx` (new) ·
 `packages/ui/src/lib/pdf-writer.ts` · `packages/ui/src/lib/dom-to-pdf.ts` ·
 `packages/i18n/src/messages/{en,ur}.json`.
+
+## 284 — shortcut-engine-and-pos-keys — DONE (2026-08-16)
+
+**Branch:** `feature/284-shortcut-engine-and-pos-keys` · **Spec:** `/specs/284-shortcut-engine-and-pos-keys.md` · Schema unchanged, RLS unchanged.
+
+### §1 — the rule above every key
+`isTypingSafeCombo` (in `@mp/shared`) is the whole rule in one predicate: inside a text input,
+textarea or contenteditable only a FUNCTION KEY, an `Alt`/`Ctrl`/`Meta` leader or `Escape` may
+act. A bare letter, digit or symbol — `?` and `/` included — never fires. Asserted against every
+letter and digit, not a sample.
+
+`createScanBurstDetector` is the second guard: `gapMs 40 / runLength 4 / quietMs 150`, no timers,
+decays on its own. A replayed 13-digit Code-128 at 8ms/char reports as scanner input from the
+fourth character to the terminating Enter; a 110ms-per-character human never does. It is
+DEFENCE IN DEPTH — the focus rule is primary, because the first three characters of a burst are
+the honest limit of cadence detection, and the spec allows either mechanism.
+
+### §2 — the engine and the registry
+- NEW `SHORTCUT_REGISTRY` in `packages/shared/src/pharmacy-shortcuts.ts`: `{id, action, screen,
+  group, defaultCombo, alsoCombo?, remappable, label}`. `SHORTCUT_ACTIONS` (the 111/285 settings
+  catalog) is now DERIVED from it — one author for the map. `id === action` is asserted at module
+  load: the id persists in an override row, the action dispatches to a handler, and they may
+  never drift.
+- `resolveScreenShortcuts(screen, overrides)` implements SCOPE: a screen-scoped row shadows a
+  global one holding the same combo and DROPS it from the returned list, so the overlay never
+  lists a key that means something else here. `Alt+I` is Inventory app-wide and "first item row"
+  on the counter; `Alt+D` is Day close app-wide and the sale date on the counter.
+- The module-load conflict assertion is now PER SCREEN (cross-screen collisions are the feature),
+  and `findShortcutConflict` matches — it only reports a clash the resolver cannot settle.
+- NEW `apps/web/lib/shortcut-engine.tsx` replaces `apps/web/lib/use-shortcuts.tsx` (deleted; the
+  three `comboParts` consumers re-pointed). ONE `window.addEventListener('keydown', …, true)` in
+  the whole flow, capture phase. `Escape` is dispatched WITHOUT preventDefault/stopPropagation —
+  whatever owns the topmost layer closes itself on that keystroke and the registry handler is a
+  fallback; anything else that matches is prevented and stopped, so `/` beats the shell overlay
+  and the reprints beat the browser print dialog.
+- `ui.closeLayer` ships `remappable: false` (§2 — "Escape is fixed"). Refused in
+  `PharmacyShortcutsService.rebind` via the new `isRemappableShortcut`, not merely hidden.
+- `/` and `Esc` moved OUT of `FIXED_SHORTCUTS` into the registry — listing them in both drew each
+  twice in the overlay.
+
+### §3 — the POS map
+F2 search · F8 park · F9 All-held (alias `Shift+F8`) · F7 first held pill · F10 pay (alias
+`Ctrl+Enter`) · F4 direct save · F6 direct save + print · Ctrl+P reprint this device ·
+Ctrl+Shift+P reprint tenant-wide · Ctrl+Delete clear cart (existing confirm).
+
+Two genuine EVICTIONS, both stated by the spec's own table: `F4` was Apply discount → moved to
+`Alt+5` (§4); `F9` was Focus-last-quantity → superseded by `Alt+L` "last item row". `pos.newSale`
+retired (Ctrl+Delete is the clear) and `Alt+N` given to Add customer per §4. Every other 201 key
+survives as `alsoCombo` — the spec extends that map, it does not evict the fingers that learned it.
+
+`Ctrl+P` is a shipped default on a RESERVED combo. Deliberate: `RESERVED_COMBOS` governs what a
+user may rebind ONTO, not what ships; the engine preventDefaults it.
+
+**F4/F6 guards** (`directSaveBlock`): empty cart · `commitBlocked` (unresolvable price) ·
+`rxReq.required` · attached customer `overLimit`. The credit case books nothing on an exact cash
+tender and would not 400 — it blocks because the owner asked that an over-limit account stop the
+no-confirmation route and be looked at in the dialog. Recorded here rather than argued again.
+
+`handlePay` was split into `commitSale(result, idempotencyKey, direct)` + a thin `handlePay`. ONE
+`postJson<CheckoutView>('/pharmacy/pos/sales'…)` in the file, asserted by test. A direct save
+posts one CASH tender for `totals.grandTotal`, `creditAutoComposed:false`, `advanceApplied:0`,
+`allocation:null`, its own `newActionId()`; it stays on the cart and toasts `Saved · INV-…`
+(`pharmacyPos.v18.savedInvoice`). F4 skips the print, F6 does not. Proven byte-identical to the
+dialog route (totals, payment summary, sale items, movement deltas) and idempotent on replay.
+
+**Reprint:** new `POST /pharmacy/pos/sales/last/reprint?scope=device|tenant&counterId&width`,
+`@Audited` with the scope in the summary. `scope=tenant` is refused with `ForbiddenException`
+unless the caller holds the NEW permission `pharmacy.reprint.tenant` (TENANT scope, behind
+`pharmacy.pos`, default-granted to ADMIN + MANAGER + owner-by-construction; NOT to SALESMAN /
+CASHIER / PHARMACIST). Device scope narrows by counter, falling back to the acting cashier when
+no counter is selected. New repo method `findLastSale(tenantId, {counterId?, cashierId?})` +
+abstract + fake. Re-renders the record: no sale, no movement, no ledger entry.
+
+### §4 — jumps and row mode
+Alt+C customer (alias F3) · Alt+Shift+C clear customer · Alt+N add customer · Alt+D sale date
+(alias Alt+T) · Alt+I first row · Alt+L last row · Alt+5 discount. On the discount card `Tab`
+now FLIPS Rs ⇄ % (two modes, so a toggle is what the key means); P/R still name one outright.
+
+Row mode: `Tab` walks row → unit select (opened) → qty and **skips a disabled unit select in both
+directions**; `Shift+Tab` reverses with the same skip. A typed digit now sets the quantity AND
+focuses the qty box (no `select()`, or the second digit of "12" would replace the first). `↑/↓`
+on a focused unit select now CHANGE the option (they used to open the menu); Enter/Space still
+open it. The focused-row highlight already existed (`.cart__row:focus-visible`, accent wash +
+outline) and is asserted rather than re-styled. Held pills carry `data-heldpill` so F7 lands on
+the whole pill; Tab/Shift+Tab walk them, Enter opens (button default), Delete discards.
+
+### §5 / §6
+Payment: 1–4 tiles, `=` Exact, `0` Udhaar, Enter confirm, Esc back were already 201/211's and are
+untouched; ADDED `autoFocus` on the cash tender row (`data-payamount`). The tile digits stand
+down inside a field — which IS §1's rule restated for that surface, so a digit typed into a money
+box is a digit, never a method.
+
+§6 is in the SHARED `ConfirmDialog`: `onOpenAutoFocus` redirects Radix's opening focus to the
+Confirm button (`preventScroll`). Via the callback rather than `autoFocus` so the UNCONTROLLED
+(mouse-trigger) form lands the same way — the acceptance names both routes. Y/N (201) unchanged.
+
+### Tests
+- NEW `apps/api/src/pharmacy-shortcuts/shortcut-engine-284.spec.ts` — §1 typing rule over every
+  letter/digit, the barcode replay + human/false-positive/release cases, the registry shape,
+  Escape fixed, scope shadowing both ways, per-screen uniqueness, the whole §3/§4 map from real
+  keystrokes, the keyboard-only sale.
+- NEW `apps/api/src/pharmacy/pos-reprint-and-direct-save-284.spec.ts` — the permission's shape and
+  role defaults, the server-side refusal called directly, the manager path + audit row, the
+  device-scope narrowing (at the repo predicate: the fake's day-counter resolver collapses every
+  commit onto one counter), reproduce-never-recommit, and the byte-identical/idempotent commit.
+- NEW `packages/ui/src/lib/shortcut-engine-and-pos-keys-284.spec.tsx` — §6 focus from both
+  triggers (real RTL), the one-engine grep, guard-order-before-lookup, the wiring greps.
+- UPDATED `pharmacy-shortcuts.service.spec.ts` (re-cut map, per-screen uniqueness, `Ctrl+Shift+P`
+  no longer free for a test rebind) and `round-3-verification.spec.tsx` (renamed actions).
+
+### i18n
+`pharmacyShortcuts.action.*` rewritten to the new ids (en + ur); `fixed.cartTabUnit`,
+`cartUnitOption`, `discountToggle`, `heldMovePills`, `confirmDefault` added; `focusSearchSlash` /
+`closeCancel` removed with their registry move. New `pharmacyPos.v18.*` — `savedInvoice`,
+`blockedRx`, `blockedCredit`, `reprintFailed`, `reprinting`. Parity suite green.
+
+### Gates
+`pnpm typecheck` — 31/31 clean. `pnpm lint` — 0 errors (one pre-existing unused-disable warning in
+`doctor-portal.repositories.ts`, untouched). Package jest suites run directly and green:
+`@mp/api` 184 suites / 2348 tests, `@mp/ui` 116 suites / 2715 tests, `@mp/i18n` 4 / 28.
+One collateral catch worth recording: 236 §4's "no tenant key says the accounting words" guard
+rejected the first wording of `pharmacyPos.v18.blockedCredit` ("over their credit limit") — the
+counter says UDHAAR, and it now does. `pnpm test:e2e` and `build` not run (controller's gates).
+Vendor untouched.
+
+### Notes for 285
+The remapping storage 285 owns should write against `SHORTCUT_ACTIONS` (already derived) and read
+`resolveScreenShortcuts` for the overlay — `ShortcutsHelp` still renders every bound row under the
+`global` heading, which was true before 284 and is the overlay's job to fix. `isRemappableShortcut`
+is the predicate the settings screen should gate its rebind control on.
