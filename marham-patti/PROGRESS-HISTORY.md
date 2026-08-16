@@ -16513,3 +16513,129 @@ Monday, which a second copy of the code would eventually have made possible.
 - The quarantine holding lot is visible in the inventory batch table by design — the owner has to
   decide what happens to it. A "send back to supplier / write off" action on it is not in 289's
   scope and has not been built.
+
+## 290 — returns-mobile-and-settings — DONE (2026-08-16)
+
+**Branch:** `feature/290-returns-mobile-and-settings` · **Spec:** `specs/290-returns-mobile-and-settings.md`
+**Mockup gate:** `specs/mockups/pharmacy/returns-mobile.html` present, `.mretcard` and `.mstep` both found — gate passed.
+**Schema:** none (289 added what was needed). **RLS:** unchanged. **API:** unchanged — no new endpoint, no new DTO.
+
+### What was built
+
+**§1 the register, on the phone** — `ReturnsClient.tsx` grew a mobile branch rather than a second
+file: the fetch, the search, the chips, the KPI arithmetic, the print call and approve/reject are
+written once and the render branches at the end. Page-owned `MobilePageChrome` (title + context
+sub, exactly two `.mic` controls — the shell's bell and avatar — and a sticky `.mpos-search` that
+collapses on scroll), a horizontally scrollable four-tile `.mkpis`, the two page actions on
+`.mquickacts` at 44px, three chips (`RETURNS_MOBILE_FILTERS` — the desktop's Today/This month are a
+date filter a thumb reaches by scrolling, and five chips do not fit at 360), `.mviewrow` with the
+shared `ViewToggle` and `.miconacts` import/export, and both views: `.mrcard` cards and the list
+kit's `.minv__row` with a `.typetag`. Paging is `useInfiniteScroll` with `.infload` and a sentinel
+re-observed on cursor change (218 §2); the desktop keeps its pager.
+
+**§2/§3 the two flows, three steps each** — same pattern: `NewSaleReturnClient` /
+`NewPurchaseReturnClient` each grew a mobile branch over the SAME state and the SAME `submit`.
+Step 1 is a full-screen search with `MobileScanSearch` (the control the POS, Inventory and the
+alerts screen already draw) wearing the new `.mcam` viewfinder chrome; step 2 is `.mretcard` per
+line with a 22px `.check`, a 44px `.retqty--lg` stepper, a `.mreason` trigger opening a bottom
+sheet, and the batch chip naming the lot the goods land in or leave; step 3 is `.totals`, the
+refund method as a second bottom sheet (including **Adjust against udhaar**), the chosen lines
+read back as `.mretline`, and a pinned `.mtotalbar`.
+
+**§4 the detail sheet** — the existing `ReturnDrawer` gained a mobile body on the sheet family:
+`.mfacts`, the linked source document, `.mlabel` + `.mfeed` of `.mretline`, `.totals`, and a
+closing `.msig`. The footer is the frame's own `.sheet__foot--row` (265 §1), i.e. Inventory's
+"View item" anatomy, and Print still goes through 282's single entry point.
+
+**§5 the settings group** — already built by 289 on the shared settings anatomy, and the 224 shell
+already renders every registry pane on both surfaces, so the pane itself needed no change: all four
+settings (approval off by default, N-day window defaulting to 30 that warns and never blocks, the
+three-way expired policy with the BACK_TO_BATCH warning **inside the setting**, and the restocking
+fee %) work on the phone as they do on the desktop. What was added is reach: `.mp-set--mobile
+.setopt` becomes a 44px row with a 20px control.
+
+### Decisions
+
+- **No second camera.** `BarcodeScanner` gained a `chrome="mcam"` variant and an optional `copy`
+  override; every line of camera plumbing — `getUserMedia`, the two decoders, the torch, the four
+  permission states, the layer registration — is the one 189 §4 wrote. A denied camera renders its
+  sentence in `.mcam__hint` and the `.mcam__type` foot stays live, which IS the graceful
+  degradation §2 asks for: the field behind it has always taken typed and USB-wedge input.
+- **A scan feeds the same search.** The barcode a receipt carries IS its invoice number (289's
+  frozen decision), so the camera and the typed field are one path. What the camera adds is that
+  one exact match opens straight away; several stay on screen; none toasts `rtnScanNoMatch`.
+- **No return-date picker.** The mockup's step 3 draws one, but neither the desktop flow nor 108's
+  frozen `createSaleReturn` accepts a chosen return date — it is `now`. A control that cannot
+  change anything is the fabricated affordance the design bar forbids, so it is absent. §6's touch
+  date picker requirement is vacuous here: there is no date to pick.
+- **`settling` is explicit.** `returnFlowStep(hasDocument, chosenLines, settling)` never advances
+  to step 3 on its own. The desktop passes `settling: true` (it draws all three at once, so its
+  step 3 lights on the first tick); the phone passes the operator's Next. One function, so the two
+  surfaces cannot disagree about whether a return is ready to settle.
+- **Shared, not duplicated.** New `@mp/shared` primitives: `returnFlowStep`, `clampReturnQty`,
+  `refundMethodsFor`, `refundMethodToApi`, `restockingFeeFromPct`, `RETURN_FLOW_STEPS`,
+  `REFUND_METHODS`, `RETURNS_MOBILE_FILTERS`, `RETURNS_MOBILE_PAGE`. `restockingFeeAmount(settings,
+  base)` in `pharmacy-settings` now delegates to `restockingFeeFromPct` instead of keeping its own
+  copy of the percentage arithmetic. The desktop sale-return screen was migrated onto
+  `refundMethodsFor` / `refundMethodToApi` / `restockingFeeFromPct` in the same commit, so there is
+  exactly one definition of each.
+- **New shared components:** `components/pharmacy/MobileReturnLines.tsx` (`MobileReturnLine` — one
+  `.mretline`, drawn by three screens) and `components/pharmacy/MobileReturnFlow.tsx`
+  (`MobileStepBar`, `MobileTotalBar`, `StepBackLayer`). `StepBackLayer` is mounted with
+  `key={step}`, so React remounts it on every step change and the shared layer stack holds exactly
+  one entry — which is what makes device-back step ONE level (203) through the same stack every
+  sheet and dialog uses.
+- **Two gaps 289 left, closed here.** `.check`/`.check__box` shipped as markup with no CSS and
+  rendered as a raw browser checkbox on the desktop line table; it is now declared once under
+  `.mp-ret` for both surfaces. `.mp-alert--warning`/`--info` fell through to the dashboard's alert
+  TILE; the inline strip is now declared under `.mp-ret`, so the late-window warning reads as the
+  sentence it is.
+
+### Selectors
+
+Declared (all new, in one appended `.mp-ret-mobile` / `.mp-ret-flow` / `.mp-ret-sheet` block, tokens
+only, both themes): `.mrcard*` (`__top`, `__body`, `__who`, `__amt`, `__ft`, `--credit`,
+`--pending`), `.mretcard*` (`__hd`, `__body`, `__qty`, `__qty--batch`, `.is-on/.is-off/.is-invalid`),
+`.mretline*` (`__t`, `__q`, `__chips`, `.is-warn`), `.mreason` (+ `.is-error`), `.mstep`/`.mstep__n`,
+`.mcam*` (`__video`, `__top`, `__ic`, `__view`, `__box`, `__c`, `__laser`, `__hint`, `__foot`,
+`__type`, `@keyframes mcamsweep`), `.mtotalbar*`, `.mpickrow*`, `.retqty--lg`, `.mrcards`,
+`.mp-ret .check*`, `.mp-ret .mp-alert*`, `.mp-set--mobile .setopt`. Consumed unchanged from the
+list kit: `.mkpi*`, `.mkpis`, `.mchips`, `.mviewrow`, `.miconacts`, `.minv*`, `.infload`,
+`.mfeed`, `.mrow*`, `.mfacts*`, `.mlabel`, `.mquickacts`, `.mpos-search`, `.mscan`, `.msig*`,
+`.batchchip*`, `.rreason*`, `.pill--*`, `.supmark*`, `.totals*`, `.srcdoc*`, `.sheet__*`.
+`.mstatus` is deliberately absent: it is the mockup's fake device status bar, and the live shell
+provides the safe area instead (the same decision 230 recorded for the POS chrome).
+
+### i18n
+
+71 keys added to en + ur (`rtnM*`, `rtnAccount`, `rtnClose`, `rtnLoadingMore`, `rtnScanNoMatch`,
+`rtnBatchChipExpired`, `rtnMethod*Help`), catalogues verified equal-keyed.
+
+### Gates
+
+`pnpm lint` — clean (design-drift, token-integrity, tenant-english-only, tenant-search-select,
+tenant-page-titles all ✓; the one remaining warning is a pre-existing unused eslint-disable in
+`doctor-portal.repositories.ts`, untouched here). `pnpm typecheck` — clean, `--force`, 31/31.
+Tests: `apps/api/src/pharmacy/returns-mobile-290.spec.ts` — 19 cases over the new shared
+primitives, with `clampReturnQty` asserted bounded and idempotent because it is the phone's half of
+"never more than sold, never more than remains". Per CLAUDE.md the agent does not run
+`test:unit`/`build`; the controller runs the full gates.
+
+### Files
+
+`packages/shared/src/pharmacy-returns.ts`, `packages/shared/src/pharmacy-settings.ts`,
+`packages/i18n/src/messages/{en,ur}.json`,
+`apps/web/app/(app)/pharmacy/returns/ReturnsClient.tsx`,
+`apps/web/app/(app)/pharmacy/returns/new-sale-return/NewSaleReturnClient.tsx`,
+`apps/web/app/(app)/pharmacy/returns/new-purchase-return/NewPurchaseReturnClient.tsx`,
+`apps/web/components/pharmacy/BarcodeScanner.tsx`,
+`apps/web/components/pharmacy/MobileScanSearch.tsx`,
+`apps/web/components/pharmacy/MobileReturnLines.tsx` (new),
+`apps/web/components/pharmacy/MobileReturnFlow.tsx` (new),
+`apps/web/app/globals.css`,
+`apps/api/src/pharmacy/returns-mobile-290.spec.ts` (new).
+
+Desktop Returns tables/drawer, POS, Inventory, and vendor code untouched apart from the two 289
+gaps closed above and the desktop sale-return screen's migration onto the shared refund-method and
+fee helpers. Return logic remains 108's, byte-identical: no flow computes a refund, moves stock or
+credits a supplier — all three POST to the frozen service.
