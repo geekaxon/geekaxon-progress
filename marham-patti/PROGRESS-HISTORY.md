@@ -16044,3 +16044,58 @@ The remapping storage 285 owns should write against `SHORTCUT_ACTIONS` (already 
 `resolveScreenShortcuts` for the overlay — `ShortcutsHelp` still renders every bound row under the
 `global` heading, which was true before 284 and is the overlay's job to fix. `isRemappableShortcut`
 is the predicate the settings screen should gate its rebind control on.
+
+---
+
+## 285 — shortcut-settings-and-overlay — DONE (2026-08-16)
+
+**Branch:** `feature/285-shortcut-settings-and-overlay` · **Spec:** `/specs/285-shortcut-settings-and-overlay.md` · no CODEREF covers this range.
+
+### The decision this step reverses
+Spec 111 stored the key map **per user**; 284's discussion recommended never making bindings customisable at all. The owner decided otherwise, and decided further that overrides are **per TENANT**: a shared counter device must behave the same for whoever is standing at it — the same reasoning that put the PIN gate on POS roles rather than user preferences (179 §3). Everything below follows from that one call.
+
+### Schema (§1)
+- New model `TenantKeyboardShortcut` → table `tenant_keyboard_shortcuts`, columns `id · tenant_id · action_key · combo · created_at · updated_at`, unique `(tenant_id, action_key)`, RLS **forced** via the canonical `apply_tenant_rls()` helper. Migration `20260816000000_tenant_shortcut_overrides` — **additive only**, nothing altered, nothing dropped.
+- **Sparse by design**: a row exists only for an action the shop actually changed, so an unset override falls through to the code default and "reset" is a DELETE rather than a write of the shipped combo. A tenant that never touched `F4` follows the registry if a later release moves it; a tenant that did keeps what it chose.
+- The old per-user `keyboard_shortcuts` table is **left in place and marked superseded** in the schema doc comment. Dropping it would be a destructive migration to delete a handful of personal preferences; nothing reads it after this step.
+
+### Shared registry (`packages/shared/src/pharmacy-shortcuts.ts`)
+- `ShortcutScreen` widened to `global | pos | payment | purchase`, with `SHORTCUT_SCREEN_ORDER` driving the settings sections **and** the overlay — a new screen's keys appear in settings the moment it registers them, which is what §2 asks for.
+- `FixedReason` (`convention | contextual | bareKey`) added, plus `fixedReason` on non-remappable registry rows and `screen` + `reason` on every `FIXED_SHORTCUTS` row. Three reason strings rather than one per row, so the copy stays maintainable. A module-load assertion now **refuses a fixed row that cannot say why** — §1's "a user who cannot find a key needs to know it exists" is enforced structurally, not by review.
+- `resolveAllShortcuts()` — the WHOLE registry resolved (fixed rows included), which is what the API answers with now; 111's remappable-only `resolveEffectiveShortcuts()` kept for its existing callers.
+- `fixedShortcutsForScreen()` — one derivation feeding both the settings sections and the overlay.
+- **Conflict rule re-cut (§2):** a combo already used *within the same scope, or by a global* is refused; the same key on two different screens is allowed. The global test is **symmetric** — a global taking a key a screen owns leaves the global dead there, which is the same bug in the other direction.
+  - **Recorded, because it is an asymmetry:** the SHIPPED defaults deliberately sit outside this rule (284 gives the counter `Alt+I` and `Alt+D` over two nav globals, and `resolveScreenShortcuts` settles them). That is a shadow the map's author chose and documented, not one a tenant can wander into. The escape hatch is that every row has a reset-to-default, so a shipped shadow is always one click away even though it cannot be re-created by hand.
+- §4 keys registered: `purchase.save` F4 · `purchase.supplier` Alt+S · `purchase.invoiceNo` Alt+V · `purchase.date` Alt+D. `Alt+V`'s POS deferral (stock/batch popover) re-worded rather than deleted — it is still available on the counter's own scope.
+
+### API
+- `pharmacy-shortcuts` module converted in place from `(tenantId, userId)` to `tenantId` alone: repo, service, controller, module. Routes unchanged (`GET /pharmacy/shortcuts`, `PUT|DELETE /pharmacy/shortcuts/:actionKey`, `DELETE /pharmacy/shortcuts`), so the engine and the settings pane keep their URLs and no route-ordering trap was introduced.
+- **Read open, write gated.** GET stays ungated — the engine loads the map on every screen and the `?` overlay would otherwise show defaults to a shop that had remapped, which §3 names as the one thing it must never do. `PUT`/`DELETE` carry `@RequirePermission('pharmacy.settings.manage')`; `PermissionsModule` imported. Mutations stay `@Audited`.
+- The 409 message now names the clash in **plain English** (`Alt+C is already used by "Choose the customer"`), from the registry label rather than the action key — §2's own example.
+
+### Web
+- **`ShortcutOverlay`** (`components/shell/ShortcutOverlay.tsx`) — one screen-aware `?` card replacing the POS-only `ShortcutsHelp` (deleted). Renders this screen's registry rows on the tenant's combos, then the screen's fixed keys in panel order, then **Global in its own section** (§3). 193 §5's dialog anatomy kept verbatim so the counter's overlay did not change shape. `alsoScreens` lets the POS include the Take Payment fixed keys — that surface is its own scope in settings, but a cashier looking up "how do I confirm the payment" is standing at the counter.
+- **Not offered on mobile (§3)** by construction: the engine binds no listener on a touch-primary device, so `?` never opens there. The guard stays one layer down rather than a second `matchMedia` call that could drift.
+- **Settings → Keyboard** rebuilt: sections from `SHORTCUT_SCREEN_ORDER`; each row is label · current key as `.kbd` chips · record button · reset; fixed rows drawn quieter with a padlock and their one-line reason; the shipped default shown under a changed key so "reset" is a decision rather than a gamble; local conflict pre-check mirroring the server's rule (the server still refuses independently — this is not the guard); **reset-all behind the centred destructive `ConfirmDialog`**, which since 284 §6 opens with its confirm button focused.
+- **Printable list (§2):** a `@media print` block that blanks the app and prints the tenant's current map — one source, so the paper by the till cannot drift from what the counter answers to.
+- The section moved out of Settings → **Personal** into the **Pharmacy** group with `requiredPermission: 'pharmacy.settings.manage'`. Leaving it under Personal would promise an individual something the storage no longer offers.
+- **The standalone `/pharmacy/shortcuts` editor is retired** (route + client deleted). Once §1 made the map the shop's, that page was telling every cashier the shop's keys were their personal preference while writing them tenant-wide. Its nav entry now deep-links `/settings?s=shortcuts` and carries the permission the API enforces — offering a link to someone who would be refused the save is the same lie in a smaller font.
+- **New Purchase (§4):** the desktop `PurchaseEntry` binds the four keys through `useShortcutEngine('purchase', …)`. `F4` calls the very `submit` the Save button calls — not a copy — so an invalid line blocks the key exactly as it blocks the button, and it says *which* line rather than declining silently. `Alt+S` opens the supplier picker, `Alt+V` focuses the invoice input (ref), `Alt+D` focuses into a transparent wrapper around the shared `DatePicker` rather than reaching inside it. The mobile entry is a separate branch and mounts no engine. `Tab`/`Enter` in the grid are **unchanged** and merely written down as fixed rows.
+
+### Copy
+EN + UR added for the screen labels, the three fixed-binding reasons, the print list, the reset-all confirmation, the purchase actions and the purchase fixed rows. Three existing strings were **corrected rather than left**: `setgKbdGroupHint` ("these keys are yours alone"), `setgKbdDialogNote` and `pharmacyShortcuts.intro` all claimed the map was personal, which §1 made false.
+
+### Tests
+- `shortcut-settings-285.spec.ts` — per-tenant resolution and fall-through; the old key genuinely stops matching; fixed bindings visible, unchangeable, and refused even when asked directly; a stored override on a fixed action ignored; every scope populated; conflict within a scope (with the named message) and against a global in both directions; the same key on two screens allowed end-to-end; reset-one / reset-all / re-bind round trip; the overlay's data reflecting overrides, dropping shadowed globals and **re-cutting the shadowing when a tenant remaps**; the four purchase keys registered, firing, and typing-safe; the Tab/Enter rows documented.
+- `pharmacy-shortcuts.service.spec.ts` updated to the tenant signature: the per-user isolation case is replaced by tenant isolation plus "every user of a tenant reads the same map"; the defaults case now asserts the whole registry; the per-screen loops read `SHORTCUT_SCREEN_ORDER`; the fixed-group set gains `purchase`.
+- 284's UI file-shape spec repointed at `ShortcutOverlay` and the retired standalone client dropped from its list.
+
+### Gates
+`pnpm prisma generate` ✓ · `pnpm typecheck` ✓ (31/31) · `pnpm lint` ✓ (17/17; the single warning is a pre-existing unused eslint-disable in `doctor-portal.repositories.ts`, untouched by this step). Per AGENT.md the unit/e2e/build gates are the controller's.
+
+### Notes for whoever picks this up
+- `setgKbdColYours` / `setgKbdNoOverride` are now unreferenced; left in the catalogue rather than removed, since deleting a key is a parity-gate event for no benefit.
+- The `?` overlay only appears on screens that mount the engine — today the POS and desktop purchase entry. Any screen that registers keys gets it for free.
+- **PROGRESS.md `Next`** is written as CLAUDE.md's canonical `none — build order complete` rather than the spec's own `none — awaiting next spec block [HUMAN_REQUIRED]`, because CLAUDE.md fixes that file's wording and explicitly overrides. The factual position is the same: 285 is the last **authored** spec, and 286–289 are agreed with the owner but not yet written.
+
+**WORK TYPE: FEATURE (branch feature/285-shortcut-settings-and-overlay)**
