@@ -16370,3 +16370,146 @@ Same family as 283's finding, hiding in the one place 283's guard could not look
 ### Gates
 
 `pnpm typecheck` — clean, 31/31. `pnpm lint` — clean (one pre-existing unused-disable warning in `@mp/api`, untouched by this step). `pnpm test:unit` / `build` are the controller's per CLAUDE.md §6. No vendor file touched, no dependency added, no secret.
+
+---
+
+## 289 — returns-desktop — DONE (2026-08-16)
+
+**Branch:** `feature/289-returns-desktop` (from the 288 head). **Spec:** `/specs/289-returns-desktop.md`.
+**Mockup gate:** `specs/mockups/pharmacy/returns-desktop.html` present, `.cart--ret` / `.rcard` found (157 matches) — gate passed, no `[HUMAN_REQUIRED]`.
+**No CODEREF** covers 289 (the highest is 113-121), so the spec alone was authoritative for where code went.
+
+### What this step is, and what it deliberately is not
+
+Spec 108's return logic is **frozen and reused**. Nothing in this step recomputes a refund, a
+restocking fee, a supplier credit or a stock movement: `createSaleReturn` / `createPurchaseReturn`
+remain the one implementation, and the new screens POST to them. What 289 adds is the SCREEN, the
+APPROVAL STATE and the THREE SETTINGS that gate them.
+
+The one substantive refactor inside 108's own code is a **lift, not a rewrite**: the effects half of
+`createSaleReturn` (restock, sale status, ledger credit, day-close accrual) moved verbatim into a
+private `releaseSaleReturn`, and the purchase return's stock movement into
+`releasePurchaseReturnStock`. Both are called by the create path when no approval is required and by
+the approve path when it is — so a return approved on Tuesday cannot differ from one refunded on
+Monday, which a second copy of the code would eventually have made possible.
+
+### Decisions taken (autonomous, per AGENT.md §2)
+
+1. **Drawer width: 520px, not the 700px §7's prose names.** The mockup is committed with this round
+   and it declares `.pdrawer--ret { width: 520px }`; acceptance §8 requires per-selector diffs clean
+   against exactly that selector. Where the prose and the committed selector disagreed, the selector
+   won, and the `.mp-ret-drawer` rule is 520px.
+2. **A sale return now carries a `status`.** Reused the existing `ReturnStatus`
+   (PENDING → CREDITED / CANCELLED) rather than inventing a second three-state lifecycle. Column
+   default is CREDITED, so every pre-289 row and every return in a tenant without approval reads
+   exactly as it always did: settled on the spot.
+3. **A purchase return needed its OWN release gate (`pending_approval`, default false).** Its
+   `status` is 98's and PENDING there already means "raised, awaiting the SUPPLIER's credit" — a
+   state in which 108 has always already taken the stock off the shelf. Reusing it for "awaiting the
+   MANAGER" would have made every pre-289 PENDING row look approvable, and approving one would have
+   moved its stock a second time. The asymmetry with sale returns is deliberate and documented on
+   the column.
+4. **Quarantine is a NON-SELLABLE twin lot (`batches.quarantined`), not a flag on the origin lot.**
+   Flagging the origin would quarantine stock that is perfectly good. The twin shares the lot's
+   identity (branch + medicine + batch no + expiry) and is excluded from `listBatchesForFefo` — the
+   one allocation seam — so the goods are on the premises, are counted by `stock.qty` (268 §3.4's
+   invariant holds exactly) and can never be dispensed. `findLotBatch` and `receiveBatch` were both
+   given `quarantined: false` in the same change, because they match on that same identity and would
+   otherwise have resolved a void, a purchase return or a top-up delivery to the holding lot.
+5. **WRITE_OFF writes TWO movements, not none.** RETURN in, EXPIRE straight back out, netting to
+   nothing on the shelf. A silent no-op would have hidden the loss from the expiry report, which §5
+   explicitly says must carry it.
+6. **The N-day window is a fact on the read model, never a refusal.** `returnWindowState` is
+   returned by `returnableSale`; the screen renders a warning and the Confirm button stays live.
+   Nothing server-side refuses on it.
+7. **A pending return HOLDS its quantity.** 108's net-remaining guard was widened to count PENDING
+   returns and skip CANCELLED ones. Without that, two pending returns could each claim the whole
+   line and both be approved. This strictly tightens the guard; it never loosens it.
+8. **`pharmacy.return.approve` is its own permission**, Owner + Manager by default. Approving is
+   what RELEASES money and stock, which is the manager's signature and not the counter's, so it does
+   not ride on `pharmacy.stock.adjust` (every pharmacist holds that) or `pharmacy.sell` (the till).
+9. **Returns are numbered.** A cuid is not a reference a pharmacist can read back over a counter.
+   `ReturnNumberSequence` — one counter per tenant, both kinds, claimed under a per-tenant advisory
+   lock inside the return's own transaction, exactly as 213 §5.1 and 251 §3.2 do it — plus a
+   backfill so no existing row is left without a printable number.
+10. **The Settings pane landed in this step, not deferred to 290.** §5 states the three settings as
+    part of 289 and §8 requires their behaviour; a settings group whose behaviour ships without the
+    control that sets it would leave the acceptance criteria unprovable on the deployed page.
+11. **`ONLINE` is recorded as `CARD`.** The screen offers Cash / Card / Online / Adjust-against-udhaar
+    per §3; the server's frozen allowlist is CASH / CARD / CREDIT. An online transfer does not touch
+    the drawer, which is exactly CARD's behaviour in the day-close, so it is recorded as CARD rather
+    than by inventing a fourth tender the reconciliation cannot balance.
+12. **`supplierOutstanding` was dropped from the purchase-return drawer.** The mockup's reference
+    pane shows it, but the only way to compute it is `listSupplierSummaries`, which reads a thousand
+    purchases — a per-drawer-open cost for a figure §7 does not ask for.
+
+### Schema (additive; migration `20260816010000_returns_approval_and_expiry_policy`)
+
+- `enum ExpiredReturnPolicy { WRITE_OFF | QUARANTINE | BACK_TO_BATCH }`.
+- `pharmacy_settings`: `returns_require_approval` (false), `returns_window_days` (30),
+  `expired_return_policy` (WRITE_OFF).
+- `sale_returns`: `status` (default CREDITED), `approved_by`, `approved_at`, `rejection_reason`,
+  `number`, + `(tenant_id, status)` index.
+- `purchase_returns`: `pending_approval` (false), `approved_by`, `approved_at`,
+  `rejection_reason`, `number`.
+- `return_items`: `reason` (nullable `ReturnReason`), `reason_note` — the PER-LINE reason §3 asks for.
+- `batches`: `quarantined` (false).
+- NEW TABLE `return_number_sequences`, with FORCED RLS via the canonical `apply_tenant_rls()`.
+- Backfill: every existing return numbered per tenant in creation order across both kinds, and the
+  counter set past the maximum.
+
+### Code
+
+- `@mp/shared/pharmacy-returns`: `ExpiredReturnPolicyLit` + guard, `RETURNS_WINDOW_DAYS_*`,
+  `returnWindowState`, `remainingReturnable`, `isExpiredAt`, `expiredDisposition`,
+  `formatReturnNumber`, `RETURNS_FILTERS`, `RETURNS_PAGE_SIZES`.
+- `@mp/shared/pharmacy-settings`: the three fields on `EffectivePharmacySettings`, the defaults, the
+  resolver precedence and the enforcement-contract note.
+- `@mp/shared/permissions`: `pharmacy.return.approve` (flag `pharmacy.pos`, MANAGER default).
+- `@mp/db`: `ExpiredReturnPolicy` re-export, `RETURN_NUMBER_LOCK_NAMESPACE`.
+- API: settings DTO/repo plumbing; repository row shapes, selects, mappers, `claimReturnNumber`,
+  `setSaleReturnStatus`, `clearPurchaseReturnApprovalHold`, `findOrCreateQuarantineLot`, FEFO
+  exclusion; service `releaseSaleReturn` / `restockReturnedLine` / `releasePurchaseReturnStock`,
+  `approve|rejectSaleReturn`, `approve|rejectPurchaseReturn`, `returnableSales|Sale`,
+  `returnablePurchases|Purchase`, an extended `listReturns` (numbers, source doc, walk-in mark,
+  pending count, expired mark, policy, canApprove); controller routes for the four lookups and the
+  four approval endpoints, all `@Audited` and permission-gated.
+- Web: `ReturnsClient` rebuilt to the mockup (KPI row with the "—" no-data variant, five filter
+  chips, sortable heads, pagination, rows-per-page, column show/hide, search across every visible
+  column, `.rcard` card view, empty + skeleton states, the `.pdrawer--ret` drawer with `.cart--ret`,
+  `.batchchip`, `.rreason`, `.srcdoc`, and Approve / Reject for a holder); new
+  `new-sale-return` and `new-purchase-return` flows on `.stepnav` / `.lineitems` / `.retqty` /
+  `.convline` / `.totals` / `.entryfoot`; `ReturnsSection` settings pane + one registry entry.
+- CSS: one `.mp-ret` block appended to `globals.css`, tokens only, both themes; plus `.setopts` /
+  `.setopt` / `.setnote--danger` for the settings pane's three-option list.
+- i18n: 193 keys, EN + UR parity.
+
+### Tests written (not run here — the controller runs the gates)
+
+- `apps/api/src/pharmacy/returns-desktop-289.spec.ts` — the pure logic (window, remaining, expiry
+  disposition, return numbers, policy vocabulary); approval on/off for both kinds including
+  idempotent approve, rejection with a reason, and the refusal to confirm a credit on a held return;
+  the second limit including a pending return holding its quantity and a rejected one releasing it;
+  per-line reasons; all three expiry policies with their movements, their FEFO visibility and
+  `stock.qty == Σ batch.qty` asserted on each; the window warning; the register's numbers, source
+  refs, walk-in mark, KPI figures, policy payload and `canApprove`.
+- `apps/api/src/pharmacy/returns.spec.ts` — `makeService` now stubs the settings resolver with
+  `PHARMACY_SETTINGS_DEFAULTS` (approval off), so 108's own suite proves unchanged behaviour.
+- `apps/api/src/pharmacy/__fakes__.ts` — quarantine flag on the fake batch, quarantine-aware FEFO /
+  `findLotBatch` / `receiveBatch`, `setSaleReturnStatus`, `clearPurchaseReturnApprovalHold`,
+  `findOrCreateQuarantineLot`, a per-tenant return counter, and a `setSaleCreatedAt` test helper.
+
+### Gates run here
+
+`pnpm lint` — clean (the one remaining warning is a pre-existing unused eslint-disable in
+`doctor-portal.repositories.ts`, untouched by this step). `pnpm typecheck` — clean, 31/31.
+`pnpm prisma generate` run after the schema change. Per AGENT.md §4A, `test:unit`, `build` and
+`test:e2e` are the controller's.
+
+### Notes for later steps
+
+- 290 owns the phone: `ReturnsClient` draws no mobile frame (neither did the screen it replaced), so
+  no device loses a view it had.
+- The quarantine holding lot is visible in the inventory batch table by design — the owner has to
+  decide what happens to it. A "send back to supplier / write off" action on it is not in 289's
+  scope and has not been built.
