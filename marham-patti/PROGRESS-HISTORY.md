@@ -16099,3 +16099,142 @@ EN + UR added for the screen labels, the three fixed-binding reasons, the print 
 - **PROGRESS.md `Next`** is written as CLAUDE.md's canonical `none — build order complete` rather than the spec's own `none — awaiting next spec block [HUMAN_REQUIRED]`, because CLAUDE.md fixes that file's wording and explicitly overrides. The factual position is the same: 285 is the last **authored** spec, and 286–289 are agreed with the owner but not yet written.
 
 **WORK TYPE: FEATURE (branch feature/285-shortcut-settings-and-overlay)**
+
+---
+
+## 286 — command-menu-and-keyboard-fixes — DONE (2026-08-16)
+
+**WORK TYPE:** FEATURE (branch `feature/286-command-menu-and-keyboard-fixes`)
+**Spec:** /specs/286-command-menu-and-keyboard-fixes.md · no CODEREF · **schema: none** · **RLS: unchanged**
+
+### The problem, as reported
+Two shortcut dialogs answered the same question and disagreed; `/` meant the POS scan field on the
+counter and the tenant search everywhere else; `Ctrl+K` meant nothing at all in the tenant app; Esc
+on an empty screen jumped focus into a search box; the focused held pill was invisible and Tab from
+it landed on the button that throws a sale away.
+
+### §1 — one dialog
+`apps/web/components/shell/ShortcutsModal.tsx` is **deleted**. It was a hand-written list of five
+global keys ("focus search, command menu, sidebar, theme, Esc"), three of which had not been real
+since 284 re-cut the keyboard — so the owner pressing the header button got a wrong answer and the
+owner pressing `?` got the right one.
+
+The survivor is `ShortcutOverlay`, now mounted **once** by the shell (`ShellShortcuts.tsx`) rather
+than per screen. A new `ShortcutHubProvider` (`apps/web/lib/shortcut-hub.tsx`) owns the dialog's open
+state, the tenant's map and the nine slot assignments; the header button and `?` both set the same
+piece of state, so there is nothing left for them to drift from. A screen's engine CLAIMS its scope
+while mounted and the shell's engine stands down — without that, two engines would each toggle `?`
+and the dialog would open and close on the same keystroke. The dialog leads with the claimed screen's
+section and follows with Global, per §1. It also adopted the shared `ModalHead` (212 §3.1).
+
+**THE GREP §1 ASKED FOR, and what it found.** Five components mention shortcuts; exactly one lists a
+key map for a reader:
+- `ShortcutsModal.tsx` — the generic header card. **Deleted.**
+- `ShortcutOverlay.tsx` — the one dialog. **Kept**, and made the only mount.
+- `settings/sections/ShortcutsSection.tsx` — Settings → Keyboard. An **editor**, not a second dialog;
+  it reads the same `GET /pharmacy/shortcuts` map, so it cannot document keys the counter lacks.
+- `shell/VendorCommandPalette.tsx` — the **vendor console's** own ⌘K (spec 55). A different app for a
+  different audience; deliberately not merged, and asserted not to have grown a tenant key list.
+- `packages/ui/src/components/shortcut-scope.tsx` — a pre-registry binding helper used by the vendor
+  surface. Lists nothing. Left alone.
+
+### §2 — `/` and Ctrl+K are one command menu
+`ui.focusSearch` is a single registry row with `defaultCombo: '/'` and `alsoCombo: 'Ctrl+K'`, so the
+two keys cannot open two menus by construction. `GlobalSearch` no longer binds a key at all — the
+engine is the app's one keydown listener and dispatches an open event (`lib/command-menu.ts`).
+
+The menu now searches **pages** as well as records, extending 177 rather than forking it. That
+required the nav registry to be readable on the server, so `apps/web/lib/nav.ts` **moved verbatim to
+`packages/shared/src/nav-registry.ts`** and the web file is now a re-export (every existing import is
+unchanged). `SearchService.pageHits` filters with the very predicate the sidebar uses
+(`isNavItemVisible`) against resolved flags + effective permissions + role — a page the user cannot
+open is not hidden, it was never a candidate. Matching runs on the EN catalogue (the registry stores
+i18n keys, and matching is a server decision); the hit carries `labelKey`/`secondaryKey` back so the
+browser draws the reader's own language. Pages lead `TYPE_ORDER`, and the group is only present when
+a page matched, which is exactly "pages first when the query matches a page name".
+
+**`F2` was left alone on purpose** — it focuses the counter's scan field and is deliberately not an
+alias of the menu. A cashier reaching for it mid-sale must not get a navigation surface.
+
+### §3 — Alt+1…9, nine tenant-assignable jumps
+Nine new global registry rows (`nav.slot1`…`nav.slot9`, `Alt+1`…`Alt+9`, all remappable). Digits
+cannot collide with 284 §4's `Alt+<letter>` in-page actions. The page each slot lands on reuses 285's
+override table under a key of its own — `nav.slot3.page` holds the href beside `nav.slot3`'s combo —
+so the spec's "no schema" holds. That is safe because the resolver walks the REGISTRY: a `.page` row
+is not an action and can never leak into the key map (asserted). New endpoints:
+`GET /pharmacy/shortcuts/slots` (open read — the engine needs it on every screen),
+`PUT|DELETE /pharmacy/shortcuts/slots/:slot` (`pharmacy.settings.manage`, `@Audited`).
+
+**Judgement calls recorded:**
+- *An href is validated against the registry.* Accepting an arbitrary string would have made a
+  settings field an open redirect on every till in the shop. Refused with a 400.
+- *Assignment does NOT check whether the assigner can open the page.* The map is the shop's (285 §1):
+  a manager configures the counter for the cashiers who will stand at it. The destination route is
+  guarded on its own terms, so a cashier pressing a slot they may not open is refused by the screen.
+  The Settings picker still only OFFERS what the assigner can see, which is the honest middle.
+- *`resetAll` clears slot assignments too.* They live in the same table and "reset the shop's keyboard
+  to how it shipped" plainly includes what the shop taught `Alt+1` to mean; the destructive
+  confirmation in front of it is the safeguard.
+- *A stored href that no longer exists resolves to `null`, and the row is left in place.* A jump into
+  a 404 is worse than a quiet no-op, and silently deleting a tenant's configuration because a deploy
+  moved a route is not a repair.
+- *An unassigned slot gets a no-op handler rather than no handler*, so §4.7's `preventDefault` still
+  fires — Firefox spends `Alt+<digit>` on tab switching.
+
+### §4 — the seven defects
+1. **Esc does nothing on an empty screen.** The POS's `ui.closeLayer` handler (which focused the scan
+   field) is gone; Radix still closes whatever layer IS open, on its own handler.
+2. **`/` opens the command menu.** The POS's `ui.focusSearch` handler is gone; `F2` is the scan field.
+3. **The focused held pill is unmistakable** — `outline:2px solid var(--accent)` + `--accent-soft`
+   fill, matching the focused cart row, replacing a soft outer glow that was unreadable across a
+   counter on a pill that is already accent-tinted.
+4. **Tab moves to the next pill** — the discard cross is `tabIndex={-1}`, which fixes both directions
+   natively. Untouched for the mouse; the keyboard reaches the same confirmation with `Delete`.
+5. **←/→ walk the rail**, clamped at the ends rather than wrapping.
+6. **Delete discards the focused pill** through the existing centred confirmation, which has opened on
+   its confirm button since 284 §6.
+7. **Every MATCHED key is swallowed**, moved ahead of the handler lookup. The bug was calling
+   `preventDefault` only once a handler had been found, so a bound row with no handler leaked its key
+   to the browser. `ui.closeLayer` stays exempt — an engine that stopped Escape in the capture phase
+   would leave a cashier with a menu they cannot shut.
+
+### Also
+- The tenant's map + slots are fetched **once**, by the hub, instead of once per screen engine.
+- The engine now supplies the navigation handlers itself (command menu, four module jumps, nine
+  slots), so they work on screens nobody thought about — which is what makes §3's "Ctrl+K covers
+  everything else, so no page is ever unreachable" actually true.
+- Settings → Keyboard gained a **Quick jumps** card using the kit's `SearchSelect` (94 §2.1 / 212 §7.1
+  — a raw native dropdown would have been exactly the drift those specs forbid).
+
+### i18n
+EN+UR parity kept. Added: `tenantSearch.groupPage`, reworded `tenantSearch.placeholder/hintTitle/
+hintBody`; `pharmacyShortcuts.slotUnassigned`; `pharmacyShortcuts.action.nav.slot1…9`;
+`pharmacyShortcuts.action.ui.focusSearch` → "Open the command menu"; eight `setgKbdSlot*` keys.
+Removed with the deleted modal: `shellShortcutsTitle/Hint`, `shellShortcutSearch/Nav/Theme/Sidebar/Close`.
+
+### Flags / permissions / audit / isolation
+Flags unchanged. Slot writes ride `pharmacy.pos` (feature) + `pharmacy.settings.manage` (permission)
+and are audited. Page search adds no new permission — it re-uses the caller's effective set and the
+tenant's resolved flags, and reads no database at all. RLS untouched: slot rows go through the same
+`runWithTenant` repository as every other override, and one shop's slots are asserted invisible to
+another.
+
+### Tests written
+- `apps/api/src/pharmacy-shortcuts/command-menu-and-keyboard-286.spec.ts` — the merged action, the
+  page filter's flag→permission→role precedence, the nine slots (assign / clear / refuse / isolate /
+  no leak into the map / stale href / reset-all), and the map-level halves of §4.
+- `packages/ui/src/lib/command-menu-and-keyboard-286.spec.tsx` — the wiring: one dialog and one mount,
+  the deleted modal, no keydown outside the engine, pages-first ordering, the slot UI, and each of the
+  seven §4 defects at the line that fixes it, plus EN/UR parity for every new string.
+- Updated for the moves: `round-3-verification` (dialog + nav registry paths),
+  `package-nav-gating-and-identity-fixes`, `inventory-desktop-polish-r2`, `recent-sales-screen`
+  (registry path), and `pharmacy-shortcuts.service.spec` §5 — the whole-sale walkthrough now presses
+  against the COUNTER'S map (`resolveScreenShortcuts('pos')`) rather than the flat catalogue, because
+  `Alt+5` is legitimately ambiguous there now (global slot 5 vs the counter's discount) and per-screen
+  resolution is what 284 §2 built to settle exactly that.
+
+### Gates
+`pnpm lint` and `pnpm typecheck` clean (one pre-existing unused-eslint-disable warning in
+`doctor-portal.repositories.ts`, untouched). Targeted suites run green: pharmacy-shortcuts (92),
+search (7), i18n parity (28), and the six UI suites that read the moved/changed files (148).
+Vendor surfaces untouched. No e2e harness exists in this repo.
