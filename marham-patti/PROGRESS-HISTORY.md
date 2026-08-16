@@ -16238,3 +16238,88 @@ another.
 `doctor-portal.repositories.ts`, untouched). Targeted suites run green: pharmacy-shortcuts (92),
 search (7), i18n parity (28), and the six UI suites that read the moved/changed files (148).
 Vendor surfaces untouched. No e2e harness exists in this repo.
+
+## 287 — held-sale-restore-and-stock-drift — DONE (2026-08-16)
+
+**Branch:** `feature/287-held-sale-restore-and-stock-drift` · **Spec:** /specs/287-held-sale-restore-and-stock-drift.md · no CODEREF · **Schema:** none · **RLS:** unchanged.
+
+### §1 — a refreshed page kept the cart and forgot which hold it was
+
+The cart already survived a reload (`mp.pharmacy.pos.cart`); `activeHeldId` did not, so a resumed
+hold came back as an ordinary cart. Completing it would have booked a NEW sale while the original
+stayed parked — one transaction showing as a sale AND an unfinished hold.
+
+- New local slot `mp.pharmacy.pos.hold` (`HOLD_KEY` in `PosClient.tsx`) holding a POINTER only:
+  `{ id, number, heldByName }`. No cart data — the goods stay in the cart key, the truth stays on
+  the server.
+- Written by its own effect on every change of the open hold, so complete / discard / clear erase
+  it in the same breath they clear the cart. Restored at bootstrap **only when lines came back**:
+  a pointer with no cart behind it is a stale note, and sending it to the commit would close a
+  hold this screen is not holding.
+- Restored with NO round trip (decision): the server is still the gate on whether a hold is
+  takeable, and a counter on a dropped link must not lose the identity of the sale it is standing
+  on. The 187/190 refusal copy is untouched — another user resuming a hold this session has stale
+  is still refused by name.
+- `heldSaleId: activeHeldId` on the commit body is unchanged, so the `heldBy → resumedBy →
+  completedBy` chain is unbroken across a refresh.
+- New `activeHeldName` state carries the attribution; the desktop `.cart__inv` chip now reads
+  "#42 · held by Ayesha" and the phone's `.mlabel` names the hold too.
+- Shared, total normaliser `restoreResumedHold()` in `packages/shared/src/pharmacy-held-sales.ts`
+  (+ `ResumedHoldPointer`): anything unrecognisable degrades to "no hold open".
+
+### §2 — stock that fell while the sale was parked
+
+Owner's decision recorded: **warn, block, let the cashier decide.** Leaving 50 sellable oversells;
+silently rewriting the line to 10 is worse, because the cart is what was agreed with the customer
+standing there. So the quantity is never touched by the system.
+
+- `posLineStockDrift()` in `packages/shared/src/pharmacy-pos.ts` (+ `PosStockDrift`,
+  `PosStockDriftInput`): reports `{ requested, available, none }` **in the unit the cashier is
+  typing in** (a pack line is answered in packs, never in tablets). A pack that no longer fits in
+  the loose units left reports `none` rather than "only 0".
+- `driftByKey` / `driftOf` in `PosClient.tsx` read the SAME on-hand as the over-sell clamp
+  (`lineAvailable` / `lineFactor`), so warning and cap cannot disagree. Typed quantities are
+  already clamped by `setQty`, so this only ever fires on stock that moved underneath a cart —
+  a resume, or a live `stock.updated`.
+- `commitBlocked` became `saleBlock: { title, why } | null` — TWO independent reasons stated
+  apart: the 192 §3 unpriced line, and the 287 §2 drifted line. `openPay` toasts the title with
+  the reason; `directSaveBlock` (284 §3, the no-confirmation F4/F6 route) refuses with the same
+  `why`. **This renamed the flag the 284 spec grepped — that one assertion was updated in place.**
+- `StockDriftNote` — ONE component, mounted on both tiers, in the same slot as the 192 §3 error
+  and one tone softer (warning, not danger): this line is not broken, its world changed. Carries
+  the one-tap fix ("Set to 10", or "Remove line" at zero) via `applyStockDrift`.
+- CSS: `.cart__row.is-warn` / `.mline.is-warn`, `.cart__drift`, `.cart__fix`,
+  `.fabar__chip--warn`, and `.mbar__why` — the phone's "why" is anchored to the bar itself
+  (`bottom:calc(100% + 7px)`) rather than to a magic viewport offset, so it rides with it through
+  the safe area. Desktop meta stays `nowrap`; the drift note is the one exception (a clipped
+  "Set to 10" is a control the cashier cannot reach).
+- The commit-time guard is untouched and remains authoritative — this is the earlier, kinder
+  warning in front of it, not a replacement.
+
+### Frozen paths
+
+Payment, credit, FEFO, allocation, stock decrement and idempotency byte-identical: the commit body,
+`postJson('/pharmacy/pos/sales')`, the idempotency-key headers, `splitByKey`/`allocateFefo` and
+`priceAllocatedLine` were not edited. No schema, no migration, no API change. Vendor untouched.
+
+### i18n
+
+`pharmacyPos.v19` added to `en.json` + `ur.json`: `stockDrift` ("Only {qty} in stock — was {was}"),
+`stockGone`, `setTo`, `removeLine`, `blockedStock`, `blockedStockTitle`.
+
+### Tests
+
+- `apps/api/src/pharmacy/held-sale-restore-and-stock-drift-287.spec.ts` — 10 pure tests over both
+  shared helpers (malformed pointers, pack-unit arithmetic, zero stock, totality).
+- `packages/ui/src/lib/held-sale-restore-and-stock-drift-287.spec.tsx` — 18 wiring tests (storage
+  slot, write/restore/clear sites, `heldSaleId` intact, both tiers' warning + block, CSS anatomy,
+  catalogue parity, frozen-path greps).
+
+### Gates
+
+`pnpm lint` clean (one pre-existing unused-disable warning in `doctor-portal.repositories.ts`,
+untouched). `pnpm typecheck` clean. Targeted runs: `packages/ui` full suite 118/118 files,
+2759 tests green; `apps/api` pos-helpers + pos-screen-v2 + the new 287 spec 57 green;
+`packages/i18n` parity green.
+
+WORK TYPE: FEATURE (branch feature/287-held-sale-restore-and-stock-drift)
