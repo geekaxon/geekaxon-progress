@@ -16639,3 +16639,196 @@ Desktop Returns tables/drawer, POS, Inventory, and vendor code untouched apart f
 gaps closed above and the desktop sale-return screen's migration onto the shared refund-method and
 fee helpers. Return logic remains 108's, byte-identical: no flow computes a refund, moves stock or
 credits a supplier — all three POST to the frozen service.
+
+---
+
+## 291 — realtime-stock-and-push — DONE (2026-08-16)
+
+**Branch:** `feature/291-realtime-stock-and-push`. Spec: `/specs/291-realtime-stock-and-push.md`.
+**Work type:** FIX (§1, the realtime consumption gap) + FEATURE (§2, web push).
+
+### §1 — THE INVESTIGATION, RECORDED
+
+The spec's instruction was to establish the truth by OBSERVING THE CHANNEL rather than by reading
+the code. That observation is now a permanent suite — `apps/api/src/pharmacy/realtime-stock-291.spec.ts`
+drives the real `PharmacyService` against the repo fake with a recording publisher bound to the
+bus, so every claim below is an assertion rather than a reading of intent. (No deployed instance
+was available inside the build session; a test that drives the writers and watches the bus is the
+strongest available form of "observe the channel", and unlike a one-off observation it also stops
+the next writer from being added silently.)
+
+**What already published `stock.updated`** — a POS sale (`commitPosSale`), a cart `finalize`, a
+sale return (`returnSale`, the 108 path), a purchase / goods-in (`createPurchase`), a purchase
+void (`voidPurchase`), and a FEFO priority change (`resetBatchOrder`, added at 215 §2.7).
+
+**What moved stock and told nobody** — four gaps, all now closed:
+
+1. **A stock adjustment** (`adjustStock`). The single most misleading one: a stock-take correction
+   changed the on-hand and every other open screen kept the old figure. Publishes the `newQty` the
+   compensating write already returned — never a delta, never a re-read.
+2. **A purchase return's stock leaving** (`releasePurchaseReturnStock`). Goods going back to a
+   supplier are a stock movement like any other.
+3. **A sale return's release** (`releaseSaleReturn`). 289's approval path calls the same release,
+   so an approved return now announces too. `restockReturnedLine` was changed to RETURN the
+   medicine's settled on-hand — which matters for the WRITE_OFF disposition, where the quantity
+   comes in and goes straight back out and the announced figure must be the one it settled on.
+4. **A bulk import's opening stock.** The 254/262 importer receives opening quantities through a
+   system "Opening stock" purchase written SET-BASED inside the repo, so it passed no per-document
+   publisher at all — an import was the one committed stock write that could never be live.
+   `importProducts` now returns the final on-hand per (branch, medicine); `inventoryImporter` takes
+   an announcer; `PharmacyModule` wires it to `PharmacyService.announceStockFigures`. ONE
+   announcement per chunk, not one per row.
+
+**Which surfaces subscribed before:** the POS, and nothing else. (The Customers screen consumes the
+same stream for the customer-balance scope, 210 §6.)
+
+**Which subscribe now:** Inventory list + its medicine detail drawer, Low stock & near expiry, the
+Dashboard's stock cards, the Pharmacy home list, Purchase (its picker shows availability), and the
+purchase-return screen. All through ONE new hook, `apps/web/lib/stock-live.ts`.
+
+**Decisions taken in §1, and why:**
+
+- **No new endpoint.** The hook rides `GET /pharmacy/pos/stream` — 187/210's existing merged feed,
+  under the same `pharmacy.sell` gate every one of these screens is already behind. A second stock
+  endpoint would have meant a second socket per tab for identical events. There is one realtime
+  system, as 184 §4 insists.
+- **Re-read, don't patch, on the list screens.** An inventory row carries `qty` AND the
+  `lowStock` / `outOfStock` / expiry-band judgements derived from it; quietly moving the number
+  without them is how a screen ends up showing 0 units with no out-of-stock chip. The throttle
+  makes a re-read cheap (one request per burst); the POS keeps its own in-place patch, unchanged.
+- **The purchase-return screen refreshes AVAILABILITY only.** Re-running `pick` would rebuild the
+  drafts and wipe the lines and quantities the operator had already chosen. That is 287 §2's rule
+  applied here: warn, never silently rewrite what was agreed. Only `onHand` / `remaining` /
+  `expired` are merged into the existing view; the submit-time server check remains the real guard.
+- **The POS's own 187 subscription was left alone.** The spec says "already wired — verify", and it
+  is; it does not hold while hidden or refetch on reconnect, which costs a repaint on a background
+  tab and nothing else. Rewriting the till's live feed for that was not worth the risk to the one
+  screen where money is taken. Recorded here rather than quietly done.
+- **Coalescing + throttling is a pure object in `@mp/shared`** (`StockBatcher`, `STOCK_THROTTLE_MS`
+  = 400ms), NOT logic inside a React hook — because §1's rule is an acceptance measured in
+  REPAINTS, and an acceptance that cannot be asserted is a hope. Leading-edge flush (a single sale
+  paints at once) then one flush per window; a 50-event burst produces 2 repaints total (1 + 49
+  coalesced), asserted.
+- **A hidden screen holds and then REFETCHES**, rather than replaying a backlog of unknown age.
+  **A reconnect refetches**, because events published during the drop will never be re-sent.
+
+**FEFO, the commit-time check and every arithmetic path are byte-identical.** Nothing in the
+subscription layer decides anything — asserted: the hook contains no allocator call, no totals
+call, no write, and exactly one `apiFetch` (the read-only stream).
+
+### §2 — WEB PUSH
+
+**Transport, hand-rolled on `node:crypto`** (`notifications.push.crypto.ts`): RFC 8291 (ECDH →
+HKDF → AES-128-GCM in RFC 8188 `aes128gcm` framing) and RFC 8292 (ES256 VAPID JWT, raw r||s).
+Chosen over adding `web-push` because it is ~60 lines of primitives Node already ships, and the
+alternative is a runtime dependency on the path of a notification that has to work on a
+pharmacist's phone at 11pm. Proven by DECRYPTING what it encrypts with the subscription's private
+key, and by VERIFYING the JWT with the public half derived from the configured scalar — a
+shape-only test would pass for a record no push service could deliver.
+
+**Fail-closed.** `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` / `VAPID_SUBJECT` come from config
+(`.env.example` documented, never committed). Anything missing → the no-op sender is bound,
+`GET /notifications/realtime/push/status` reports `enabled:false`, and Settings SAYS push is
+unavailable on this system instead of offering a dead switch. A suppressed send reports failure but
+never "gone", so an unconfigured deployment cannot delete every device in the tenant.
+
+**Schema (one additive migration, `20260816020000_push_devices_and_notification_prefs`):**
+`push_subscriptions` gains `device_label` / `user_agent` / `last_seen_at` / `failure_count`;
+`NotificationKind` gains `SALE_ON_OTHER_COUNTER` and `DAY_CLOSE_VARIANCE`; and a new
+`staff_notification_preferences` table under the canonical forced `apply_tenant_rls()`.
+**Naming decision:** NOT `notification_preferences` — that table already exists and belongs to spec
+09/60's OUTBOUND channel preferences (which category a RECIPIENT muted for email/SMS/WhatsApp,
+keyed by a recipient reference). Different subject, different key; the Prisma model is
+`StaffNotificationPreference`. A MISSING row reads as every switch on, so someone who never opens
+Settings is still told the shop is out of a medicine, and the table stays as small as the number of
+people who actually expressed a preference.
+
+**The four that push (§2.3), and the three filters each must pass:**
+`LOW_STOCK` (inventory.manage) · `EXPIRY_NEARING` (inventory.manage) ·
+`SALE_ON_OTHER_COUNTER` (sales.history.view) · `DAY_CLOSE_VARIANCE` (reports.view).
+Filters: the kind's existing 112 ROLE routing, then the recipient's real EFFECTIVE PERMISSION
+(resolved through `PermissionService.can`, not the role name — a tenant that clones a role and
+removes the grant must stop receiving the push, 223 §3), then the user's own PREFERENCE.
+Permission choices recorded: a cashier holds none of the four (the spec's own example, asserted
+against the real role defaults); a salesman holds only `sales.recent.view` and is therefore not
+told about a colleague's sale.
+
+**Locked-screen privacy.** The payload is built from a per-kind ALLOW-LIST of param keys
+(`redactPushParams`) rather than trusted — amounts, counts, medicine names and invoice numbers are
+fine, a person's name is not. A load-time assertion refuses any allow-list containing
+`patient`/`customer`/`phone`/`cnic`/`mrn`. `RX_READY` carries a patient name, which is exactly why
+it is not pushable. Title and body are RENDERED server-side in the recipient's own language (a
+service worker cannot translate on a locked screen).
+
+**Stale-subscription cleanup on failure.** A 404/410 deletes the row outright (the browser threw
+the subscription away); any other failure increments `failure_count` and the row is retired after
+3 consecutive failures. Cleanup is a consequence of sending, not a sweep somebody has to schedule.
+Re-registering resets the counter and refreshes `last_seen_at`, so a device offline for a week
+comes back rather than being retired.
+
+**In-app sound** is synthesised via Web Audio (two short sine tones), so there is no asset to cache
+or fail to cache offline. It respects the per-user `soundEnabled` mute, held in a ref in the bell
+so it never re-opens the SSE stream, and refreshed by a `mp:notification-prefs-changed` event the
+Settings pane dispatches on save. §2.1's limits are stated in the pane rather than left to be
+reported later: a push's sound is the phone's decision; iOS needs the PWA installed to the home
+screen (16.4+) and a Safari tab receives nothing.
+
+**Settings → Personal → Notifications** — one registry entry, no permission gate (everyone owns
+their own switches). This device (the ONLY place a permission prompt is raised — the bell's
+background registration passes `promptIfNeeded:false`, because a prompt nobody asked for is the
+fastest way to have push denied for good), the four kind switches under a master switch, the in-app
+sound, and the registered device list with a per-device unsubscribe.
+
+### Files
+
+New: `packages/shared/src/push-notifications.ts`, `packages/shared/src/stock-batcher.ts`,
+`apps/api/src/notifications/notifications.push.crypto.ts`, `apps/web/lib/stock-live.ts`,
+`apps/web/lib/notification-sound.ts`,
+`apps/web/app/(app)/settings/sections/NotificationsSection.tsx`, the migration, and four spec
+files (`notifications.push.crypto.spec.ts`, `notifications.push-policy.spec.ts`,
+`pharmacy/realtime-stock-291.spec.ts`, `packages/ui/src/lib/realtime-and-push-291.spec.tsx`).
+Changed: the notifications module/service/repo/controller/dto/push port, `pharmacy.service.ts`
+(four publish sites + `announceStockFigures`), `pharmacy.repositories.ts` + `__fakes__.ts`
+(`importProducts` returns its landed figures), `inventory.importer.ts`, `pharmacy.module.ts`,
+`schema.prisma`, `packages/config`, `.env.example`, the six subscribing screens, the bell,
+`lib/notifications.ts`, the settings registry, and EN+UR (48 keys each).
+
+### Notes
+
+- One PRE-EXISTING failing test was found on the branch and repaired:
+  `packages/ui/src/lib/pos-credit-and-customer-attribution.spec.tsx` asserted a line
+  (`const canCredit = !!sale?.customerId;`) that 289/290 moved out of `ReturnsClient.tsx` when
+  raising a return became its own screen. Re-pointed at where the rule now lives — the shared
+  `refundMethodsFor`, which drops CREDIT when a sale has no ledger customer — so the case still
+  tests the rule rather than a line that has moved on.
+- Gates run in-session: `pnpm prisma generate`, `pnpm lint`, `pnpm typecheck` — all clean (the one
+  remaining lint warning, an unused eslint-disable in `doctor-portal.repositories.ts`, is
+  pre-existing and untouched). New suites were run individually to avoid re-sending a full
+  reporter; the controller runs the whole gate.
+- **Owner test still outstanding, and deliberately NOT marked passed** (the 148 rule): push
+  delivery with the app closed on Android/Chrome, tap-through to the deep link, unsubscribe, and
+  iOS as an installed PWA. Those need a real device and a deployment carrying VAPID keys.
+
+WORK TYPE: FEATURE (branch feature/291-realtime-stock-and-push)
+
+## Gate fix (2026-08-16) — `pnpm test:unit` after 291
+
+Two @mp/ui suites failed; both were 289/290 returns fallout, not 291.
+
+1. `purchases-desktop-r2-264.spec.tsx` §1 (the app-wide `overflow:clip` audit). The returns
+   stylesheet added six radius-only rules that clipped with `overflow:hidden`, each of which
+   makes an unreachable scroll container: `.mp-ret .lineitems`, `.mp-ret .retqty`,
+   `.mp-ret .totals`, `.mp-ret-mobile .mrcard`, `.mp-ret-flow .mretcard`,
+   `.mp-ret-flow .retqty--lg` (apps/web/app/globals.css). All six converted to
+   `overflow:clip`; none is a scroller and none caps its height, so nothing else moves. The
+   audit's ceiling of nine legitimate `hidden` rules is untouched.
+
+2. `mobile-picker-and-list-fixes.spec.tsx` §3 guarded a returns product chooser
+   (`pretColMedicine` in ReturnsClient.tsx) that 289/290 removed: the rebuilt flow starts
+   from the invoice being returned and the lines come off it, so there is no long product
+   list left. The guard now covers the purchase desk alone, and a replacement case asserts
+   the §3 RULE still holds for returns — every SearchSelect in both return flows is a
+   bounded, non-searchable list, so all of them stay sheets and none is marked
+   `mobileKind="long"`.
+
+Gates: `pnpm lint` and `pnpm typecheck` both clean. No product behaviour changed.
