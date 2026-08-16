@@ -13914,6 +13914,16 @@ Audited and deliberately LEFT (not form fields): every list/toolbar search box (
 ### §7 — full-file diff
 34 selector families diffed declaration-for-declaration against the recommitted file and recorded in the guard suite as a table: `.factrow*`, `.vlines*`, `.vtot*`, `.entsum*`, `.entryhead*`, `.lineitems--tight*`, `.mgline*`, `.icard*`, `.a4*` (top, parties, party, tbl, foot, terms, tot, sign), `.viewtoggle`, `.nfield*`. One helper artefact resolved: the file states `.entryhead .dtrig`'s height in a GROUPED rule, so the diff targets the ungrouped rule that is genuinely the same rule (the app has to group the height with a matching `min-height`, since the kit's controls carry `min-h-touch`). Screenshot-only helpers stay unshipped: `.icard.is-hovered` absent, `.a4slot` outline inert.
 
+### Gates
+`pnpm lint` clean (one pre-existing unused-disable warning in `@mp/api`, untouched here) ·
+`pnpm typecheck` clean · `invoice-cascade-283.spec.tsx` **99/99 green in 5s** · the neighbouring
+guards re-run and green after amendment: 261 · 264 · 272 · 275 (137) · 276 · 279 · `pdf-writer-279`
+(13) · the four inventory suites (131) · 274/277/`purchases-r4`/`drift-guard`/credit (117).
+**Three prior guards were amended, each with the reason inline, because this spec deliberately
+supersedes them:** 279 §5's expiry width (136 → 156), 275's mockup-parity on the batch cell (a
+second licensed divergence, `NEVER_TRUNCATES`, beside 264's `overflow:clip` one), and 279 §3's
+assertion that the refusal lands on the print dialog.
+
 ### Files
 `apps/web/app/globals.css`; `apps/web/app/(app)/pharmacy/purchase/PharmacyPurchaseClient.tsx`; `apps/web/app/(app)/pharmacy/inventory/PharmacyInventoryClient.tsx`; **new** `apps/web/components/pharmacy/ProductTypeMark.tsx`; `packages/ui/src/components/date-picker.tsx`; `packages/ui/src/lib/floating-panel.ts`; `packages/i18n/src/messages/{en,ur}.json` (9 new keys, parity kept); **new** `packages/ui/src/lib/purchases-desktop-r2-264.spec.tsx`; updated `packages/ui/src/lib/purchases-void-261.spec.tsx` and `packages/ui/src/lib/picker-performance-server-search.spec.tsx` for the two intentional moves above.
 
@@ -15658,3 +15668,249 @@ Each names the exact step to run when the printer arrives:
 7. **Reconnect.** Lock the phone, come back to the tab: state returns to `ready` with no prompt.
 8. **iOS Safari.** The Printing pane must show "Not supported" and the explanation, and printing
    must still work through the dialog.
+
+---
+
+## 282 — pos-print-wiring — DONE (2026-08-15)
+
+**Branch:** `feature/282-pos-print-wiring` — FEATURE. Spec: `/specs/282-pos-print-wiring.md`. No CODEREF in range.
+**Schema:** none. **RLS:** unchanged. **Migrations:** none.
+
+### What was built
+
+**§3 — the one printing entry point.** New `apps/web/lib/print-document.ts`. A single
+`printDocument(document, options)` that resolves the tenant's policy into 280's render options,
+renders, sends through 281's transport, and falls back to the browser dialog (131). One
+discriminated union `PrintableDocument` covers all three thermal documents (`sale` / `refund` /
+`zReport`), so a fourth document is a new branch in one file rather than a fourth private print
+path. `apps/web/lib/printing.ts` (the 281 seam) gained the app context around it:
+`usePrintScope()` (the tenant/branch key, now computed in one place and reused by the Printing
+pane), `loadPrintPolicy()` / `resetPrintPolicy()` (the stored `printMode` + `cashDrawerKick`,
+fetched once per session and shared), and `usePrintDocument(lang)` — what a money screen uses.
+
+**§1 — sale completion.** `PosClient.handlePay` fires `void print({ kind: 'sale', receipt })`
+INSIDE the committed branch, after the `!res.ok` guard and after the state that clears the
+counter. Not awaited: paper is slow and a cashier is not held hostage to it. Because the call
+sits on the commit RESPONSE, a sale that only queued has not printed — the 10-queue never
+prints, and `offline.tsx` is asserted to contain no printing at all.
+
+**Drawer kick.** `printRenderOptions` (281 §2) already had the rule; 282 supplies the job
+context. `isCashDocument()` is true for a sale with any CASH tender of non-zero amount — so a
+split cash+udhaar sale kicks, and a card- or online-only sale does not. Refund slips and
+Z-reports never kick (money going out), and a reprint never re-kicks. The pulse rides in the
+same byte stream as the receipt, so it happens exactly once.
+
+**§2 — the other three.** Recent Sales' reprint prints the server-marked model, so the renderer
+stamps `*** REPRINT ***` on the paper (an unmarked duplicate is a fraud vector at a counter).
+Returns prints the refund slip when the slip overlay opens. Day-close prints the Z-report on
+CLOSE and never on "Preview Z-report" — a preview is a look, not an end of day; the A4 summary
+stays a browser document.
+
+### Decisions recorded
+
+- **The dialog callback is told WHY it is running.** `dialog(fellBack: boolean)`. All four
+  screens already have the printable surface on screen when they print, so the "dialog route"
+  IS that surface and nothing is forced open behind the cashier's back — behaviour is exactly
+  as it was before 281. A print that was ATTEMPTED and FAILED is the one case that opens
+  `window.print()` itself, deferred two frames so the surface is painted first. Shared as
+  `surfaceDialog`, so the rule lives in one place.
+- **`printDocument` cannot throw.** `printOrFallback` already never throws, but the entry point
+  wraps the whole leg anyway: a renderer that trips over a malformed document, or a transport
+  that breaks its own contract, must not become an unhandled rejection inside a committed
+  checkout. The catch raises the same fallback toast, offers the dialog, and reports
+  `{ route: 'dialog', fellBack: true }`. Even a throwing dialog is swallowed.
+- **Unknown policy = the pre-281 behaviour.** `DEFAULT_PRINT_POLICY` is `DIALOG` + no drawer. A
+  failed settings read is NOT cached, so a moment of bad signal cannot pin the till to the
+  dialog for the rest of the day. The Printing pane calls `resetPrintPolicy()` after a save so
+  the very next sale obeys what was just chosen.
+- **The paper stays ASCII English.** A thermal head has no Urdu font; the screen is bilingual
+  and the slip is Latin, which is what every counter here already reads. 280's `labels` hook is
+  left unused rather than fed transliterations nobody asked for.
+- **POS re-fetches `/pharmacy/settings` for the policy** even though it already holds
+  `EffectivePharmacySettings` for its own purposes. One shared module-scope cache beats
+  cross-wiring a screen's state into the print seam; the cost is one GET per session.
+
+### Files
+
+- NEW `apps/web/lib/print-document.ts` — the entry point, the document union, the drawer rule.
+- `apps/web/lib/printing.ts` — scope hook, policy loader/reset, `usePrintDocument`.
+- `apps/web/app/(app)/pharmacy/pos/PosClient.tsx` — print on commit, fired not awaited.
+- `apps/web/app/(app)/pharmacy/recent-sales/RecentSalesClient.tsx` — reprint through the seam.
+- `apps/web/app/(app)/pharmacy/returns/ReturnsClient.tsx` — refund slip through the seam.
+- `apps/web/app/(app)/pharmacy/day-close/DayCloseClient.tsx` — Z-report on close.
+- `apps/web/app/(app)/settings/sections/PrintingSection.tsx` — uses `usePrintScope`, resets the
+  cached policy on save.
+- `packages/ui/jest.config.cjs` — `@mp/escpos` mapped to its SOURCE, like `@mp/shared` before
+  it, so the spec needs no build artefact.
+- NEW `packages/ui/src/lib/pos-print-wiring-282.spec.ts` — 27 tests.
+
+### Gates
+
+- `pnpm typecheck` — clean (31/31).
+- `pnpm lint` — clean; the five web design gates pass (design-drift, token-integrity,
+  tenant-english-only, tenant-search-select, tenant-page-titles). One PRE-EXISTING unrelated
+  warning in `apps/api/src/doctor-portal/doctor-portal.repositories.ts`.
+- Targeted jest: `pos-print-wiring-282` 27/27 pass; `printing-settings-281` + `print-transport`
+  re-run 32/32 pass (the seam and the pane both changed). Full `pnpm test:unit` is the
+  controller's gate, per the standing rules.
+- Vendor untouched.
+
+### Test coverage, against §4's list
+
+- Ready printer → `route: 'silent'`, no dialog, the invoice number in the decoded bytes.
+- `DIALOG` behaviour and an unsupported browser → the browser path, `fellBack: false`.
+- **A throwing transport double** → resolves (never rejects), `fellBack: true`, the dialog
+  opens, the fallback toast is raised in the tenant's language. The same asserted for all three
+  document kinds.
+- Drawer: once on cash; zero on card-only, on a disabled setting, on a reprint, on a refund and
+  on a Z-report. Split cash+udhaar counts as cash.
+- REPRINT is on the paper for a reprint and absent from the original.
+- Grep over EVERY file under `apps/web/app` and `apps/web/components`: none imports
+  `@mp/escpos`, `createPrintTransport`, `printOrFallback` or `new PrintTransport`. Under
+  `apps/web/lib` exactly two files reach the renderer — the two seam files.
+- Source order in `PosClient`: the print call is after the commit guard; `void print(`, never
+  `await print(`. `offline.tsx` contains no printing. Day-close prints inside `closeDay`, before
+  `previewZ` is even defined.
+
+### Awaiting hardware (the 148 rule — recorded, never marked passed)
+
+The physical script is 281's list, unchanged, now with 282's flows attached. When the owner's
+printer arrives: pair it in Settings → Printing; press Test print; make a **cash** sale and
+confirm the receipt prints without the screen waiting and **the drawer pops once**; make a
+**card** sale and confirm the drawer does NOT pop; make a long multi-line sale (the chunking
+test — a truncated receipt is the classic cheap-printer failure); reprint it from Recent Sales
+and confirm `*** REPRINT ***` is on the paper and the drawer stays shut; process a sale return
+and confirm the refund slip; close the day and confirm the Z-report; finally power the printer
+OFF mid-shift and confirm a sale still completes, the toast appears, and the browser dialog
+opens.
+
+**WORK TYPE: FEATURE (branch feature/282-pos-print-wiring)**
+
+---
+
+## 283 — invoice-render-and-inventory-stats — DONE (2026-08-16)
+
+**Branch:** `fix/283-invoice-render-and-inventory-stats` · **Work type:** FIX · **Schema:** none · **RLS:** unchanged.
+**Spec gate:** `.istats__pair` present in both recommitted mockups (3 occurrences each) — passed, so no `[HUMAN_REQUIRED]`.
+No CODEREF covers 283 (the companion files stop at `113-121`).
+
+### §1 THE CAPTURE — required before any fix commit
+
+**1. Which files style the printed invoice.** Exactly one: `apps/web/app/globals.css`. There is no
+separate print stylesheet and no second copy of the document's rules. Four rule groups reach the
+paper: the document block itself (`.mp-pur2 .docsheet …`, 14679–14990); the tenant LIST KIT
+(`.mp-inv2 …`, ~7900–9100) and the purchases scope (`.mp-pur2 …`, ~12880–13000), both of which the
+document renders *inside*; and the file's eight `@media print` blocks, of which one (8566) is the
+REPORTS document's global `body *{visibility:hidden!important}`. The overlay also mounts the shared
+`PrintStyle` (`packages/ui/src/components/print-kit.tsx`), whose `.mp-print-surface *` rule is both
+more specific and later in the document than that one, which is why the invoice still prints.
+
+**2. The computed styles, and which rule won.** Captured with a new tool rather than by reading:
+`packages/ui/src/lib/css-cascade.ts` parses the real `globals.css` (6,516 rules), matches it against
+a mounted invoice with the DOM's own selector engine, and orders the candidates the way the cascade
+does — `!important`, then specificity, then source order. Per element, per property, it reports the
+winner and everything it beat. Findings on the header, a body cell, the batch cell and the totals
+block:
+
+  · `thead th` background → `transparent`, from `.mp-pur2 .docsheet.docsheet *` (0,3,0), BEATING
+    `.mp-inv2 table.tbl th{background:var(--surface-sunken)}` (0,2,2) — which is `#0b1113` in dark
+    theme. That is the black header, and 279's reset does hold it.
+  · `tbody td` colour → `inherit`, from the same reset, BEATING
+    `.mp-inv2 table.tbl td{color:var(--text-primary)}` (0,2,2) — `#f2f5f6` in dark, i.e. white ink
+    on white paper. Also held.
+  · `td.li-batch` → `white-space:nowrap; overflow:hidden; text-overflow:ellipsis`, won by the
+    DOCUMENT'S OWN rule (0,4,2). Nothing leaked it.
+  · `.totals` → the reset beats `.mp-pur2 .totals{width:320px;background:var(--surface-card);border;
+    radius;shadow}` (0,2,0). Held.
+  · **`tbody tr:last-child td` border-bottom → `0`, won by `.mp-inv2 table.tbl tbody tr:last-child
+    td` (0,3,4) at globals.css:8924, BEATING the document's `.tbl tbody td` (0,3,2).** A LEAK.
+  · **`.pill` line-height → won by `.mp-inv2 .pill` (0,2,0).** A second leak; same value, no visible
+    defect, closed anyway.
+
+**3. Why the mockup's rules were not winning.**
+  (a) For the black header and the invisible ink: they were the cascade, and 279 already closed them.
+      The capture confirms it rather than assuming it, and now asserts it on every run.
+  (b) For the missing rule under the last row of every page: 279's isolation rule was built on the
+      stated reasoning that the screen leaks "top out at (0,2,2)". One does not. `:last-child` plus
+      four type selectors puts `.mp-inv2 table.tbl tbody tr:last-child td` at (0,3,4), above the
+      (0,3,0) reset and above the (0,3,2) document rule. The table therefore did not END, it stopped
+      — and the constant 26px gap below the well then reads as slack. **That is the owner's "extra
+      space after the table", reported three times.**
+  (c) For the ellipsised batch number: it was never a leak, which is exactly why three rounds of
+      diffing against the mockup could not find it. `print-invoice.html` line 289 ITSELF declares
+      the truncation and the app transcribed it faithfully. A per-declaration diff will report that
+      as clean forever. §2 of this spec overrules the mockup.
+
+**The finding is the deliverable, so it was made permanent.** `invoice-cascade-283.spec.tsx` walks
+every node of the document under both media and fails the build if ANY declaration on the paper is
+won by a rule outside `.mp-pur2 .docsheet*`. Round four cannot be another cascade surprise.
+
+### §2 the document
+Isolation reset gains `line-height:inherit` and `text-overflow:clip` — the second makes truncation
+structurally unavailable to the paper rather than merely unasked-for. The last-row rule is restated
+at (0,4,3). The mockup's truncating declarations are removed from `.li-batch`, `.li-qty`,
+`.fact .v` and `.pfoot__l`, which now wrap with `overflow-wrap:anywhere` (a batch code has no
+spaces to break at). **Consequence handled:** a cell that truncates can never make a row taller, so
+`lineWeight` counted only the item name; it now counts the batch too (`SHEET_BATCH_CHARS = 20`, the
+124px column's content box at 10px tabular), taking the MAX of the two wraps, since the row height
+is the taller cell and not their sum. Without that, removing the ellipsis would have traded a
+truncated batch for a clipped row. Totals block verified against the spec's list — subtotal with
+line count, discount, tax, grand total, amount paid, balance due, payable-to — in that order; it was
+already correct and is now asserted in order. `.pushdown` on `.sigs` and `.contline` confirmed.
+
+### §3 Save PDF — the cause, named
+279 replaced `window.print()` with a real writer and kept the dialog as a fallback for a document
+the base-14 fonts cannot write. **That fallback fired on every single purchase invoice.** The
+amount-paid row is `− {money}` with U+2212 MINUS SIGN (PharmacyPurchaseClient.tsx:5686/5708/5500),
+WinAnsi has no code point for it, `isWinAnsi` returned false before a byte was written, and the
+owner pressed Save and got Ctrl+P. It was never a print-flow bug; it was one character.
+CLIENT-SIDE remains the choice, for 279's reason — one document, two exits, no second layout.
+`pdf-writer.ts` now maps the typographic marks that have an EXACT WinAnsi counterpart (U+2212 and
+the other hyphens → `-`, fraction slashes → `/`, primes → quotes, the exotic spaces → space, the
+zero-widths dropped); `measureText` measures the byte that will be written, not the source
+character, so the horizontal scale is right on every negated figure. Anything whose WinAnsi
+counterpart would say something DIFFERENT is still refused — no rupee sign for "Rs", no digit
+substitution. `window.print()` is gone from both catch branches. Filename is normalised for a
+filesystem in `downloadPdf` → `Purchase_invoice_PI-00012.pdf`; the tab title keeps the spaced form.
+**STATED LIMIT, not hidden:** the repo carries no embeddable Unicode font (only latin-subset
+`.woff2`), so an Urdu-language document still cannot be written and now says so in a toast and
+stops. Handing the owner the print dialog under a Save label was the defect, not the remedy. Closing
+it needs a font asset, which is an owner decision rather than code. `pdA4SavePdfHint` (the string
+that told him to look in the dialog) is deleted from both catalogs and replaced with
+`pdA4SavePdfUnsupported`.
+
+### §4 the expiry column
+`LINE_COL_WIDTHS[10]` 136 → **156**, the owner's own figure. Row total 1,446 → 1,466px; the grid
+still scrolls inside `.lineitems__scroll`, so nothing else on the line moves.
+
+### §5/§6 View item stat cards
+`.pricebox`'s four equal tiles are replaced by the recommitted mockup's two cards: `.istats__card
+--price` carrying the `__pair` (cost | `__rule` | sale) under one eyebrow with the margin as the
+card's single `.mgnbadge` — GREEN positive, **RED negative** (271 §1), neutral when there is no cost
+to measure against — and `.istats__card--stock` carrying base units with the unit name and the pack
+breakdown on its reserved sub-line. `PriceCell` becomes `PriceFig` and keeps 271's three pricing
+conditions verbatim, with the `.s` row rendered EMPTY rather than omitted so all three states are
+the same card height. **The discount did not disappear:** the mockup's pricing card holds a pair and
+has no third slot, so it moves to the key/value block, still naming its origin when the last
+delivery is the answer. `.mgnbadge` had never existed in the app and is brought across with the
+family. **Both scopes named on every selector** (`.mp-inv2` AND `.mp-inv2-sheet`): View item is a
+`DrawerContent` on the desk and a `MobileSheet className="mp-inv2-sheet"` on the phone, and 273
+already recorded what declaring a family for only the first of those looks like in a phone
+screenshot. Per-declaration diff against the recommitted desktop mockup is clean for all 20
+`.istats*`/`.mgnbadge*` selectors, and for all 54 invoice families — the two `.pfoot__l` truncation
+declarations excepted on purpose, which the suite states as an explicit allowance rather than
+silence.
+
+### Decisions recorded
+· The guard, not the patch, is the deliverable for §1 — three rounds failed because nobody could ask
+  the cascade a question, and a fourth would have failed the same way.
+· Client-side PDF retained over a server render: a second renderer is a second layout.
+· Urdu PDF left open with the reason and the missing asset named, rather than shipping a dialog.
+· Discount moved rather than dropped: a presentation step may not remove a field a tenant can set.
+
+### Files
+`apps/web/app/globals.css` · `apps/web/app/(app)/pharmacy/purchase/PharmacyPurchaseClient.tsx` ·
+`apps/web/app/(app)/pharmacy/inventory/PharmacyInventoryClient.tsx` ·
+`packages/ui/src/lib/css-cascade.ts` (new) · `packages/ui/src/lib/invoice-cascade-283.spec.tsx` (new) ·
+`packages/ui/src/lib/pdf-writer.ts` · `packages/ui/src/lib/dom-to-pdf.ts` ·
+`packages/i18n/src/messages/{en,ur}.json`.
