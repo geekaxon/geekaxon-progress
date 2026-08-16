@@ -16323,3 +16323,50 @@ untouched). `pnpm typecheck` clean. Targeted runs: `packages/ui` full suite 118/
 `packages/i18n` parity green.
 
 WORK TYPE: FEATURE (branch feature/287-held-sale-restore-and-stock-drift)
+
+---
+
+## 288 — invoice-pdf-logo-and-spacing — DONE (2026-08-16)
+
+**WORK TYPE:** FIX. Branch `fix/288-invoice-pdf-logo-and-spacing`. Spec `/specs/288-invoice-pdf-logo-and-spacing.md`. No schema, no RLS, no migration, no i18n key. Money paths untouched: nothing in this step reads, folds or formats a figure.
+
+### §1 — the logo was on the screen and not in the PDF
+
+**The mechanism, recorded (the spec asked for this explicitly so the thermal and A4 documents do not re-hit it).** The owner's diagnosis — "the generator renders the document without fetching the logo" — was right about the symptom and wrong about the cause, and the difference matters because the two call for different fixes. 279's `collectJpegs` re-fetched each `<img src>` and embedded the bytes by **DCTDecode passthrough**. Passthrough only accepts a JPEG. A tenant's document mark is a **PNG or an SVG essentially every time** (a transparent background is the whole point of a letterhead mark, and JPEG has none), so `readJpeg` returned `null`, the source never entered the image index, the walker found no image for it and the file was written without the mark **and without an error**. The skip was deliberate, documented and silent — the code even explained why it preferred no mark to a re-encoded one. It was not a remote URL, not auth and not a same-origin restriction.
+
+A **second** trap sat behind it for the tenants whose mark genuinely is a JPEG: the re-fetch is a second request for an asset the page has already loaded, so an authenticated or expiring URL can fail at save time while the on-screen document keeps showing the mark it already holds.
+
+**The fix (`packages/ui/src/lib/dom-to-pdf.ts`).** `collectJpegs` → `collectImages`. The mark is taken from the element the browser has **already decoded** and re-encoded to **base64 JPEG at generation time**, so the PDF carries the image instead of a reference, whatever format the tenant uploaded. Order of attempts, each a fallback for the one before: (1) draw the live `<img>` onto a white canvas at 3× the drawn box and read it back with `toDataURL('image/jpeg', .92)` — **no network at all**, so it works offline, behind auth and for a `data:` mark; (2) if that canvas is tainted (cross-origin mark served without CORS headers), re-load the same source through a blob URL, which is same-origin by construction, and draw that; (3) skip, which is now the third answer rather than the first. Compositing onto white is not a compromise — paper is white and opaque, the same reasoning `onWhite` already applies to every translucent ink on the sheet. `rasterSize` caps any mark at 1600px on its long side so a logo can never dominate the file. All three lockup conditions (275 §1) work: A and B draw an `<img>` through `LockupMark` and are embedded; C is type, which the walker has always drawn.
+
+### §2 — the trailing space above the footer, FOURTH report: measured, then fixed
+
+**The cause, named.** `.pushdown` pins the page's last BLOCK to the well's floor, so the gap from that block to the footer has always been a constant 26px — which is why three rounds reported success. The owner is not looking at that gap. He is looking at the one between the last **table row** and the footer, and the slack `.pushdown` absorbs collects exactly there. The paginator budgeted in **row units** (13/18/11, "one row with its generic beneath") while the well is **992 CSS px**. Two different units either side of one equation; no adjustment of 13/18/11 could ever close it. It is **not** a fixed-height table container and **not** a page-break rule reserving space for a header that is not always drawn — both were checked and both are innocent.
+
+**Measured, from the document's own fixed geometry** (the sheet is entirely px-literal, so this is arithmetic rather than a screenshot; `trailingGaps()` is exported so the same numbers can be read off a real render). Reference: a 3-page invoice of single-line rows. Row height is ~39.6px (the quantity cell's unit sub-line dominates, so a row costs the same with or without a generic name). Page-1 chrome 334.6px, continuation chrome 120.1px, continued-line tail 21.3px, well floor→footer 26px.
+
+| | rows | room for rows | unused | **last row → footer** |
+|---|---|---|---|---|
+| BEFORE p1 | 13 | 636.1 | 121.3 | **168.6px** |
+| BEFORE p2 | 18 | 850.6 | 137.8 | **185.1px** |
+| AFTER p1 | 16 | 636.1 | 2.5 → 0 | **47.3px** |
+| AFTER p2 | 21 | 850.6 | 19.0 → 0 | **47.3px** |
+
+**The fix, two halves.** New `packages/ui/src/lib/sheet-metrics.ts`: `measureSheet` reads the rendered sheet through `offsetTop`/`offsetHeight` (layout numbers — a CSS `transform` does not change them, so the phone's 355‰ preview measures the same document as the desktop's), and `paginateByHeight` re-chunks against those pixels. `A4Document` draws the weight draft first (something must exist before it can be measured, and it is still the only answer where there is no layout engine — the unit suite, any server render), then re-paginates until a pass changes nothing, capped at 5 passes. An unmeasured page kind falls back to the **smallest** capacity known: conservative costs one extra page for one pass, optimistic overfills a page and the well eats a line. Second half: `.tbl--fill` (`flex:1 1 auto`) gives the residue — under one row, by definition of "full" — to the table, whose rows share it, so the last row's bottom rule lands **on** the well's floor. Never on the final page, where the floor belongs to the notes, totals and signatures. Fill is applied only once the loop has settled: a stretched row's height is not its natural one.
+
+The well (992px), `.pushdown`, `.contline pushdown` and `sigs pushdown` are untouched — they were never the defect. 283's weight paginator, `SHEET_ROWS_*` and `SHEET_BATCH_CHARS` all stay as the first pass. The dialog subtitle now counts the pages that were rendered rather than the draft's.
+
+### §3 — the row hover inside the print preview
+
+Same family as 283's finding, hiding in the one place 283's guard could not look: `matchingRules` **skipped every state rule** on the reasoning that "a state pseudo-class describes a moment the captured document is not in". The paper is in that moment whenever the pointer is over it. `.mp-inv2 table.tbl tbody tr:hover {background:var(--surface-hover)}` is (0,3,3), above the isolation reset at (0,3,0), and the document's line table wears the same `.tbl` inside the same `.mp-inv2` scope. Closed at (0,4,2) by `.mp-pur2 .docsheet .tbl tbody tr:hover {background:transparent}` — on the ROW, not the cell, so the zebra band survives the pointer. The app's own tables keep their hover. `css-cascade.ts` gained `CascadeContext.states` + `withoutStates`: naming a state puts the document into it, the rule keeps its original specificity, and a rule carrying an unnamed state is still skipped. The 288 suite now runs the whole guard with the document hovered and fails the build on any winner from outside `.mp-pur2 .docsheet*`.
+
+### §4 — the two header boxes: the recorded answer
+
+**Compared, and the owner was not confused about what he saw — only about where it comes from.** The preview, the print and the mockup **all three agree**: nothing about those boxes is media-dependent. The sheet is 794px in both media (the `@media print` rule restates the same 794, and `flex:none` is why the dialog's centred flex column cannot stretch it), the grid is `1fr 1fr` in both, so each box is 350px in both, and `print-invoice.html` declares the same grid. What differs is **physical size, not geometry**: 794 CSS px is ~21cm of paper, but the same 794px on a 24" monitor is nearer 26cm, so an identical box looks wider on the screen than in the hand. **Nothing changed** — narrowing the preview to match the impression would make it lie about what comes out. The comparison is a test (screen vs print winners, declaration by declaration) rather than an assertion, so it stays true.
+
+### Files
+
+`packages/ui/src/lib/dom-to-pdf.ts` (§1), `packages/ui/src/lib/sheet-metrics.ts` (new, §2), `packages/ui/src/lib/css-cascade.ts` (§3 state capture), `packages/ui/src/index.ts`, `apps/web/app/(app)/pharmacy/purchase/PharmacyPurchaseClient.tsx` (§2), `apps/web/app/globals.css` (§2 fill + record, §3 hover, §4 record), new `packages/ui/src/lib/invoice-pdf-and-spacing-288.spec.tsx`, and three prior specs updated for the changed markup (275, 261 call sites).
+
+### Gates
+
+`pnpm typecheck` — clean, 31/31. `pnpm lint` — clean (one pre-existing unused-disable warning in `@mp/api`, untouched by this step). `pnpm test:unit` / `build` are the controller's per CLAUDE.md §6. No vendor file touched, no dependency added, no secret.

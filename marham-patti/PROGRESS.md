@@ -7,8 +7,8 @@
 ## Current Status
 - **Project:** Marham Patti — multi-tenant white-label healthcare platform.
 - **Phase:** **PHASE 26** — keyboard r2, Returns, realtime.
-- **Last completed:** **287 — held-sale-restore-and-stock-drift**.
-- **Next:** specs/288-invoice-pdf-logo-and-spacing.md
+- **Last completed:** **288 — invoice-pdf-logo-and-spacing**.
+- **Next:** specs/289-returns-desktop.md
 - **Group order:** 288 → 289 → 290 → 291. One step, then stop.
 - **289/290 move stock and money** — 108's return logic is FROZEN and reused, never reimplemented.
 - **RULES:** branch before any commit; capture evidence before fixing.
@@ -17,8 +17,8 @@
 - **Parked:** wired-print helper; thermal logos/QR; per-page menu permissions.
 
 ### Recent steps
+- **288 — invoice-pdf-logo-and-spacing** — DONE (2026-08-16) — the logo travels with the file, and the paper is measured, not guessed.
 - **287 — held-sale-restore-and-stock-drift** — DONE (2026-08-16) — a refresh keeps the hold, and a shrunk shelf warns before it oversells.
 - **286 — command-menu-and-keyboard-fixes** — DONE (2026-08-16) — one dialog, one command menu, nine tenant jumps.
-- **285 — shortcut-settings-and-overlay** — DONE (2026-08-15) — the shop's own key map, and a ? card that tells the truth.
 
 > Older steps in PROGRESS-HISTORY.md
