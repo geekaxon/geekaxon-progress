@@ -17428,3 +17428,88 @@ The spec's §4 asks for verification on the deployed page with two live sessions
 deploy-time check and is not available inside the build session; everything it names is covered
 by the two suites above against the same code paths, and the mechanism capture stands in place
 of the live before/after screenshots.
+
+## 299 — realtime-completion — DONE (2026-08-17)
+
+**Branch:** `fix/299-realtime-completion` (WORK TYPE: FIX). Spec: /specs/299-realtime-completion.md. No CODEREF in range.
+**Schema/RLS:** none. FEFO, the commit-time stock check and all arithmetic byte-identical — nothing in this step
+touches an allocator, a total or a write path. Vendor console untouched.
+
+### §2's required record — which surfaces were ALREADY subscribed, and which were not
+
+ALREADY LIVE before this step (291/292 wired them; verified by reading the live files, not the history):
+- Low stock & near expiry (`StockAlertsClient`) — full re-read of `/pharmacy/inventory/alerts` on the event, so
+  rows, the low/expiry counts, the near-expiry buckets and value-at-risk already moved together, both directions.
+- Dashboard (`DashboardClient`) — full `load()` on the event: stock cards, stock value, value at risk, alert counts.
+- Inventory list AND its medicine drawer (`PharmacyInventoryClient`) — `refreshStock` re-reads the list and, when a
+  drawer is open, re-reads THAT medicine's detail, which is where the FEFO batch block comes from. §2's drawer item
+  was therefore already satisfied; a test now pins it so it cannot quietly regress.
+- New purchase entry (`NewPurchaseClient`) and purchase return (`NewPurchaseReturnClient`) — availability re-read.
+- POS — live since 187, on its own socket.
+
+NOT SUBSCRIBED, fixed here:
+- **The sidebar/topbar count that points at the alerts screen.** `useNavCounts` served `/pharmacy/nav/counts` from a
+  60s module cache, so the badge could sit a full minute behind the screen it links to (212 §1.1's urgency figures
+  ride in the same payload). It now subscribes to the shared hook and re-reads on the event, with a `force` flag that
+  bypasses the in-flight dedupe — a request that started before the movement can only answer with pre-movement figures.
+- **The command menu's product results** (`GlobalSearch`). It draws no stock NUMBER today (a product hit's secondary
+  is the generic name), so there was no stale figure to point at; what it does draw is a live list of products, from a
+  search that is only as good as the moment it ran. It now re-reads its current query on a stock event, but ONLY while
+  open on a query of at least the minimum length, and QUIETLY — through a separate effect that replaces the rows in
+  place rather than re-running the debounced search, which would flash the skeleton over results somebody is choosing
+  from and reset nothing useful. The day a stock signal is added to that row it is live for free.
+
+OUT OF SCOPE, recorded so the next round does not re-open them: the sale-return entry screen shows no availability
+figure (it returns stock, it does not draw against it); Recent Sales subscribes to a DIFFERENT endpoint
+(`/pharmacy/recent-sales/stream`, gated on `sales.recent.view` rather than `pharmacy.sell`) for `sale.completed`, so
+it is not part of the stock subscription and keeps its own reader.
+
+### §3 — one subscription layer, and now one socket
+
+291 gave every screen the same hook but left each MOUNT opening a connection, and three files carried near-identical
+copies of the SSE reader (the counter, the customers screen, the hook). That was survivable while one screen
+subscribed at a time. It stopped being survivable the moment the SHELL had to subscribe for §1's badge: every
+pharmacy page would have held two sockets, three with the command menu open, for the same tenant's same events.
+
+So the read loop moved down into `apps/web/lib/stock-live.ts` once. `subscribeLiveStream` (module-private, deliberately
+not exported) refcounts listeners onto ONE connection per tab: the first listener opens it, the last closes it, a
+listener joining an already-open stream is told it is connected WITHOUT being told it missed anything (it just loaded),
+and a reconnect tells every listener at once so each refetches. Two supported ways in, and only two: `useLiveStream`
+for the raw feed (every scope, unthrottled) and `useStockLive` for the coalesced stock slice. The batcher stays
+PER-SCREEN even though the socket is shared, so one screen's throttle window and its hidden-tab hold remain its own.
+
+Migrated off private sockets: `PosClient` (its `usePosRealtime` is now a one-line delegate to `useLiveStream`; ~85
+lines of loop and its `drainFrames` deleted) and `CustomersClient` (maps `customer.balance.updated` out of the shared
+subscription; ~75 lines deleted). Grep now proves it: exactly one file in `apps/web` names `'/pharmacy/pos/stream'`.
+
+Unchanged rules, still enforced in the one place: coalesce + throttle (400ms, `StockBatcher`), hidden tab holds and
+refetches on becoming visible, dropped socket refetches on reconnect with 1s→30s bounded backoff, and 292 §2.3's
+"a refusal is an answer" (401/403/404 stops quietly) — with the refusal now cleared when the last listener goes, so a
+later sign-in on the same tab is not held to it.
+
+### Decisions taken without pausing (per the autonomy rule)
+- The command menu gets the SUBSCRIPTION, not a new stock figure. The spec says "where a stock signal is shown" and is
+  behaviour-only with no mockup; inventing a stock column in the command palette would be a design change nobody asked
+  for. Recorded above so the choice is visible rather than silent.
+- Two earlier census assertions were updated where the mechanism legitimately moved, not to make new code pass:
+  291's "the POS keeps its own 187 feed" now asserts the counter JOINS the shared layer (it still consumes the same
+  three scopes off the same endpoint), and round-4 §2's backoff assertions now read the shared module. Both edits
+  carry the reason in a comment beside them.
+
+### Files
+- `apps/web/lib/stock-live.ts` — rewritten around the refcounted single connection; adds `useLiveStream` + `TenantLiveEvent`.
+- `apps/web/lib/nav-counts.ts` — live counts, TTL-bypassing forced re-read.
+- `apps/web/components/shell/GlobalSearch.tsx` — quiet live re-read of the open query.
+- `apps/web/app/(app)/pharmacy/pos/PosClient.tsx`, `apps/web/app/(app)/pharmacy/customers/CustomersClient.tsx` — off their own sockets.
+- `packages/ui/src/lib/realtime-completion-299.spec.tsx` — new census (24 assertions: §1 badge+screen, §2 every
+  surface + the drawer + the menu's open-only/quiet rules, §3 the one-owner sweep over every `.ts(x)` in `apps/web`,
+  the refcount, and the rules that stayed in the layer).
+- `packages/ui/src/lib/realtime-and-push-291.spec.tsx`, `packages/ui/src/lib/round-4-verification.spec.tsx` — moved assertions.
+
+### Gates
+`pnpm lint` clean (the one remaining warning is a pre-existing unused eslint-disable in `apps/api`, untouched here).
+`pnpm typecheck` clean. Per CLAUDE.md the agent does not run `test:unit`/`build`; every literal the new and edited
+census suites assert was verified against the live sources before committing. §4's two-live-session acceptance
+(selling into low stock appearing on the alerts screen with the badge, a bulk import repainting once, a hidden tab
+refreshing on return, a reconnect refetching) needs the deployed system and two sessions — UNVERIFIED here, per the
+148 rule, and not asserted as though it had passed.
