@@ -17197,3 +17197,80 @@ pass-through shape (same property, stronger).
 **Gates.** `pnpm lint` clean (design-drift, token-integrity, tenant-english-only all ✓);
 `pnpm typecheck` clean; the new spec and 284/287 run green locally. No schema, no migration,
 vendor untouched.
+
+---
+
+## 296 — new-purchase-as-page — DONE (2026-08-17)
+
+**Branch:** `fix/296-new-purchase-as-page` · **Spec:** `/specs/296-new-purchase-as-page.md` · **Schema:** none · **RLS:** unchanged.
+
+### What changed
+
+New purchase stopped being a state flip on the Purchases list (`DeskView = 'list' | 'entry'`) and
+became `/pharmacy/purchase/new`, a route of its own, matching what 289 did for the two Returns
+entries. The form itself was NOT retyped: the new page imports `PurchaseEntry`,
+`MobilePurchaseEntry` and `NewSupplierPanel` from `PharmacyPurchaseClient.tsx` unchanged, which is
+how spec §2 ("everything already built comes with it") is guaranteed at its cause rather than
+re-reviewed field by field.
+
+**Files**
+
+- NEW `apps/web/app/(app)/pharmacy/purchase/new/page.tsx` — server shell, `title: 'New purchase'`, noindex.
+- NEW `apps/web/app/(app)/pharmacy/purchase/new/NewPurchaseClient.tsx` — the route: loads the supplier
+  book, the catalogue (with `useStockLive`, moved here with the picker it feeds) and the tenant's
+  pricing rules; claims `purchase-entry` chrome with `hideDock`; hosts the `+ New supplier` dialog;
+  Cancel and a saved purchase both `go('/pharmacy/purchase')`.
+- NEW `apps/web/app/(app)/pharmacy/purchase/purchase-draft.ts` — `LineDraft` (moved out of the client),
+  `PurchaseDraft`, the `mp.pharmacy.purchase.draft` key, and load/save/clear with a shape guard.
+- NEW `apps/web/lib/leave-guard.ts` — one registered guard; a document CAPTURE click listener for
+  anchors, and `leaveBlocked()` consulted by `useClientNav` for button navigations. The handler
+  returns whether it TOOK the navigation, so a screen already leaving is not blocked by itself.
+- `apps/web/lib/client-nav.tsx` — `useClientNav` asks `leaveBlocked(href)` FIRST, before any layer closes.
+- `PharmacyPurchaseClient.tsx` — `DeskView`, both entry branches, the list's `medicines` /
+  `pricingRules` / `loadMedicines` / `useStockLive` / `supOpen` and the orphaned supplier dialog are
+  gone; the four "New purchase" controls go to the new `NEW_PURCHASE_HREF`; the mobile claim is now
+  unconditionally `purchases`. New `usePurchaseDraft(lang)` hook holds the eight entry fields for BOTH
+  tiers, restores in an effect (never a lazy initialiser — that would be a hydration mismatch),
+  gates the persist effect on the restore having run, and stops writing once discarded.
+- `packages/i18n/src/messages/{en,ur}.json` — `pdDraftRestored`.
+- NEW `packages/ui/src/lib/new-purchase-as-page-296.spec.ts`.
+
+### Decisions
+
+- **The abandon guard is on the LEAVE, on both tiers.** The desk had none at all (only the phone got
+  one in 265 §6); it now has the same `requestLeave` / `leave` / `ConfirmDialog` shape, and the leave
+  carries a DESTINATION so a blocked in-app link continues to where the user was actually going.
+- **`useLayerHistory` and `useLeaveGuard` arm on the SAME condition (`started.length > 0`).** This is
+  load-bearing, not tidiness: `closeLayersForNavigation()` calls every registered layer's close, so a
+  layer standing while somebody else navigates gets asked to leave mid-navigation and answers by
+  starting a second one. Arming the layer only when there is something to lose means every navigation
+  that could reach it is stopped by the leave guard first.
+- **A refresh is deliberately NOT warned about.** The draft is written down and comes back, so a
+  confirmation there would be one nobody reads. The `beforeunload` route was rejected for that reason.
+- **The idempotency key lives in the draft.** A reload landing between Save and the server's answer
+  would otherwise mint a fresh key and be free to double-stock the same delivery.
+- **A restored draft re-asks for its products' unit chains** (`restoredIds`, set once). Without the
+  chain a restored line cannot resolve the unit it was entered in and `canSaveEntry` would refuse a
+  purchase that is in fact complete.
+- **No skeleton on the entry.** Both pickers ask the server when they open (228 §1) and the form is
+  usable immediately; a spinner over it would be a delay the screen invents.
+
+### Money path
+
+Untouched and asserted as such: the same body to the same `POST /pharmacy/purchase` from both tiers,
+`purchaseEntryTotals` / `derivePayStatus` / `purchaseOwed` unchanged, and the draft module imports no
+money function at all — the stored draft is text.
+
+### Older suites re-pointed (facts unchanged, files moved)
+
+`purchases-mobile-r2-265` §3/§6, `purchases-screens-273` (chrome claim), `realtime-and-push-291`
+(`STOCK_SURFACES` → the new entry client), `purchases-mobile-260` (the supplier sheet's call site),
+`medicine-select-276` (`medicineLabel` now lives in the draft module). `usePurchaseDraft` was placed
+ABOVE `LastHint` so 273's `slice(LastHint → PurchaseEntry)` audit still sees only the hint.
+
+### Gates
+
+`pnpm lint` clean (including design-drift, token-integrity, tenant-english-only, search-select,
+page-titles). `pnpm typecheck` clean, 31/31. `pnpm test:unit` / `build` left to the controller per
+AGENT.md; every assertion in the new suite and in the five re-pointed ones was verified against the
+live sources by direct string/count comparison before hand-off.
