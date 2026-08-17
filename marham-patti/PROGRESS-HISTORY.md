@@ -16832,3 +16832,117 @@ Two @mp/ui suites failed; both were 289/290 returns fallout, not 291.
    `mobileKind="long"`.
 
 Gates: `pnpm lint` and `pnpm typecheck` both clean. No product behaviour changed.
+
+---
+
+## 292 — realtime-and-notifications-diagnosis — DONE (2026-08-17)
+
+**Branch:** `fix/292-realtime-and-notifications-diagnosis` · WORK TYPE: FIX
+**Spec:** /specs/292-realtime-and-notifications-diagnosis.md
+
+### §2 — THE FIVE FINDINGS, recorded before the fix commit
+
+**How they were established, and its one limit.** The spec asks for these to be established
+empirically on the deployed staging system. This agent has no access to that box — no host, no
+credentials, no shell on it, and its reverse-proxy configuration is not in the repo (infra, not
+code). So findings 1, 4 and 5 were established by DRIVING THE REAL CODE PATHS and observing what
+came out (the suites below are that observation, kept), and finding 3 by tracing the exact
+delivery chain from publisher to painted pixel. Finding 2 is the one that could NOT be confirmed
+without the live proxy, and it is recorded as what it is: the strongest remaining explanation,
+resting on facts about our own code that ARE certain, with a fix that costs nothing if the
+diagnosis is wrong. That distinction is stated here rather than smoothed over.
+
+**FINDING 1 — is `stock.updated` published at all? YES, on every sale path, and the spec's own
+premise about the transport is wrong.** There is no Redis channel to subscribe to. `REALTIME_BUS`
+binds `InMemoryRealtimeBus` and nothing else in the repo implements the port; PM2 runs `mp-api`
+at `instances: 1, exec_mode: fork`, so a single process both publishes and serves every SSE
+connection and an in-process bus is sufficient. Driving `commitPosSale` and `finalize` through the
+real service puts one coalesced event per medicine on the bus, carrying the NEW on-hand in base
+units. The publisher was never the problem — 291 was right about that much.
+
+**FINDING 2 — does the browser receive it? NOT RELIABLY, and this is the transport finding.**
+What is certain about our code: no SSE response sets `X-Accel-Buffering: no`, and no stream emits
+anything until its first real event — no keep-alive, ever, on any of the five SSE surfaces. What
+follows from that on any ordinary reverse proxy: response buffering is on by default and releases
+a body when the buffer fills or the response ends, and an SSE response does neither; and an idle
+read timeout (60s by default) closes a connection that has been silent. A pharmacy is silent for
+far longer than a minute. The client's own reconnect backs off to 30s, so the desktop spends real
+stretches of the day not connected at all. The shape fits the report exactly — "no update, no
+warning, nothing", on every realtime surface at once, including the bell. NOT CONFIRMED against
+the live proxy; recorded as unproven.
+
+**FINDING 3 — if it arrives, does the screen repaint? YES for Inventory, the alerts page and the
+catalogue; NO for a live CART LINE; and the dashboard can be locked out entirely.** 291's hook is
+correctly mounted and the batcher is sound (leading-edge flush, so a single sale paints at once).
+Two real defects underneath it: (a) `lineAvailable` in the POS prefers the line's `batches`, read
+ONCE when the line was added, and the event patched only `stockQty` — so 287 §2's drift warning
+kept measuring the cart against a shelf that no longer existed. That IS the owner's "214 in a
+cart, stock dropped, saw nothing". (b) The shared hook rides `/pharmacy/pos/stream`, which is
+behind the POS feature flag and `pharmacy.sell`. Inventory and the alerts page sit on the same
+gate so they are unaffected, but a dashboard-only viewer holds neither and reconnected into the
+same 403 every thirty seconds for the length of their shift.
+
+**FINDING 4 — what raises the low-stock event? NOTHING ON THE SALE PATH. This is the answer to
+the owner's second report.** Before this step `emitAlerts` had exactly two callers: a manual stock
+adjustment, and `scanAlerts` — a seam whose own comment describes it as what "a 112 worker /
+schedule calls", and no such worker or schedule exists. Selling, the only way stock actually falls
+in a shop, raised nothing at all. 214 → 194 against a level of 200 could not have produced a
+notification by any route. This is the shape §2 predicted ("the low-stock check exists only in a
+batch job"), confirmed.
+
+**FINDING 5 — is a push subscription registered, and did a send attempt occur? NO ATTEMPT WAS
+POSSIBLE, and there is a second break behind the first.** No `LOW_STOCK` event was ever raised on
+that sale (finding 4), so no fan-out, no send, no delivery row — the question of whether the
+owner's device is subscribed never arose. Behind it: `INVENTORY_ALERT_EMITTER` was bound to
+`LoggingInventoryAlertEmitter`, which writes a line to the log and stops. `pharmacy.alerts.ts` has
+said since 104 that "112 rebinds it to the realtime engine". 112 never did. So every inventory
+alert this pharmacy has raised in its life — including from the adjustment path, which DID raise
+them — ended in `pm2 logs` and reached no notification row, no bell and no phone. Fixing finding 4
+alone would have changed nothing.
+
+### §3 — the fix
+
+- **Transport.** `X-Accel-Buffering: no` set once in `main.ts` on any request that asked for
+  `text/event-stream`, so it cannot drift across five controllers; and `withSseHeartbeat` puts a
+  frame on the wire the instant a stream opens and every 20s after, which survives a proxy that
+  buffers regardless and any idle timeout. Applied to the counter's stream (what every stock
+  screen rides) and the bell's. The frame carries the server's clock and nothing else; every
+  existing consumer already filters on the event's own `type`, and the bell now skips it
+  explicitly.
+- **The crossing, on the sale path.** `raiseLowStockCrossings` runs after the idempotency seam in
+  both `commitPosSale` and `finalize`, from the on-hand the compensating writes already returned
+  and the units the document took. It fires on the TRANSITION — above the level before, at or
+  under it after — coalesced to one decision per (branch, medicine), so the same product on two
+  cart lines crosses once and a shelf already under its level stays quiet however many more are
+  sold. A replay decrements nothing and announces nothing. Every failure is swallowed: the sale is
+  already committed.
+- **Near expiry where a movement makes it true.** Raised from goods-in for a lot that arrives
+  ALREADY inside the window — the one case where a movement rather than the calendar makes it
+  true, and worth saying while the supplier's van is still outside.
+- **Delivery.** `RealtimeInventoryAlertEmitter` replaces the logging binding: it still logs (the
+  durable record 104 asked for) and then hands the event to the 112 engine — persisted, fanned to
+  every routed recipient's bell, and pushed to entitled devices under 291 §2.3's permission and
+  preference gates, unchanged.
+- **The live cart line.** `PosLine.liveQty` records what a `stock.updated` actually delivered, and
+  `lineAvailable` takes the smaller of that and the lot table. Only ever when an event arrived, so
+  a resumed hold's seeded figure cannot overrule anything.
+- **The 403 loop.** The shared hook stops on 401/403/404 instead of reconnecting into the same
+  refusal forever. The screen simply is not live, which it already survives.
+
+**FEFO, the commit-time stock check and every arithmetic path: untouched.** Nothing added here can
+refuse a sale, move a figure or change a price — all of it is about what somebody is TOLD.
+
+### Verification
+
+- New suite `apps/api/src/pharmacy/low-stock-on-sale-292.spec.ts`: the owner's own numbers
+  (214 → 194 against 200) raise exactly one alert carrying the product's own threshold; a sale
+  that stays above raises none; a shelf already under stays quiet across two more sales; two lines
+  of one product cross once; a replay announces nothing; a product with no level set says nothing;
+  an emitter that throws does not fail the sale. Plus the delivery binding both ways (LOW_STOCK →
+  `lowStock`, NEAR_EXPIRY → `expiryNearing`, a throwing engine swallowed) and the keep-alive
+  emitting immediately while carrying real events through untouched.
+- `pnpm lint` and `pnpm typecheck` clean (one pre-existing unrelated warning in
+  `doctor-portal.repositories.ts`).
+- NOT verified by this agent: the two-live-session and real-device acceptance in §4 — it needs the
+  deployed staging system and a phone, which is the owner's test to run. Findings 1, 3, 4 and 5
+  and every fix above are proven in code; finding 2's live behaviour is not.
