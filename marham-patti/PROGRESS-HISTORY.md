@@ -17513,3 +17513,124 @@ census suites assert was verified against the live sources before committing. §
 (selling into low stock appearing on the alerts screen with the badge, a bulk import repainting once, a hidden tab
 refreshing on return, a reconnect refetching) needs the deployed system and two sessions — UNVERIFIED here, per the
 148 rule, and not asserted as though it had passed.
+
+---
+
+## 300 — pos-shortcut-map-final — DONE (2026-08-17)
+
+**Branch:** `fix/300-pos-shortcut-map-final` · **Spec:** `/specs/300-pos-shortcut-map-final.md` · no CODEREF · no schema, no RLS change.
+
+### §1 — the map is the owner's list
+
+`packages/shared/src/pharmacy-shortcuts.ts` is the one author of the map, so §1 was applied there and every
+surface (engine, `?` dialog, Settings → Keyboard, the printable block) followed without being edited to match.
+
+Four owner decisions, applied and recorded in code:
+
+* **The nine jump slots move from `Alt+1…9` to `Ctrl+1…9`.** His list had `Alt+5` as both "Sale discount" and
+  "Jump to slot 5". The counter's key is the one that cannot move — cashiers already press it — so the slots
+  moved, which frees every `Alt+digit` at once rather than settling this one collision.
+* **`Alt+P` (Purchases) and `Alt+R` (Reports) removed.** And with them `Alt+I` (Inventory) and `Alt+D` (Day
+  close), because §1's GLOBAL group is the whole global map and lists no page jumps. This also ends the
+  shadowing 284 §2 needed: `Alt+I` and `Alt+D` are the counter's outright now, not the counter's by scope.
+  `Ctrl+K` still reaches every page, which is what makes a removed jump safe.
+* **Payment methods move to `Shift+1…4`**, so plain digits type the amount received immediately. The tile
+  hints moved with them (`Shift+1`, not a bare `1`) — a hint that names the old key is worse than none.
+* **"Agree the prescription warning" is `Ctrl+Enter`.** Which is why `Ctrl+Enter` is no longer an alias of
+  "proceed to payment": one key, one meaning.
+
+**Removed, and recorded in a new exported `REMOVED_SHORTCUTS` catalogue** (§1: "Record what was removed") —
+each entry carries what it was and why it went, so "where did `Alt+P` go" is answerable from the map itself:
+the four page jumps; the aliases `Shift+F8` (all-held), `Alt+T` (sale date) and `Ctrl+Enter` (take payment);
+the `customer` panel group entirely (`Ins` create / `Del` detach were `Alt+N` and `Alt+Shift+C` said twice);
+and `D` on the cart row. `F3` survives as the ONE alias, because his list says "Alt+C **or** F3".
+
+`D` deserves its own line: 294 §7 struck it from the shortcut LIST on the grounds that the cart row has no
+affordance for it, and left it bound. §1 removes it from the engine too, and the line-discount dialog goes
+with it because `D` was its only way in — a surface nothing can reach is worse than no surface. **The money
+layer is untouched**: a line still carries `manualDiscountPct`, `lineDiscPct` still totals with it, a parked
+cart still restores one and the server still re-totals identically. Only the entry point is withdrawn, and
+`DEFERRED_SHORTCUTS` holds the key for the day the row grows an affordance.
+
+**One scope judgment, recorded because it is a judgment.** §1 lists no New Purchase keys, and a literal
+reading of "anything not listed above is removed" would delete 285 §4's four (`F4` save, `Alt+S` supplier,
+`Alt+V` invoice no, `Alt+D` date). They are KEPT. §1's groups are the counter's surfaces — at the counter,
+navigation, cart line, discount, payment, held sales, global — and the owner supplied a list of what he
+presses while ringing a sale; New Purchase is a different screen with its own spec that this one never
+mentions. Deleting a shipped, spec'd feature of another screen on an inference from an omission is the worse
+error of the two. If the owner wants them gone he will say so, as he did for `Alt+P` and `Alt+R`.
+
+### §2 — the nine navigation defects
+
+1. **Tab from search now TRIGGERS the customer field** (`next.focus()` then `next.click()`), opening it
+   exactly as `Alt+C` and `F3` do. **This reverses 294 §5**, deliberately and on the owner's instruction: the
+   counter flow is scan → Tab → type the customer, and a second keystroke to open what Tab just landed on is
+   paid for out of the cashier's hands. Written down beside the code AND in the 294 spec file (that describe
+   block is now `300 §2.1 …(reversing 294 §5)`, with the assertions inverted rather than deleted) so no later
+   round restores the old behaviour citing the principle. What 294 §5 really established still holds: the
+   picker never opens because focus merely ARRIVED — there is still no `onFocus` in the field component.
+2. **`↑`/`↓` on cart lines auto-scroll.** New `revealCartRow`: `scrollIntoView({block:'nearest'})` was never
+   enough here, because `nearest` reasons about the SCROLLPORT and this screen has a sticky toolbar pinned
+   across its top (`.pos-sticky`) and a sticky total bar across its bottom (`.posfoot`). A row tucked under
+   either is "in view" by the browser's arithmetic and invisible by the cashier's — exactly the report. The
+   reveal is computed against the gap those two leave, moves by the smallest amount that clears it, and does
+   not move a row already inside it. `scrollParent` finds the real scroller rather than assuming the window.
+3. **Tab off the customer field triggers the sale date**, matching the post-selection hand-off (294 §6).
+4. **When the date is absent or disabled, focus goes to the first cart line; on an empty cart, to the scan
+   field.** §2.3 and §2.4 are one function (`focusSaleDate`) with two callers, because the defect §2.4 reports
+   is precisely that the two routes disagreed about the disabled case.
+5. **`U` opens the unit panel and `Tab` closes it**, instead of leaving the list standing open behind a
+   cursor that had already gone. Handled on the panel (which is where focus is after `U`) and on the trigger.
+6. **`Tab` from the unit select goes straight to quantity; `Shift+Tab` from the row's close control likewise.**
+   The `+` / `−` steppers are `tabIndex={-1}` — they were simply the next focusable nodes in the row. Nothing
+   is lost to the keyboard: `+` / `−` still step from the focused ROW, and the box is directly typeable.
+7. **`←`/`→` inside the discount block** move between `Rs` and `%` and between the preset pills, each run
+   walked on its own and stopping at its ends (the held rail's rule, 294 §1). `Tab` still walks the whole
+   block — the arrows were added, nothing was traded away.
+8. **The discount block shows a focused state AS A WHOLE** — `.disc:focus-within` keeps the accent on the
+   card while any part of it holds focus. The inner stops also paint on plain `:focus`, not `:focus-visible`
+   alone: 294 §3's lesson, and the arrows move focus programmatically.
+9. **`←`/`→` across the payment method tiles and the amount pills**, one shared `moveRow` handler on all
+   three button rows (methods, quick tenders, the advance row's two chips); disabled buttons skipped.
+
+### §3 — Alt+N inside the payment dialog
+
+The counter's engine is stood down behind this layer (a modal owns the keyboard, 201 §1), so the key is
+answered by the panel's own window listener, before the modifier bail-out and before the typing guard — the
+walk-in-on-udhaar case is exactly the one where the cashier is mid-typing in the amount field when they find
+out they need an account. It calls the same `onAddCustomer` the "Add customer to continue" button calls.
+
+The panel's modifier guard is now per-branch rather than at the door, because three of its keys carry
+leaders. `Shift+1…4` reads the digit from `e.code` (`Shift+1` arrives as `!` on a US layout) and stands down
+inside the prescription-reference field (`data-payref`) — free text, where `Shift+1` is a `!` somebody meant.
+
+### §4 — the three surfaces, and plain words
+
+Nothing hand-lists a row: the `?` dialog, Settings → Keyboard and the printable block all read
+`fixedShortcutsForScreen` + the resolved registry, so §1's removals landed in all four places at once. The
+settings slot table's pre-load fallback moved from `Alt+${slot}` to `Ctrl+${slot}`. Glyphs are gone from the
+catalogue — `⏎` → `Enter` (navSelect, payConfirm, heldRestore, confirmDefault, purchaseNewLine), `⌫` →
+`Backspace` — and from the payment tile hints. Arrows and `+`/`−` stay as arrows and signs: those are what is
+printed on the key, not a glyph standing in for a word.
+
+### Tests
+
+New: `packages/ui/src/lib/pos-shortcut-map-final-300.spec.tsx` (44 tests). §1 is asserted BOTH ways round —
+every key the owner listed resolves, AND the counter/global registries contain nothing else — because a test
+that only checks the positive half is how a map grows a key nobody asked for. §2's nine are asserted on the
+lines that fix them (each defect was a focus that WAS set or a key that WAS bound, so a jsdom render would
+agree with the broken build as readily as the fixed one), plus the CSS declarations for §2.8.
+
+Updated, each because the map genuinely changed rather than to make a test pass: `shortcut-engine-284`
+(aliases; the scope test now asserts the counter's keys are unbound OFF the counter, since there is no page
+jump left to shadow), `shortcut-settings-285` (conflict + shadowing re-expressed against the slots, which are
+what "global" now means), `command-menu-and-keyboard-286` (`Ctrl+<n>`), `pharmacy-shortcuts.service`,
+`keyboard-round-3-294` (§5 inverted as above; §6 re-pointed at `focusSaleDate`; the payment row),
+`pos-credit-auto-only-and-udhaar-chip` (the `.paychips` regex, now that the row carries `onKeyDown`).
+
+### Gates
+
+`pnpm lint` clean (the one warning is a pre-existing unused eslint-disable in `doctor-portal.repositories.ts`,
+untouched). `pnpm typecheck` clean, 31/31. Targeted suites green: `packages/ui` 102 suites / 2911 tests, and
+`apps/api` `src/pharmacy` + `src/pharmacy-shortcuts` 64 suites / 1075 tests. Vendor untouched; no schema, no
+migration, no money logic changed.
