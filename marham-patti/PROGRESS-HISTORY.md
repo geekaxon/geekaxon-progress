@@ -17128,3 +17128,72 @@ confirm-dialog, globals.css, the shared catalogue (as data) and both message fil
 `pnpm typecheck` clean, 31/31. Targeted suites run rather than the full `pnpm test:unit` (controller owns that):
 `@mp/ui` 122 suites / 2968 tests PASS, `apps/api src/pharmacy-shortcuts` 4/92 PASS, `@mp/i18n` 4/28 PASS,
 `apps/api purchase-invoice-272` 1/14 PASS. Vendor untouched; no schema change, so no `prisma generate`.
+
+## 295 — alert-copy-audit — DONE (2026-08-17)
+
+**Branch:** `fix/295-alert-copy-audit`. WORK TYPE: FIX. Schema: none. RLS: unchanged.
+
+**§1/§3 — the mispairing MECHANISM, found and closed.** The owner's first example ("Remove the
+unpriced line before taking payment" over "This sale needs a prescription confirmed…") was not a
+bad sentence, it was a bad *structure*: `directSaveBlock()` in `apps/web/app/(app)/pharmacy/pos/
+PosClient.tsx` returned a lone body string, and its one caller nailed a FIXED heading —
+`t('pharmacyPos.v7.blockedCommit')` — over whatever came back. Four different refusals, one
+pricing headline. Fixed once, at the shape: the guard now returns `{ title, why }` — exactly what
+`saleBlock` has returned since 287 — so the two halves are chosen in the same place and cannot be
+paired wrongly. `saleBlock` is passed through WHOLE (`if (saleBlock) return saleBlock;`, was
+`return saleBlock.why;`), and the toast reads `toast.error(blocked.title, { description:
+blocked.why })`. The class cannot recur without someone deliberately re-splitting the pair.
+
+**§3 — the two reprints.** `Ctrl+P` and `Ctrl+Shift+P` both said "Reprinting INV-48" though they
+reach different sales. `reprintLast` now picks its key off `scope`, on the refusal as well as the
+success. Retired `pharmacyPos.v18.reprinting` and `.reprintFailed` from both catalogs.
+
+**New keys (`pharmacyPos.v20`, en + ur, parity held at 6238 leaves each):** `blockedEmptyTitle`
+"Nothing on this sale yet", `blockedRxTitle` "This sale needs a prescription", `blockedCreditTitle`
+"Udhaar limit reached", `reprintingDevice` "Reprinting {number} — last sale on this device",
+`reprintingTenant` "Reprinting {number} — last sale on any counter", `reprintFailedDevice`
+"Could not reprint this device's last sale", `reprintFailedTenant` "Could not reprint the last
+sale from any counter".
+
+**§2 — the sweep, before → after.** Fourteen messages carried a phrase that told the reader
+nothing. Every one now names its own subject and its next move:
+- `errorTitle` "Something went wrong" → "This screen could not load"
+- `errorBody` "An unexpected error occurred. You can try again, or head back home." → "Try again, or head back home."
+- `genericError` "Something went wrong. Please try again." → "That did not go through — try again."
+- `serverErrorRetry` "Something went wrong — please try again." → "The server did not answer — try again in a moment."
+- `billError` "Something went wrong." → "The billing change did not go through — try again."
+- `commError` "Something went wrong." → "The commission change did not go through — try again."
+- `acctError` "Something went wrong." → "The accounts entry did not go through — try again."
+- `paAiError` "Something went wrong. Please try again." → "The assistant could not answer that — ask again."
+- `dpError` "Something went wrong. Please try again." → "That did not save — try again."
+- `platform.error` → "This console page could not load — try again."
+- `settings.twoFactor.error` → "That did not go through — try again."
+- `marketplace.error` → "This profile could not load — try again."
+- `demo.errorBody` → "The sandbox did not finish setting up — try again in a moment."
+- `ui.alertError` "Something went wrong." → "That did not save — try again."
+- `ui.alertSuccess` "Saved successfully." → "Saved · INV-0142" (the showcase now models §3's rule)
+- `notifSaleSyncedBody` "Invoice {invoice} synced successfully." → "Invoice {invoice} reached the server."
+Urdu updated line-for-line alongside; the Urdu blanket "کچھ غلط ہو گیا" is gone from the catalog too.
+
+**Left alone deliberately.** The rest of the catalog was read and passed: `pharmacyPos.v5.discard*`
+and `v11.clearBody` already state the consequence in figures (customer, lines, total); the settings
+and purchase confirmations all name what is lost; `hcStatus_FAILED`, `rdFail`, `importInvalid` and
+friends are STATUS LABELS in table cells, not messages, and shortening them would be worse. The
+audit's value is what it found, not rewriting good copy. Two notes for later: `errorTitle`/
+`errorBody` are unreferenced legacy keys (fixed anyway, since the catalog is the deliverable), and
+`packages/ui/src/lib/error-states.ts` still holds its English inline — a 255 decision, untouched
+here. The catalog has no `{id}`-style placeholder anywhere (checked; zero hits).
+
+**Tests.** New `packages/ui/src/lib/alert-copy-audit-295.spec.ts` (12 tests): the guard returns a
+pair and every refusal carries a title; the four 284 §3 refusal cases survive; the toast reads both
+halves off one object and no longer mentions `blockedCommit`; the prescription condition appears in
+heading AND body; four scope-specific reprint keys exist, are used, differ, and name their scope;
+the retired keys are gone; no catalog leaf matches error-occurred/successful/something-went-wrong
+(en) or کچھ غلط ہو (ur); no raw id placeholder; success names the invoice; the two destructive POS
+bodies carry `{lines}` and `{total}`; every `<ConfirmDialog>` on a tenant screen passes both a
+title and a description. Updated `held-sale-restore-and-stock-drift-287.spec.tsx:114` to the new
+pass-through shape (same property, stronger).
+
+**Gates.** `pnpm lint` clean (design-drift, token-integrity, tenant-english-only all ✓);
+`pnpm typecheck` clean; the new spec and 284/287 run green locally. No schema, no migration,
+vendor untouched.
