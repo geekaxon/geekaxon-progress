@@ -16946,3 +16946,106 @@ refuse a sale, move a figure or change a price — all of it is about what someb
 - NOT verified by this agent: the two-live-session and real-device acceptance in §4 — it needs the
   deployed staging system and a phone, which is the owner's test to run. Findings 1, 3, 4 and 5
   and every fix above are proven in code; finding 2's live behaviour is not.
+
+## 293 — returns-screens-to-mockup — DONE (2026-08-17)
+**Branch:** `fix/293-returns-screens-to-mockup` · WORK TYPE: FIX · spec `/specs/293-returns-screens-to-mockup.md` · no CODEREF in range · schema/RLS untouched.
+
+### §1 THE FINDING — STYLING (SCOPE), NOT DATA SHAPE
+The spec required this be established before a line of fix, and the answer is unambiguous.
+
+The API hands back `saleNo`, `customerName`, `at`, `lineCount`, `total` as five separate fields, and 289's
+component already rendered five separate elements using the mockup's own class names. What 289 never did was
+put those names anywhere the rules could reach. The mockup's `.pos-opt` family had been ported into
+`globals.css` TWICE — under `.mp-pos2` (10047) for the POS and under `.mp-pur2` (14061) for purchases — and
+never under `.mp-ret`. The Returns entry screens mount as `.mp-inv2 .mp-ret`, so every rule missed and the
+browser's defaults showed through, which accounts for each symptom in the screenshots exactly:
+
+  * `.pos-opt__t b { display:block }` never applied → `<b>` and `<small>` stayed inline and ran together.
+    That IS `TEPI-00013Testing Supplier` / `INV-46Walk-in`. Nothing was concatenating them.
+  * `.pos-opt { display:flex }` never applied → the row stayed a plain `<button>`, and the UA's own
+    `button { text-align:center }` took over. That is the "centred text floating in empty space".
+  * `.supmark`'s 30px box lives only under `.mp-pur2` (12900); 289 shipped `.mp-ret .supmark--none` (a colour)
+    with no base rule for it to modify → the identity mark collapsed to a bare glyph in its own column.
+  * `.stepnav` and `.pghead` WERE scoped to `.mp-ret`, which is precisely why the frame looked right. The
+    "partial consumption" §1 describes is entirely explained by which families got a `.mp-ret` prefix.
+
+Consequence for the fix: CSS scope + row anatomy. No component was rewritten to defend against a shape, and
+283's lesson holds in the other direction too — assuming data-shape here would have cost the round.
+
+### PER-SELECTOR DIFF (full-file, §4) — families found UNREACHABLE from `.mp-ret` and now fixed
+`.pos-opt`, `.pos-opt__t`, `.pos-opt__t b/small` (desktop step 1, BOTH screens — the reported defect);
+`.supmark` base + `--lg`/`--xs` (desktop step 1 rows, mobile `.mpickrow`, mobile `.mfacts__hd`);
+`.mfacts` + `.mfacts__hd` and children (declared under `.mp-pur2` only — the PHONE's step-2 fact strip had no
+anatomy on either return flow); `.reqmark` (declared under `.mp-pur2` only — every required `*` on both
+surfaces rendered as body-coloured punctuation); `.input-wrap` (step 3's restocking-fee percent affix).
+
+Families verified CLEAN (already reachable, no change): `.pdrawer--ret`, `.cart--ret`, `.rcard*`, `.rcards`,
+`.batchchip*`, `.fee`, `.pill--sale|--purchase|--pending|--rejected`, `.formsec*`, `.lineitems*`, `.stepnav*`,
+`.srcdoc*`, `.totals*`, `.entryfoot*`, `.convline`, `.soldqty`, `.lineerr*`, `.retqty*`, `.rreason*`,
+`.mretcard*`, `.mretline*`, `.mreason`, `.mstep*`, `.mcam*`, `.mtotalbar*`, `.mpickrow*`, `.mfeed`, `.mrow*`.
+Note on the sheets: `MobileSheet` portals with `mp-mobile mp-mobile--live` on its own wrapper, so `.mrow__ic`,
+`.mrow__id`, `.field*` and `.sheet__*` reach inside the reason/method sheets. That was checked, not assumed.
+
+### WHAT CHANGED
+* `globals.css` — new `.mp-ret` block (after `.formsec`): `.supmark` base/`--lg`/`--xs`, `.reqmark`,
+  `.input-wrap`, and the mockup's picker family `.pos-sel__panel` (+ `--inline` for the static, in-column
+  case the mockup's own reference pane draws with `position:static;width:100%`), `.pos-sel__search` + `.n`,
+  `.pos-sel__list`, `.pos-opt` (+ `:hover`, `.is-hi`, `:focus-visible` → `--focus-ring`), `.pos-opt__t`,
+  `.pos-opt__amt` (right-aligned, tabular — the mockup carries this as an inline style on the trailing `<b>`),
+  `.pos-opt--skel`, `.pos-sel__empty`, `.pos-results__foot`, `.mfacts*` (desktop 4-across; `.mp-ret-flow`
+  override to 2-up per `returns-mobile.html` 3224, at one class higher so it wins on specificity, not order).
+  `.mp-ret .pos-opt > svg` is a DIRECT-child rule so the accent glyph does not recolour the nested
+  `.supmark--none` mark 289 already styled.
+* Both entry clients — step 1 rebuilt to the mockup panel: search row with a live "Searching… / N matches"
+  read-out (`role=status`), three-row skeleton that holds the panel height, `.pos-sel__empty` with a second
+  line saying what else to try, `.pos-opt` rows (identity mark · invoice number · party/date/lines · amount),
+  `.pos-results__foot`. `.mp-list` / `.mp-field` / `.tbl-toolbar__search` removed from step 1 entirely.
+  Rows are real `<button>`s (Tab+Enter works with no arrow keys); on top of that the search field takes
+  ArrowUp/ArrowDown/Enter driving the mockup's `.is-hi`, and `setHi(0)` fires with every new answer so the
+  highlight can never point past the list.
+* Step 1 selected state — `.srcdoc` kept, plus the mockup's `.mfacts` strip (sale: sold-on / counter / sale
+  total / already returned; purchase: received-on / supplier / invoice total / lines). This gives
+  `alreadyRefunded` a home: it had been a loose `<p class="mp-subtitle">` floating under the card, which is
+  the same "unstyled text in empty space" the spec objects to. The mockup's purchase strip shows Outstanding
+  and Already-returned; neither is on that read model, so the strip states what IS known rather than dashes.
+* Step 2 — `.reqmark` on the two required column heads (mockup 5446/5447); select-all checkbox in the header
+  check column AND in `.lineitems__foot` (mockup draws it in both, 5443/5492). Select-all skips lines with
+  nothing left to return (and, on purchases, nothing on hand) and routes every quantity through the shared
+  `clampReturnQty`, so it cannot tick what the commit would refuse.
+* Step 3 desktop — the two fields moved onto the mockup's `.formrow2` with the kit's `.field` /
+  `.field__label` / `.field__help` anatomy (was legacy `.mp-field`/`.mp-label`/`.mp-subtitle`, none of which
+  carry the mockup's label weight or help size), required mark on refund method, percent affix on the fee.
+* i18n — 10 new keys, en + ur: `rtnMatchCount`, `rtnNoSalesHint`, `rtnNoPurchasesHint`, `rtnResultsLabel`,
+  `rtnFactCounter`, `rtnFactAlreadyReturned`, `rtnFactSupplier`, `rtnFactLines`, `rtnFindPurchaseHelp`,
+  `rtnSelectAll`.
+
+### DECISIONS RECORDED
+* The `.kbd` shortcut chips the mockup puts in `.lineitems__foot` (`Space` toggle, `Ctrl+Enter` process) were
+  NOT added. `.kbd` is scoped to `.mp-kit` and, more to the point, neither shortcut is bound yet — 294 is
+  keyboard round 3 and owns them. Advertising a key that does nothing is worse than omitting the chip. 294
+  can add both together.
+* Arrow-key roving was built here rather than deferred to 294, because §5 asks for rows that are
+  "keyboard-selectable" and the mockup's `.is-hi` is the affordance that states it. The `<button>` rows carry
+  the accessibility on their own; the arrows are the counter gesture on top.
+* `.field__label` is `justify-content:space-between` in the mockup, so the required `*` sits at the label
+  row's far end. That is the mockup's own rendering and every other screen in the app already does it —
+  reproduced rather than "corrected".
+
+### RETURN LOGIC — BYTE-IDENTICAL
+Spec 108's service untouched. Both clients POST the same bodies to the same endpoints
+(`/pharmacy/returns/sale`, `/pharmacy/returns/purchase`), still preview through `returnItemsSubtotal`,
+`saleRefundTotal`, `restockingFeeFromPct` and still clamp through `clampReturnQty`. Asserted, not assumed.
+
+### GATES
+`pnpm typecheck` — clean (31/31). `pnpm lint` — clean, including design-drift, token-integrity,
+tenant-search-select. New suite `packages/ui/src/lib/returns-screens-to-mockup-293.spec.ts` — 92/92 green;
+it includes a machine per-selector reachability probe over every family §5 names, plus a self-honesty case
+that asserts a POS-only family (`.mpick__hd`) is still reported UNREACHABLE — if that ever flips, the probe
+has gone blind and every other case in the file is worthless. The three existing suites that touch these
+clients (`pos-credit-and-customer-attribution`, `mobile-picker-and-list-fixes`, `realtime-and-push-291`) and
+the i18n parity suite were re-run: 110/110 green.
+
+### STILL OWED TO THE OWNER
+§5 asks for verification on the deployed page and a real device, both themes. That is the owner's confirmation
+after the controller deploys, and it is not something this step can claim. What is claimed here is the source:
+every named family reachable, the row anatomy rebuilt, the three search states present on both flows.
