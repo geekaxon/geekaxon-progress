@@ -17274,3 +17274,157 @@ ABOVE `LastHint` so 273's `slice(LastHint → PurchaseEntry)` audit still sees o
 page-titles). `pnpm typecheck` clean, 31/31. `pnpm test:unit` / `build` left to the controller per
 AGENT.md; every assertion in the new suite and in the five re-pointed ones was verified against the
 live sources by direct string/count comparison before hand-off.
+
+## 297 — pdf-badges-and-mobile-warning — DONE (2026-08-17)
+
+**Branch:** `fix/297-pdf-badges-and-mobile-warning` (FIX). Spec: `/specs/297-pdf-badges-and-mobile-warning.md`. No CODEREF in range. Schema unchanged, RLS unchanged.
+
+### §1 — the corners and the dot: ONE report, TWO causes
+
+The owner reported the saved PDF's status badge as square and dotless and the Supplier / Received-at boxes as square. Diagnosed separately, because they are separate defects:
+
+**THE CORNERS — the measurer (`packages/ui/src/lib/dom-to-pdf.ts`).** A background has always been drawn as a `PdfRectOp` carrying its radius; a BORDER was drawn as four independent straight lines, corner to corner (`borderOps`). Consequences, both visible on the owner's file:
+  * a bordered box with NO background (`.party`, the Supplier and Received-at boxes) had nothing rounded drawn for it at all — four square-cornered lines and no fill;
+  * the status badge, whose fill IS a pill, still read square, because the square stroke sat on top of the round fill and overshot its arc.
+Not a renderer setting and not a property form: the renderer is ours and it never had a rounded-stroke path. `PdfRectOp` already supported `stroke` + `lineWidth` + `radius` (279 §3) and `rectPath` already drew the four Béziers — nothing in the writer needed changing.
+**Fix:** when a box's four sides are ONE stroke (same width, colour, style, all drawn) and its corners share one radius, the border is emitted as a single stroked round-rect on the border's CENTRE line — box inset by half the border width, radius reduced by the same half, which is where CSS puts the border's own curve. Everything else — a one-sided rule (`.fact`'s `border-right`), mixed widths or colours, a square box — still takes the four-line path, so a 1px hairline stays a hairline and the line table is byte for byte what it was.
+Two pure helpers were extracted and exported so the decision is testable without a browser: `uniformBorder(sides)` and `resolveRadius(values, box)`. `resolveRadius` also closes a latent bug the old `radiusOf` had: a PERCENTAGE radius was read as px, so `border-radius:50%` on a 6px dot would have been read as 50px. It now resolves against the box.
+
+**THE DOT — the document, not the measurer.** The dot on screen was never the document's own: it came from `.mp-inv2 .pill::before` (0,2,0), a SCREEN rule reaching the paper — the same cascade-leak family 279 named and 283/288 kept closing. 279's own note recorded it as "a 6px status dot the printed badge never had"; the mockup (`print-invoice.html`) declares no dot either, only the `gap:4px` that has been waiting for one. The isolation reset `.mp-pur2 .docsheet.docsheet *` matches ELEMENTS, so it could not reach a pseudo-element; and the PDF measurer reads nodes and their client rects, and a `::before` has neither — so the browser painted a dot the file physically could not see. Rendering pseudo-elements in the walker was rejected: it would mean re-implementing their box model against `getComputedStyle(el, '::before')`, which carries styles but no geometry — a second layout, the one thing `dom-to-pdf.ts` exists not to do.
+**Fix, per the spec's "if the dot is a pseudo-element, it becomes a real element":** `SheetPill` renders `<i class="pill__dot" aria-hidden>`, the sheet declares `.mp-pur2 .docsheet .pill__dot` (6px, `border-radius:999px`, `background:currentColor`, `flex:none` — so it carries the pill's own colour), and `.mp-pur2 .docsheet .pill::before { content:none }` closes the leak so the dot is drawn ONCE. The screen leak stays a screen rule: the app's own badges keep their dot.
+
+**The debit note and the A4 day-close summary — checked, and the finding recorded rather than a change invented.** Neither has a Save-PDF exit: `renderSheetsToPdf` has exactly one caller in the repo (`PharmacyPurchaseClient`), the A4 debit note prints through `window.print()` from `ReturnsClient`, and the Z-report's A4 is `InvoiceDoc` from the print kit on the `.mp-print-surface` path. The browser renders their radii natively, which is why they show no defect today. The fix is in the SHARED measurer, so both are covered the moment either gains a Save-PDF exit — which is the honest form of "carry the same fix" here, and better than porting a rule into a document that does not use the renderer.
+
+### §2 — the phone's over-stock warning
+
+287 anchored the sentence to the bar (right) as a `position:absolute` overlay at `bottom:calc(100% + 7px)` (wrong). An out-of-flow box takes no space from anything: it took none from the bar it hangs off and none from the page below it. So at 360px the sentence wrapped to two or three lines hanging over the cart and reading as sitting on the bar, and `.mp-pos2--mobile { padding-bottom:80px }` — a constant sized for neither the bar (66px at a 90px + safe-area offset) nor the sentence — left the last cart line underneath as well.
+
+**Owner decision applied:** the warning and the bar are ONE fixed stack now. New `.mbarwrap` carries the position the bar had (`inset-inline:14px`, `bottom:calc(90px + env(safe-area-inset-bottom,0px))`, `z-index:32`) and lays out as a column with the old 7px gap; `.mbar` keeps every other declaration and is no longer positioned itself, so the bar does not move by a pixel. The warning is a flow row above it — it cannot be over anything. It wraps rather than truncating (`white-space:normal`, `overflow-wrap:anywhere`, `text-wrap:pretty`, no `text-overflow`), and its icon holds the FIRST line (`align-items:flex-start` + 1px nudge) instead of floating in the middle of a three-line block.
+The page's reservation is measured, not guessed: a `ResizeObserver` on the stack writes `--mbar-h` onto the mobile section, and `.mp-pos2--mobile` reserves `calc(var(--mbar-h,66px) + 90px + 14px + env(safe-area-inset-bottom,0px))`. That is correct with no warning, with one line and with three — which no constant could be. The 66px fallback keeps a page without a `ResizeObserver` sane.
+
+### Money
+Untouched. No total, rounding, allocation or `@mp/shared` call is in the diff; the sentence, its keys and the `saleBlock` predicate are exactly 287's.
+
+### Files
+* `packages/ui/src/lib/dom-to-pdf.ts` — `uniformBorder`, `resolveRadius`, box-resolved `radiusOf`, rounded-stroke branch in `borderOps`, the diagnosis recorded in full.
+* `packages/ui/src/index.ts` — the two helpers exported.
+* `apps/web/app/(app)/pharmacy/purchase/PharmacyPurchaseClient.tsx` — `SheetPill` draws `.pill__dot`.
+* `apps/web/app/globals.css` — `.pill__dot`, `.pill::before{content:none}`; `.mbarwrap`, `.mbar`, `.mbar__why`, `.mp-pos2--mobile` padding.
+* `apps/web/app/(app)/pharmacy/pos/PosClient.tsx` — the stack wrapper, the measurement, `--mbar-h`.
+* `packages/ui/src/lib/pdf-badges-and-mobile-warning-297.spec.ts` — new suite (§1 pure-unit + writer round-trip + source; §2 source + CSS).
+* `packages/ui/src/lib/held-sale-restore-and-stock-drift-287.spec.tsx` — the one 287 assertion 297 supersedes, moved to where the anchoring now lives.
+
+### Gates
+`pnpm lint` clean (one pre-existing unused-disable warning in `apps/api/src/doctor-portal/doctor-portal.repositories.ts`, untouched by this step). `pnpm typecheck` clean. `pnpm test:unit` / `test:e2e` / `build` are the controller's, per the build loop. Vendor untouched. No schema change, so no `prisma generate`.
+
+### Owner verification still required (the spec asks for it and no test replaces it)
+Generate a PDF from the deployed purchase invoice and hold it beside the on-screen document: rounded corners on the badge, the Supplier and Received-at boxes, the notes and payment boxes and the totals emphasis block, and the dot present in the badge's own colour. On a phone at 360px and at a larger width, with one line over stock and with several, confirm the warning sits above the total bar and the last cart line clears both.
+
+---
+
+## 298 — stale-allocation-and-stock-guard — DONE (2026-08-17)
+
+**Branch:** `fix/298-stale-allocation-and-stock-guard` (WORK TYPE: FIX). Spec: `/specs/298-stale-allocation-and-stock-guard.md`. No CODEREF exists for this range. Schema and RLS unchanged.
+
+### 1.1 — the evidence, captured before the fix
+
+The spec asked for the mechanism to be confirmed and recorded, and for the hypothesis to be
+corrected if the evidence disagreed. It disagreed in one detail, which is worth stating plainly.
+
+A live two-session run was not available inside this build session, so the capture is from the
+code as it stood, and it is exact:
+
+* `PosLine.batches` — the line's LOT TABLE — was written in exactly two places: `addRow`
+  (when the line is added) and `resumeHeld` (which already re-read it per product). Nothing
+  else ever rewrote it. `setQty` did not. The localStorage restore did not.
+* Every figure the counter derived came off that table on every render: `splitByKey` ran
+  `allocateFefo(l.batches, lineBaseQty(l))`, the per-lot prices came from the same lots, and
+  `lineAvailable` / `lineUnitCap` / the 287 drift check read the same sum. So **lowering the
+  quantity DID re-run FEFO** — against the shelf as it stood when the line was added. The
+  allocation before the change drew from the lots as they were at add-time; after the change it
+  drew from the same lots, fewer units. Never from the lots as they are now.
+* The only correction was `liveQty` (292 §3), the last `stock.updated` this tab happened to
+  receive. `usePosRealtime` has no refetch after a dropped socket and no visibility handling
+  (unlike `useStockLive`, which has both), so a counter that missed an event went on quoting a
+  shelf that no longer exists.
+* `restoreLines` restores `batches` but not `liveQty` (it is not in the restored shape at all),
+  so after a refresh even that correction was gone — 183 on the shelf, 194 in the cart, no
+  warning. That is §2's report exactly, and it has the same root cause as §1.
+* The commit error is the server's own: `pharmacy.service.ts` plans from a FRESH lot read
+  (`listBatchesForFefo`) and throws `insufficientStockError` when the plan is short (line ~3725)
+  or when a planned lot no longer holds its draw (~3936). The refusal changes no figure on the
+  counter, so lowering to the same stale number failed again; deleting the line and re-adding it
+  was the only path that re-read the lots, which is exactly why it was the only way through.
+
+**Where the 1.1 hypothesis was wrong:** the line does not *store* an allocation. It stores the
+SHELF the allocation is computed from, which is worse — every derived figure inherits the
+staleness, including the price. And the error at the till is the server's fresh-plan refusal,
+not a client-side guard. The prescribed fix is the same either way: re-read the lots at every
+moment the world may have moved.
+
+### What was built
+
+* **`packages/shared/src/pharmacy-pos.ts` — `evaluatePosLineStock`.** ONE function returning the
+  shelf reading, the over-sell cap in the selected unit, the FEFO plan and the drift, so the
+  realtime path and the load path cannot answer differently (§2's "two implementations is how
+  they diverged"). `posLineStockDrift` is unchanged and is now called from here; `allocateFefo`
+  is called with `qty * factor` exactly as before — FEFO ordering byte-identical.
+* **PosClient — `reallocate` / `scheduleRealloc`.** Re-reads `/pharmacy/pos/medicines/:id/batches`
+  and replaces the line's lot table, `stockQty` and `liveQty` (the fresh table supersedes the
+  event that was correcting it). A failed read leaves the line as it was — only an answer
+  replaces an answer. An empty answer for a product that never had lots is left alone
+  (inventory-lite), rather than read as "nothing on the shelf".
+* **Call sites:** a changed quantity (`setQty`), the one-tap fix (`applyStockDrift`), a unit
+  switch (`setLineUnit`, which changes the base quantity), the localStorage restore in the
+  bootstrap effect, and a `stock.updated` naming a product that is actually in the cart.
+  Debounced 250ms per product (`POS_REALLOC_DEBOUNCE_MS`) so a typed "194" is one read, not
+  three. Resume already re-read its lots and was left exactly as it was.
+* **The quantity is never rewritten.** Where the fresh lots cannot cover it the line warns and
+  the commit stays blocked — 287's rule and the owner's. `splitByKey` now reads the plan from
+  the same `lineStock(l)` the warning does, so a price and a warning about one line can never
+  come from two allocations; a split line re-splits on a quantity change with its per-batch
+  prices following the new draws.
+* **§3 — the warning strip.** `.warnstrip` / `.warnrow` (`__hd`, `__fix`, `__t`, `__x`) taken
+  from the recommitted `pos-desktop.html`, as a full-width band directly above the total bar.
+  Desktop: a new `.posfoot` takes over the bar's sticky docking (`position:sticky; bottom:18px`)
+  and the bar becomes `position:static` inside it — same position, same appearance. Phone: the
+  strip stands in the row `mbar__why` used to occupy inside the same measured `.mbarwrap`, so
+  `--mbar-h` still reserves the stack's real height and three stacked rows leave the last cart
+  line clear exactly as one sentence did. One row per refused line, each naming the product and
+  carrying its own "Set to N"; a header with "Set all to stock" appears only above two or more.
+  A dismissed row hides a sentence and never unblocks payment (the two are computed apart), and
+  dismissals are pruned to warnings that still exist. The unpriced line (192 §3) is a row here
+  too, so the strip and the disabled Proceed button cannot disagree about how many reasons there
+  are. The in-row `StockDriftNote` and its CSS are retired; the row keeps its `is-warn` tint.
+* **i18n:** `pharmacyPos.v21.{stripHeadCount,stripFixAll,stripDismiss,stripOver,stripGone}` in
+  both catalogues. The figures are emphasised by substituting them wrapped in a U+0001 marker
+  and splitting back into `<em>` nodes, so the translated sentence keeps its own word order
+  rather than being assembled from words (which Urdu would not survive).
+
+### Superseded assertions in earlier suites
+
+287 and 297 asserted the old address of the warning (`fabar__chip--warn`, `mbar__why`,
+`StockDriftNote`, `cart__drift`) and 287 asserted the screen's direct `posLineStockDrift(` call.
+Both suites were updated to assert the same PROPERTIES at their new address, with a comment
+naming 298 as the supersession. Separately, `picker-meta-whole-rupees.spec.tsx` was already
+failing in the working tree before this step: the recommitted `pos-desktop.html` dropped the
+customer-select reference block the test asserted against. The assertion now proves the rule
+against whichever mockup still draws those rows, and the no-decimal-amounts half still runs
+against both.
+
+### Gates
+
+`pnpm lint` clean (one pre-existing unused-eslint-disable warning in
+`doctor-portal.repositories.ts`, untouched by this step). `pnpm typecheck` clean, 31/31.
+`packages/ui` jest: 126 suites, 3058 tests, all passing. The two new suites —
+`apps/api/src/pharmacy/stale-allocation-and-stock-guard-298.spec.ts` (13 tests, the arithmetic,
+including the owner's exact case and FEFO-ordering equivalence) and
+`packages/ui/src/lib/stale-allocation-and-stock-guard-298.spec.tsx` (21 tests, the wiring) —
+both green. Vendor untouched; no schema change, so no `prisma generate`.
+
+### Not done here
+
+The spec's §4 asks for verification on the deployed page with two live sessions. That is a
+deploy-time check and is not available inside the build session; everything it names is covered
+by the two suites above against the same code paths, and the mechanism capture stands in place
+of the live before/after screenshots.
