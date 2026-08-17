@@ -17049,3 +17049,82 @@ the i18n parity suite were re-run: 110/110 green.
 §5 asks for verification on the deployed page and a real device, both themes. That is the owner's confirmation
 after the controller deploys, and it is not something this step can claim. What is claimed here is the source:
 every named family reachable, the row anatomy rebuilt, the three search states present on both flows.
+
+## 294 — keyboard-round-3 — DONE (2026-08-17)
+
+**Branch:** `fix/294-keyboard-round-3`. **Spec:** `/specs/294-keyboard-round-3.md`. No CODEREF in range.
+Schema untouched, RLS untouched, money logic untouched. Eight owner reports, all about FOCUS rather than bindings.
+
+**§1 held pills.** `globals.css` — `.mp-pos2 .heldpill:focus, :focus-visible` now draws a brand-accent BORDER
+(`border-color:var(--accent)`, `background:var(--accent-soft)`) and `outline:none`; 286 §4.3's outline ring is
+removed. The pill and its × are one capsule split across two elements, so a ring around either half outlines a
+shape that is not the control; `.heldpill__wrap:focus-within .heldpill__x` and `.heldpill__x:focus{,-visible}`
+carry the same accent border, and the old `box-shadow:var(--focus-ring)` on the cross is gone.
+`PosClient.moveHeldPill` now walks `[data-heldpill],[data-heldnav]` — the two rail controls (Park current, All
+held) gained `data-heldnav` and share the new `onHeldRailArrows` handler — filters out disabled stops (Park
+current on an empty cart, which Tab also skips), still CLAMPS rather than wraps, and calls
+`scrollIntoView({block:'nearest',inline:'nearest'})` because `.heldrail` is `overflow-x:auto`.
+
+**§2 arrows in confirmations.** `packages/ui/src/components/confirm-dialog.tsx` — `moveFooter` on `DialogFooter`
+moves focus between Cancel and Confirm on ←/→ in document order (wraps, matching Radix's own trap), inert inside
+INPUT/TEXTAREA/SELECT/contenteditable exactly as Y/N are, and it never calls `onConfirm`. Cancel gained a ref
+(composed through `DialogClose asChild`). Shared component, so Discard held sale and Clear cart inherit it along
+with every other consumer. 284 §6 (confirm focused on open) is untouched.
+
+**§3 focus that did not paint.** Two causes, both fixed. (a) Timing: new module-level `focusWhenReady(selector,
+{press})` in PosClient retries across up to 6 animation frames until the element EXISTS and
+`document.activeElement === el`, focuses with `preventScroll` then `scrollIntoView({block:'nearest'})`. The three
+reported jumps route through it: `focusCartRow` (Alt+I / Alt+L), `focusFirstHeldPill` (F7), `pos.applyDiscount`
+(Alt+5). (b) Painting: `.mp-pos2 .cart__row:focus` used to be literally `outline:none`, so a row focused from a
+handler a frame after the keystroke matched `:focus` and not `:focus-visible` and nothing was drawn — the owner's
+"↓ moves to the SECOND row" proof. `.cart__row:focus` and `.disc:focus` now carry the same accent treatment as
+their `:focus-visible` twins.
+
+**§4 the discount ring.** `onDiscountKey` handles Tab BEFORE its `e.target !== e.currentTarget` guard (same shape
+as `onCartRowKey`) and walks an explicit ring: card → value field (`discountRef`) → `.disc__seg button` ×2 →
+`.disc__chip` × n → out, `Shift+Tab` reversing, no `preventDefault` off either end so Tab leaves the group
+normally. 284's "Tab flips Rs ⇄ %" is REMOVED — it was what made the value field and the presets mouse-only.
+`P` / `R` / `0` / `Enter` / `Esc` on the card are unchanged. Enter on a preset applies it natively (a preset is a
+real `<button>`); nothing fakes it.
+
+**§5 Tab from search.** The desktop scan field's `onKeyDown` now handles Tab explicitly: focus
+`[data-poscustomer]`, close the results this field owns, do nothing else. Decision recorded: no on-focus opener
+was found in `PosSelectField` or `CustomerSelect` by inspection, so rather than guess at the mechanism the
+hand-off is now OWNED here and is immune to it. Alt+C / F3 / click still open the picker (`pressControl`).
+
+**§6 after choosing a customer.** New `chooseCustomer` replaces `setCustomerId` as the desktop picker's
+`onChange`: on a real id it presses `[data-possaledate] button` through `focusWhenReady(..., {press:true})`, so
+the sale date focuses AND opens. Clearing (`onClear`, `Alt+Shift+C`) is not choosing and does nothing. Where
+`canBackdate` is false there is no sale-date field, so focus falls back to the scan field. The mobile picker is
+touch and is unchanged.
+
+**§7 the shortcut list.** `FIXED_SHORTCUTS` in `packages/shared/src/pharmacy-shortcuts.ts`: removed
+`navFirstLast` (Home/End — Alt+I / Alt+L already are that action), `cartClearSale` (Shift+Del — Ctrl+Del does it),
+`cartLineDiscount` (D — no affordance on the row; recorded in `DEFERRED_SHORTCUTS` as `D (line discount)`).
+Every `⇧` is now `Shift` written in full (`navControls`, `cartTabUnit`, `purchaseNextField`, `heldMovePills`).
+`navClearSearch` is `['Del']`, and the scan field now answers bare `Delete` instead of `Ctrl+Backspace` —
+`Ctrl+Del` could NOT be it because that is "clear the whole sale". `discountToggle` becomes `['Tab','Shift+Tab']`
+with a new label; `heldMovePills` gains `←`/`→`; new `confirmMove` row for §2. The matching `Shift+Del` handler
+was deleted from `onCartRowKey`. i18n en+ur: three keys removed, `discountToggle` relabelled, `confirmMove` added.
+The overlay, the settings section and the printable map all derive from `fixedShortcutsForScreen`, so one edit
+reaches all three — asserted.
+
+**Take Payment (§7 last bullet).** Verified by inspection, NOT changed: `autoFocus={focusOnOpen}` on the cash
+amount field, `Enter` commits through `payRef.current.pay()` (gated on `canPay`, layer-scoped since 234 §3.2),
+`1`/`2`/`3`/`4` pick tiles, `0` Udhaar, `=` Exact, Esc returns via the dialog. Noted deliberately: the digits
+stand down while a text input has focus (201 §1), so on open the focused amount field takes them as an amount —
+that is the designed trade and both statements in §7 hold in their own context.
+
+**Superseded assertions updated** (a later step owns the earlier claim): 284 §4 "flips Rs ⇄ % with Tab" rewritten
+to the P/R half plus the new `focusWhenReady` Alt+5 route; 284 §4 held-pill F7 target now expects
+`focusWhenReady('[data-heldpill]')`; 286 §4.3 now expects the accent border rather than the ring; 286 §4.5 now
+expects the `stops[...]` clamp; the API service spec's fixed-row sample swaps `cartLineDiscount` for
+`cartRemoveLine`.
+
+**New tests.** `packages/ui/src/lib/keyboard-round-3-294.spec.tsx` — 26 assertions across §1–§7 over PosClient,
+confirm-dialog, globals.css, the shared catalogue (as data) and both message files.
+
+**Gates.** `pnpm lint` clean (one pre-existing unrelated warning in `doctor-portal.repositories.ts`).
+`pnpm typecheck` clean, 31/31. Targeted suites run rather than the full `pnpm test:unit` (controller owns that):
+`@mp/ui` 122 suites / 2968 tests PASS, `apps/api src/pharmacy-shortcuts` 4/92 PASS, `@mp/i18n` 4/28 PASS,
+`apps/api purchase-invoice-272` 1/14 PASS. Vendor untouched; no schema change, so no `prisma generate`.
