@@ -18141,3 +18141,62 @@ relation was already one-to-many. `stock.qty == Σ batch.qty` asserted after eve
 **Not done here, on purpose:** 305 row-opening and realtime · 306 keyboard · 307 full names ·
 308–309 Returns to its mockups. Acceptance on the deployed page and a real device is the owner's,
 as §9 states — a passing unit suite is not acceptance for anything visible.
+
+---
+
+## 305 — list-row-open-and-realtime — DONE (2026-08-18)
+
+**Branch:** `feature/305-list-row-open-and-realtime` (FEATURE + FIX). Spec: `/specs/305-list-row-open-and-realtime.md`. No CODEREF. **Schema: none. RLS: unchanged. Money logic byte-identical.**
+
+### §1 — the whole row opens its record
+
+**ONE implementation, mounted four times.** `apps/web/lib/row-open.ts` — `rowOpenProps()`, a plain function (not a hook: rows render inside `.map()`, and the only state it needs — where the pointer went down — is per GESTURE, so it lives at module scope). Spread onto a `<tr>` or a card `<div>` it delivers `tabindex="0"`, the mockup's `:focus-visible` ring, the accessible name, `data-row-open`, and the click / keydown / pointerdown handlers.
+
+Mounted on all four screens, both surfaces:
+
+| Screen | Desktop table row | Desktop card | Mobile card / list row | Opens |
+|---|---|---|---|---|
+| Inventory | `<tr>` | `.minvcard` | `.minv__row` | View item |
+| Suppliers | `<tr>` | `.scard` | `.pcard`, `.minv__row` | that supplier's **ledger** |
+| Purchases | `<tr>` | `.icard` | `.pcard`, `.minv__row` | View purchase |
+| Returns | `<tr>` | `.rcard` | `.mrcard`, `.minv__row` | View return |
+
+Decisions taken and recorded:
+
+- **§1.2 is a WALK, not a `stopPropagation` per button.** `isInteractiveTarget()` walks from the event target up to (and excluding) the row, matching `ROW_OPEN_IGNORE_SELECTOR` — `a[href]`, `button`, `input`, `select`, `textarea`, `label`, `summary`, the `role="button|link|checkbox|switch|menuitem|menu|dialog"` set, `[contenteditable]`, and the `.rowacts` / `.rowactions` / `.tbl-actions` / `.pcard__acts` / `.miconacts` families, plus an opt-out hook `[data-row-ignore]`. The walk never tests the row itself, because a mobile card carries `role="button"` and would otherwise disqualify itself. **Inventory's `RowActions` `stop()` wrapper was DELETED** — it was exactly the second approach the spec rejects, and it would have silently failed for the fourth button somebody adds.
+- **§1.3 threshold = 6 CSS px** (`ROW_OPEN_DRAG_PX`), stated as the spec asks. Reasoning: a deliberate tap moves 1–3px (finger roll) or 0–1px (mouse); a drag that selects even one word crosses a character width, never under 6px at any size this app renders text at. Belt-and-braces second guard: a click that leaves a live, non-collapsed selection inside the row is also ignored.
+- **§1.4 Enter opens, Space does not.** Space is the page's scroll key and a table row is not a button. A modified Enter (⌘/Ctrl/Alt/Shift) and a repeat are left to the browser; an Enter whose target is a control inside the row belongs to that control. Mobile cards take `role="button"` (as `.mretc` does in the committed mockup); desktop `<tr>`s keep their implicit row role so the table stays a table.
+- **Accessible names carry no raw id** (standing rule 7). Four new i18n keys, EN+UR: `rowOpenItem`, `rowOpenPurchase`, `rowOpenSupplierLedger`, `rowOpenReturn`, plus `rowLiveMarked`. Each screen has a local `rowOpenLabel()` folding a NUMBER or a NAME into the shared key — invoice number else supplier, return number else party, product brand name, supplier name.
+- **§1.5** — every row carries `data-row-open`, and `openFocusedRow()` activates the focused one through the SAME handler (a programmatic `.click()` arrives with `detail === 0`, which the handler reads as a keyboard activation, so a stale pointer position can never be mistaken for a drag). 306 registers THAT, rather than adding a second path to the same action.
+- **CSS: one unscoped block** in `globals.css` (`.row-open`) — `cursor:pointer`, `-webkit-tap-highlight-color:transparent`, `:active` surface change, and the mockup's own `outline:2px solid var(--accent); outline-offset:-2px` ring (reference: `.dtbl--ret tbody tr:focus-visible` in `purchases-suppliers-desktop.html`). Deliberately NOT scoped per screen: `.mp-inv2 .row-open` is how the fifth screen inherits nothing.
+
+### §2 — Suppliers, Purchases and Returns subscribe to the bus
+
+**A sixth SCOPE on the spec-112 bus, not a second bus and not a second socket.** New `packages/shared/src/pharmacy-desk-live.ts`: `purchase.updated` (`purchaseId`, `supplierId`, `reason: created|voided|paid|returned`), `supplier.balance.updated` (`supplierId`), `return.recorded` (`returnId`, `kind`, `supplierId`) — identity, a reason and a timestamp, and **no money at all**, so there is nothing on the wire for a screen to be tempted into trusting.
+
+- `RealtimeBus.publishDesk` / `subscribeDesk` + the in-memory subject, same `tenantChannel` filter as the five scopes before it (isolation stays structural).
+- Publisher seam `apps/api/src/pharmacy/pharmacy.desk-events.ts` (`DeskEventPublisher` / `BusDeskEventPublisher`), token `DESK_EVENT_PUBLISHER`, `@Optional()` in the service so every pre-305 positional fixture publishes nowhere and needed no edit.
+- **Merged onto `GET /pharmacy/pos/stream`.** Decision: NOT a new endpoint. The recent-sales feed got its own endpoint in 237 only because its gate differs; the Purchases, Suppliers and Returns controllers are gated on exactly what that stream is gated on (`pharmacy.pos` + `pharmacy.sell`), so a fourth endpoint would have meant a second socket per tab for the same tenant's same events.
+- **Publish sites:** `createPurchase` (created), `voidPurchase` (voided), `recordSupplierPayment` and `reverseSupplierPayment` (paid, `purchaseId: null` — a supplier-level payment settles across whatever invoices are standing, and guessing at one is worse than saying so), `createSaleReturn`, `createPurchaseReturn` (+ returned when not held), `approveSaleReturn`, `rejectSaleReturn`, `approvePurchaseReturn` (+ returned), `rejectPurchaseReturn`, `confirmPurchaseReturnCredit`. Every purchase/return announcement that touches a supplier pairs a `supplier.balance.updated` with it — that is the owner's named requirement: 304 §1.2's credit note moves an open Suppliers list without a refresh.
+- **Web subscriber:** `useDeskLive()` added to `apps/web/lib/stock-live.ts` (it must live there — `subscribeLiveStream` is module-private, which is what makes "nothing opens its own connection" a fact a grep can check). ONE callback, `onChange`, deliberately: a patch-the-row callback would be a second arithmetic path for money to drift down. Coalesces a burst to one re-read, holds while `document.hidden` and re-reads once on becoming visible, re-reads on reconnect rather than replaying, unsubscribes on unmount via the refcount.
+- Suppliers re-reads BOTH `suppliers/summary` and the purchases list (its invoice-count and lifetime-trade columns come from the second one); Purchases re-reads the list and `suppliers/summary` (its Pay dialog quotes that figure); Returns re-reads the list.
+
+**§2.2 — sort position preserved while a list is being read.** Pure `pinRowOrder()` in `@mp/shared` + `useLiveOrder()` in `apps/web/lib/live-list.ts`. Rows present in both keep their existing positions with their NEW values; a row whose signature changed, or one that arrived, is MARKED (`is-live-marked`, a leading accent bar — plus the words `rowLiveMarked` appended to the accessible name, so it is never colour alone) instead of being shuffled to wherever its new sort key would put it. A genuinely new row still appears, at the end of the pinned order. Marks accumulate within one pin. **The pin is released by what the READER chose and by nothing else** — resetKey is built from filter / search / month-window state, never from the data, because a data-keyed reset would release the pin on every live update, which is the bug the rule exists to prevent. The Suppliers list is the worst case and the reason this was built: it sorts by owed descending, which is the very column a credit note moves. Focus, open drawers and open menus survive because the re-read reconciles into the same id-keyed rows — nothing unmounts.
+
+### Tests written (the controller runs them)
+
+- `packages/ui/src/lib/list-row-open-and-realtime-305.spec.tsx` — 42 tests. Behavioural against a real DOM: opens on a plain press; does NOT open on the eye, on a button nobody has added yet, on a checkbox, on its label, on a link to another record, on an in-row select; a 140px drag does not open and a 1px one does; Enter opens, Space and Spacebar and modified Enter do not; a control's own Enter stays its own; `role="button"` on cards and not on `<tr>`; `openFocusedRow()` after a stale pointerdown. Plus the census: four screens mount the shared handler, Inventory's private handler is gone, no row-action group reaches for `.stopPropagation()`, each screen opens the destination §1.1 names (Suppliers → `openLedger`), the CSS block is unscoped, the three lists subscribe through the one layer, nobody opens an `EventSource`, the subscribers re-read and touch no figure, and the pin's seven ordering cases.
+- `apps/api/src/pharmacy/list-row-open-and-realtime-305.spec.ts` — 14 tests, in 291 §1's shape (observe the CHANNEL, not the code): the four purchase reasons with their exact envelopes, a reversed payment, a purchase return announcing return + purchase + balance, a held return announcing the row but NOT the money until approval, a rejection, a sale return announcing no supplier at all, no envelope carrying an amount, a publisher that throws never failing a committed stock-in, a service with no publisher publishing nowhere, cross-tenant isolation on the new scope, the seam refusing a blank tenant, and the counter's ONE stream carrying a desk frame.
+
+### Self-checks (by inspection)
+
+i18n EN+UR parity ✅ (5 new keys both sides, verified equal key sets) · Isolation ➖ presentation + one new bus scope whose channel key derives from `tenantId` inside the bus ✅ · Feature flags — the new scope rides a stream already behind `pharmacy.pos` + `pharmacy.sell`; a viewer without them is refused once and stops (292 §2.3), which the three screens already survive ✅ · Performance — one socket per tab unchanged, one coalesced re-read per burst, hidden tabs silent ✅ · Design — `@mp/ui`/tokens only, one unscoped `.row-open` block, light/dark via tokens, the physical box-shadow offset mirrored under `[dir='rtl']` ✅ · White-label ➖ no brand surface touched · Accountability ➖ no new state change (every publish sits beside an existing `@Audited` write) · Offline ➖ realtime is a display convenience; a missed event leaves a screen briefly stale and the commit is still the truth · `.env.example` unchanged, no secrets ✅
+
+### Gates run here
+
+`pnpm lint` ✅ (one pre-existing unrelated warning in `doctor-portal.repositories.ts`) · `pnpm typecheck` ✅ · the two new suites run individually ✅. `test:unit` / `build` left to the controller.
+
+### Notes for later
+
+- `pdMOpenPurchase` / `pdMOpenSupplier` are now unreferenced (the mobile rows use the shared `rowOpen*` keys). Left in the catalog rather than deleted — parity holds either way.
+- 306 must wire `openFocusedRow()` / `data-row-open` through the shortcut engine rather than adding its own Enter handler; the seam exists for exactly that.

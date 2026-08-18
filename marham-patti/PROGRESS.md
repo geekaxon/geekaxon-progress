@@ -7,9 +7,9 @@
 ## Current Status
 - **Project:** Marham Patti — multi-tenant white-label healthcare platform.
 - **Phase:** **PHASE 30** — Returns correctness round 2, list interaction, keyboard, names.
-- **Last completed:** **304 — returns-ledger-and-history**.
-- **Next:** specs/305-list-row-open-and-realtime.md
-- **Group order:** 305 → 306 → 307 → 308 → 309. One step, then stop at the checkpoint.
+- **Last completed:** **305 — list-row-open-and-realtime**.
+- **Next:** specs/306-keyboard-unit-select-and-list-preset.md
+- **Group order:** 306 → 307 → 308 → 309. One step, then stop at the checkpoint.
 - **SECOND/THIRD attempts — capture before fixing:** 306 §1 (third) · 308 §3 (third) · 309 §1.
 - **Returns is NOT complete** — 303 §6 said it was; 309 closes it properly.
 - **BRANCH RULE:** create and switch to the spec's own branch BEFORE any commit.
@@ -22,8 +22,8 @@
 - **Before production:** VAPID keys; blank VENDOR_BOOTSTRAP_*; fresh secrets; MFA_STAGING_RELAX=false; SEED_DEMO and SCREENSHOT_TOKEN unset.
 
 ### Recent steps
+- **305 — list-row-open-and-realtime** — DONE (2026-08-18) — the whole row opens its record; three lists finally hear the bus.
 - **304 — returns-ledger-and-history** — DONE (2026-08-18) — the credit note reaches the ledger; a document shows every return.
 - **303 — keyboard-flow-and-skeletons** — DONE.
-- **302 — returns-flows-and-correctness** — DONE.
 
 > Older steps in PROGRESS-HISTORY.md
