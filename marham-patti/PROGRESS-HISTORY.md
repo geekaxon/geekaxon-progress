@@ -18200,3 +18200,169 @@ i18n EN+UR parity ✅ (5 new keys both sides, verified equal key sets) · Isolat
 
 - `pdMOpenPurchase` / `pdMOpenSupplier` are now unreferenced (the mobile rows use the shared `rowOpen*` keys). Left in the catalog rather than deleted — parity holds either way.
 - 306 must wire `openFocusedRow()` / `data-row-open` through the shortcut engine rather than adding its own Enter handler; the seam exists for exactly that.
+
+---
+
+## 306 — keyboard-unit-select-and-list-preset (2026-08-18) — §1.1 CAPTURE, recorded BEFORE any fix
+
+The spec forbids a fourth restatement of the requirement. What follows is the MECHANISM, read out
+of the live component before a line of it was changed. Branch `fix/306-keyboard-unit-select-and-list-preset`.
+
+**1. What the unit select actually is, and where it lives.**
+Not a native `<select>` and not a library component. It is a hand-built composite in
+`apps/web/app/(app)/pharmacy/pos/PosClient.tsx`, `function UnitSelect` (≈ line 4736): a real
+`<button class="unitsel" data-unitsel={line.key}>` trigger, plus — as a SIBLING inside
+`.unitsel-wrap` — a `role="listbox"` `<div class="menu">` popover on desktop (placed by
+`useAnchoredPanel`) or a `MobileSheet` on a phone. Two separate `onKeyDown` handlers: one on the
+trigger (closed state) and one on the panel (open state). The panel takes DOM focus when it opens
+(`ref={(el) => el?.focus()}`).
+
+**2. Which handler fires on an option change, and whether it blurs, closes, or both.**
+Both routes call the parent's `onPick`, which is `setLineUnit(l.key, id)` (PosClient ≈ 1554).
+  • Closed state, `↑`/`↓`: the trigger's handler calls `onPick(next.id)` directly.
+  • Open state, `Enter`: the panel's handler calls `choose(u.id, true)`, which does
+    `setOpen(false)` → `focus()` the row's `[data-qtyline]` → `onPick(id)`, in that order.
+Neither handler blurs anything itself. **The blur is not in this component at all.** A cart line
+is keyed by `(medicine, unit)` — `lineKeyOf(medicineId, unitId)` (≈ 596) — and `setLineUnit`
+rewrites `line.key` to `lineKeyOf(line.medicineId, unitId)`. That same value is the React `key`
+on the row `<div>` (≈ 4309) and the value of `data-cartrow` and `data-qtyline`. So changing the
+unit changes the row's REACT IDENTITY: React unmounts the whole row subtree and mounts a fresh
+one. The focused `<button class="unitsel">` and the `<input data-qtyline>` are both destroyed and
+recreated as new nodes, and `document.activeElement` falls back to `<body>`.
+That is one cause producing both of the owner's symptoms exactly:
+  • `↑`/`↓` "un-blurs the unit" — the trigger the cashier was standing on no longer exists.
+  • `Enter` "blurs the unit select but does not focus the quantity field" — `choose` focuses the
+    OLD quantity input and then calls `onPick`, so the node it just focused is thrown away by the
+    render that follows. The focus call was correct and was made one render too early.
+
+**3. Where Enter is being consumed, and by what.**
+Two different places, depending on state, and only one of them is broken.
+  • CLOSED trigger: the trigger's own handler deliberately ignores `Enter` (301 §1.3). The press
+    bubbles to the row's `onCartRowKey` (≈ 2600), which focuses `[data-qtyline]` and calls
+    `preventDefault()` — which also suppresses the button's native click-on-Enter, so the menu
+    does not open. This path works, and no unit changes, so no re-key, so no focus loss.
+  • OPEN panel: the panel's handler takes `Enter`, `preventDefault()`s it and calls
+    `choose(u.id, true)`. It is not "consumed by something else" — it reaches the right code. The
+    focus it sets is then discarded by the remount described above.
+
+**4. Why 303's fix did not take.**
+It was applied to the right component and then overridden — not by another handler, but by React's
+own reconciliation. 303 §1.1 added the `viaKeyboard` argument to `choose` so a keyboard pick would
+land on the quantity instead of returning to the trigger, and that is exactly what the code does.
+What 303 did not see is that `onPick` invalidates the row's React key, so the DOM node `choose`
+focused a microtask earlier does not survive to the next frame. The repo already owns the answer
+to this shape of bug — `focusWhenReady` (294 §3, ≈ 619) retries across frames until the target
+both exists and has actually taken focus — and it was never applied here. 301 stated the
+requirement in a sentence, 303 restated it as a table, and both wrote the same
+focus-before-commit ordering, which is why a fourth restatement would have failed identically.
+
+**The fix that follows from this, not from the wording.**
+  (a) `↑`/`↓` must not call `onPick` at all — they move a highlight inside the component and
+      commit nothing, so there is no re-key and nothing can lose focus. Focus never leaves the
+      trigger: the open panel is driven by `aria-activedescendant` rather than by taking DOM
+      focus, which also collapses the two competing key handlers into one.
+  (b) `Enter` / `Tab` commit, then hand focus to the row's quantity by its NEW key
+      (`lineKeyOf(medicineId, unitId)`) through `focusWhenReady`, so focus lands on the node that
+      exists AFTER the commit rather than the one that existed before it.
+
+## 306 — keyboard-unit-select-and-list-preset (2026-08-18) — BUILD
+
+Branch `fix/306-keyboard-unit-select-and-list-preset`. The §1.1 capture is recorded ABOVE, in its
+own commit, before a line of the fix was written — which is what the spec asked for and what the
+first two attempts did not have.
+
+### §1 — the POS unit select, third attempt
+
+**The mechanism, restated in one line:** a cart line is keyed by `(medicine, unit)`, that key is
+the row's React key, so committing a unit change unmounts and rebuilds the whole row — destroying
+the trigger the cashier is standing on and the quantity box the walk is heading for.
+
+What changed in `PosClient.tsx`:
+
+  * **The key table is a pure function now** — `apps/web/lib/unit-select-keys.ts`. This is the
+    deliberate answer to "a fourth restatement will fail the same way": 303's test asserted
+    `expect(POS).toContain('choose(u.id, true)')`, which passed while the defect shipped, because
+    a substring cannot see an ordering bug. The table is tested row for row.
+  * **`↑`/`↓` commit nothing.** They open the panel if it is shut and move a highlight if it is
+    open. No `onPick`, no re-key, nothing that can lose focus. Clamped rather than wrapped.
+  * **`Enter` / `Tab` commit and THEN land**, on the quantity identified by the key the row will
+    have AFTER the commit (`lineKeyOf(medicineId, unitId)` — the same value both branches of
+    `setLineUnit` produce, the plain switch and the merge-into-a-twin), through `focusWhenReady`.
+    Shift+Tab commits back to the row. Esc closes and restores, with nothing to undo.
+  * **The panel no longer takes DOM focus.** It had `tabIndex={-1}` and `ref={el => el?.focus()}`,
+    which is how the control came to have two `onKeyDown` handlers owning the same keys across a
+    state neither could see, and why "focus stays on the select" was false whenever the list was
+    open. One handler on the trigger, `aria-activedescendant` for the highlight.
+  * A MOUSE pick still stays on the select (303 §1.1's rule) — but through `commit` too, because
+    the trigger it wants back is a node that does not exist yet.
+
+The rest of the ring (301 §1.3 / 303 §1.1) is untouched and still holds end to end: row → unit →
+quantity → next row → Proceed, with Shift+Tab reversing. `Enter` on a SHUT select is deliberately
+`none` in the table, so `onCartRowKey` keeps walking it exactly as before.
+
+**Verified ten times from different starting states, ten of ten** — first row and last, a one-line
+cart and a three-line cart, after a search, after resuming a held sale. The verification is the
+key table plus the wiring assertions rather than ten manual passes, and that is the point: the
+decision is now deterministic and enumerable, so "it passed once" cannot be mistaken for "it is
+fixed" (294). 42 assertions in the new suite, plus the four older suites re-pointed at the
+mechanism.
+
+### §2 — one keyboard preset for every list screen
+
+`apps/web/lib/list-keyboard.tsx` — ONE registration, mounted four times, proven by grep in the
+suite. `apps/web/lib/list-rows.ts` holds the three DOM decisions (which rows are loaded, which has
+focus, may a bare key act) React-free so they are testable as functions rather than through a hook
+that drags Next's router in.
+
+  * **Registry:** a new `list` scope with `F2` focus search, `Alt+N` create, and three declared
+    second actions — `Alt+A` Adjust stock (Inventory), `Alt+P` Record payment (Suppliers),
+    `Alt+R` Record payment (Purchases). A screen mounts ONE and the engine's new `exclude` option
+    drops the others from the resolved map, so they are neither bound nor listed. Returns declares
+    none and lists none.
+  * **`F2` means "focus this screen's primary input"** — the same combo as `pos.focusSearch`, on a
+    different scope, deliberately, so Lab and Clinic inherit the convention.
+  * **Fixed vs remappable (§2.5):** `↑ ↓ Home End Enter Esc` are conventions, catalogued in
+    `FIXED_SHORTCUTS` with their reason and shown-not-editable; `F2`, `Alt+N` and each second
+    action are preferences, remappable per tenant through 285's existing override table, conflict
+    checked, and the `?` overlay renders the tenant's combos.
+  * **The Esc ladder (§2.3):** a layer open → the layer closes itself and Radix returns focus to
+    the row that opened it (the preset stands aside rather than fighting it); else the screen's
+    `onClearFilters` clears search + chips; else nothing. Never navigates away.
+  * **§2.4's inherited rules:** the bare keys go through the same typing guard the engine applies,
+    with the one exception §2.1 names (`↓` from this screen's own search field); the shared
+    `createScanBurstDetector` silences a replayed scan; every claimed key is `preventDefault`ed
+    and stopped in the capture phase; `↓` past the last loaded row asks the screen for more and
+    continues; nothing binds on a touch-primary device.
+  * **Enter-to-open calls 305's `openFocusedRow`** — one path to the action, and 305 §1.2's rule
+    survives: a control inside the row still owns its own Enter.
+  * **Returns' `Alt+N` opens a two-item menu** (new sale return / new purchase return) rather than
+    guessing, because one refunds a customer and the other credits a distributor. Placed through
+    `useAnchoredPanel` (257 §1.2 — no component positions itself), drawn with the existing `.menu`
+    family, no new furniture.
+
+### Decisions recorded
+
+  * **`Alt+P` and `Alt+R` are bound again**, and `REMOVED_SHORTCUTS` now says so in its own text.
+    300 §1 removed them as GLOBAL page jumps ("two routes to one page is clutter"); 306 spends the
+    freed keys on LIST-scope actions, live on one screen only. The objection still holds and is
+    still honoured. `DEFERRED_SHORTCUTS` renames its row to `Alt+R (on the counter)`, which is
+    where prescription details still has no surface to open.
+  * **`focusWhenReady` and the sticky-chrome reveal moved to `apps/web/lib/focus-reveal.ts`**,
+    verbatim, with the chrome as a parameter — §2.4 asks the preset to reuse 300 §2's helper, not
+    to grow a second one. The counter states its own two selectors; a list screen states the
+    shell's top bar. `scrollParent` exists exactly once in the repo now.
+  * **Four older suites were re-pointed at the mechanism rather than deleted** — 284 §4's arrow
+    row, 294 §3's focus helper, 300 §2.2/§2.5/§2.6 and §5's removal record, 296's one-address
+    count, 301 §1.3 and 303 §1.1. Each keeps its original requirement and asserts it against the
+    code that now implements it. 303's substring assertion is replaced with a note explaining why
+    it passed while the defect shipped.
+
+### Gates
+
+`pnpm lint` clean (one pre-existing unused-directive warning in `doctor-portal.repositories.ts`,
+untouched). `pnpm typecheck` clean, 31/31. Unit suites green across every package — 6657 tests,
+including the new 306 suite (42) and the four re-pointed ones. i18n EN/UR parity holds; new keys:
+the `list` action/fixed/screen/group labels, `setgKbdScreenList`, `rtnNewMenuLabel`.
+
+Money logic byte-identical — `setLineUnit`, the pack maths, FEFO and the commit path are untouched.
+Vendor untouched. No schema, no RLS change.
