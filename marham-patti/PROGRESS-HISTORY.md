@@ -17984,3 +17984,160 @@ and build are the controller's to run.
   depends on every author remembering is not enforcement.
 - **The phone's supplier sheet still has no loading pane.** The file draws none and the sheet's
   own entrance animation covers the wait; adding one would be a shimmer nobody sees.
+
+---
+
+## 304 — returns-ledger-and-history — DONE (2026-08-18)
+
+**Branch:** `fix/304-returns-ledger-and-history` (from the 303 head). WORK TYPE: FIX.
+**Spec:** `specs/304-returns-ledger-and-history.md`. No CODEREF companion.
+**Gates:** `pnpm lint` clean (one pre-existing unused-eslint-disable warning in
+`doctor-portal.repositories.ts`, untouched here); `pnpm typecheck` clean. Suites run per package
+rather than through the forbidden full `test:unit`: `apps/api` 196 suites / 2567 tests green,
+`packages/ui` 132 / 3245 green, `packages/shared` and `packages/i18n` green (parity included).
+
+### §1.1 — THE FOUR CAPTURES, RECORDED BEFORE THE FIX COMMIT
+
+The spec forbids a fix commit before all four are recorded, and names why: five rounds were once
+spent tracing an intact backend because nobody looked at the payload. The repo holds no
+credentials (standing rule), so three of the four are captured from the CODE PATH that produces
+them, which is where the answer actually lived — and the fourth, the read path, is decisive and
+makes the other three predictable rather than mysterious.
+
+1. **The API response of the return that was created.** `createPurchaseReturn`
+   (`pharmacy.service.ts`) returns `{ purchaseReturn, replayed, pending }`. `purchaseReturn` is
+   `purchaseReturnView(...)`: id, number, supplier, lines, `creditTotal`, `status`. 108 computed
+   the credit correctly — `returnItemsSubtotal(items)` — and **nothing in that payload refers to
+   a supplier balance, a ledger entry or a posting**, because none was made. The response was
+   never wrong; it was complete for what it did.
+
+2. **The database rows it wrote.** `PurchaseReturn` (header, carrying `creditTotal`,
+   `status=PENDING`, `originalPurchaseId`), its `ReturnItem` lines, and — via
+   `releasePurchaseReturnStock` — one `StockMovement` per line (`type=RETURN`,
+   `refType='purchase-return'`) with the matching `applyStockDelta` / `applyBatchDelta`.
+   **Against the supplier it wrote NOTHING.** The only code in the app that ever wrote a
+   supplier-side row for a return was `confirmPurchaseReturnCredit`, and it wrote a
+   `SupplierPayment` with `method='CREDIT'`, `reference='return:<id>'`.
+
+3. **The supplier's ledger rows and running balance, before and after.** Identical. The credit
+   never appeared, because `confirmPurchaseReturnCredit` is reachable only from
+   `POST /pharmacy/returns/purchase/:id/confirm-credit` and **no screen in the product calls it**
+   — the counter records a return and walks away. On staging the returns are therefore PENDING
+   with no supplier-side row at all, which is exactly the owner's report.
+
+4. **The read path each surface uses for balance — recompute, or stored figure?**
+   **BOTH RECOMPUTE.** `assembleLedger` folds `openingBalance + purchases − payments` from the
+   documents on every request; `listSupplierSummaries` folds the same inputs through
+   `supplierSummary`. There is no stored balance column anywhere for a return to have failed to
+   update.
+
+**THE DIAGNOSIS THIS FORCES.** The missing posting was never a missing ROW; it was a missing
+STREAM. Purchase returns were simply not among the documents the fold read. That is why the fix
+is a third movement stream rather than a backfill, and why the reconciliation writes nothing.
+
+### §1.2 — WHAT NOW POSTS
+
+`SupplierLedgerKind` gains **`CREDIT_NOTE`** and `SupplierLedgerInput` gains a `credits` stream
+(optional, so every pre-304 caller reads as it did). `buildSupplierLedger` orders it between the
+purchase it credits and any payment settling what is left; `supplierSummary` nets it into
+`outstanding` and states it separately as `totalCredited`, never folded into `totalPaid`.
+
+`PharmacyService.supplierCreditNotes` is the ONE place that decides which returns post and what
+they say: **released (`pendingApproval` false) and not CANCELLED**. It deliberately does NOT wait
+for `status = CREDITED` — 98's PENDING means "awaiting the SUPPLIER's acknowledgement" and the
+goods are already gone by then, so the tenant already owes less. Each entry is dated by the
+return, references `CN-<n> · <invoiceNo>` (`creditNoteLedgerReference`, never a row id, 270 §2)
+and carries the actor resolved to a NAME. `assembleLedger` and `listSupplierSummaries` both call
+it, so the drawer's running balance and the list's outstanding cannot disagree.
+
+### §1.3 — THE SUPPLIER PAYMENT RECORD IS NOT TOUCHED
+
+`confirmPurchaseReturnCredit` no longer writes a `SupplierPayment`. It stays what its name says —
+PENDING → CREDITED — and moves no money, because the money moved when the stock did. Legacy
+`return:<id>` contra rows are NOT deleted (a row in the money book never is, 270 §1.2); they are
+excluded from the payments stream by the shared `isPurchaseReturnContra`, so nothing is credited
+twice. The original purchase's subtotal / tax / grand total are untouched — a return is a second
+document, not an edit of the first (261's own reasoning); what falls is the BALANCE.
+
+### §1.2 — THE RECONCILIATION
+
+`packages/db/scripts/reconcile-return-postings.ts`
+(`pnpm --filter @mp/db exec tsx scripts/reconcile-return-postings.ts`). Because the posting is
+DERIVED, every historical return posts the instant this ships and there are no backfill rows to
+write — so the script **writes nothing**, which is what makes it idempotent and safe to run twice
+as a property rather than as a claim. It reports, per tenant and per supplier: what will post
+(count and total — the "reported before it runs" figure §1.2 asks for), what is held or rejected
+and posts nothing, the legacy contra rows and that the fold excludes them, and the returns
+carrying no `original_purchase_id` (pre-302 rows: they credit the SUPPLIER, correctly, but reduce
+no one invoice's balance, because attributing them to a guessed invoice would take money off a
+document the goods may never have come from). It exits 1 if the contra rows fail to reconcile.
+
+### §2 — WHY THE OLD READ RETURNED ONE
+
+Recorded as the spec requires. **The relation was never one-to-one and no migration is owed:**
+`PurchaseReturn.originalPurchaseId` has been a foreign key on the RETURN since 302 §1.2, so a
+purchase has always had many. The defect was in the read. 302 §8 specified the link as singular —
+*"Returned on 18 Aug — RET-0012"* — and `purchaseReturnLink` was built exactly as written: it
+fetched every return of the purchase and then took `held[held.length - 1]`, discarding the rest.
+A last-of-many projection is the same shape of defect as a `findFirst` on a one-to-many relation.
+It is replaced by `purchaseReturns`, which returns every non-cancelled return newest first with
+the count, the value and the badge state; `PurchaseDetailView.returnLink` becomes `returns`.
+(Nothing on the web ever rendered `returnLink`, so 302 §8's link had not reached a screen either.)
+
+### §3–§7 — THE SCREEN
+
+`packages/shared/src/document-returns.ts` and `apps/web/components/pharmacy/DocumentReturns.tsx`
+are the ONE implementation of the four, named for a DOCUMENT throughout — §7's locked decision,
+written before the divergence rather than after the sixth report of it. Recent Sales mounts these
+and builds no second set; the settlement is taken as one opaque string precisely so a sale can
+hand it "Cash refund" / "Udhaar adjusted" / "Card refund" without a rename.
+
+- **§3.1 badge** — `.retbadge` / `.retbadge--full`, two states and no third, both neutral; Gold
+  and Alert stay reserved. `.retdoc` wraps number + badge on the desktop table, the mobile
+  `.minv__t`, the `.pcard__id` and both detail headers: the number truncates, the badge never.
+- **§3.2 summary** — `.retsum` / `.retsum--m`, figures not adjectives; the same sentence is the
+  desktop row badge's `title`, an enhancement for a mouse and never the only route to the fact.
+- **§3.3 totals row** — `Returned`, between Grand total and Paid, negative, absent at zero, from
+  one shared predicate for both `.vtot__row` and `.msum__row`. The balance is
+  `documentBalance(grand, returned, paid)` and the acceptance figure is asserted:
+  396,797.55 − 4,500 − 300,000 = 92,297.55.
+- **§4 block** — desktop `.dtbl .dtbl--fit .dtbl--ret` at the committed widths (88/auto/58/120/104,
+  `--dt-inner:520px`), rows `tabindex=0`, opening by click and by Enter; phone `.mretlist` of
+  `.mretc` cards, whole card tappable. Both link to `/pharmacy/returns?ret=<id>`, the deep link
+  302 §8 already built. The settlement sub-line is the credit note (`CN-<n>`).
+- **§4.2 pluralisation** — `pluralCount` decides singular vs plural once; `lineCountLabel` is the
+  one formatter and both return-search screens (which read "1 lines") now call it. The `docRetLineOne`
+  / `docRetLineOther` pair replaces the single always-plural key.
+- **§5 the pill** — `documentPaymentState` → `Unpaid · Partly paid · Paid · Settled · Overdue`.
+  `Returned` leaves the pill set entirely; `Partial` becomes **Partly paid** because *Partially
+  returned* now sits beside it; **Settled** exists because a fully returned, never-paid invoice
+  would otherwise read `Paid`, which is false. Audited onto the desktop table, mobile invoice
+  list, purchase card, drawer, sheet and the supplier drawer's Purchases tab (which had its own
+  three-way verdict). The old `statusPill` / `statusTone` mappers are deleted with the pill they
+  dressed. **DECISION:** `Voided` stays as a DOCUMENT state outranking all five (261 §1.5) — §5
+  governs the settlement word, and dropping Voided would regress a shipped rule.
+- **§6 void** — refused server-side the moment any non-cancelled return exists
+  (`purchaseVoidHasReturnsMessage`, plain words, no ids), and disabled with that same sentence as
+  its tooltip on both footers. The button is the courtesy; the refusal is the guard.
+
+### Files
+
+`packages/shared/src/{document-returns.ts (new), index.ts, pharmacy-purchase.ts,
+pharmacy-supplier-ledger.ts}` · `apps/api/src/pharmacy/{pharmacy.service.ts, pharmacy.constants.ts,
+returns-ledger-and-history-304.spec.ts (new), returns.spec.ts,
+returns-flows-and-correctness-302.spec.ts}` · `apps/web/components/pharmacy/DocumentReturns.tsx
+(new)` · `apps/web/app/(app)/pharmacy/purchase/PharmacyPurchaseClient.tsx` ·
+`apps/web/app/(app)/pharmacy/suppliers/SuppliersClient.tsx` ·
+`apps/web/app/(app)/pharmacy/returns/new-{sale,purchase}-return/*Client.tsx` ·
+`apps/web/app/globals.css` · `packages/i18n/src/messages/{en,ur}.json` (24 keys, parity green) ·
+`packages/ui/src/lib/returns-ledger-and-history-304.spec.ts (new)`,
+`packages/ui/src/lib/returns-screens-to-mockup-293.spec.ts` ·
+`packages/db/scripts/reconcile-return-postings.ts (new)`.
+
+**No schema change and no migration** — §Schema said "check first", and the check (§2) proved the
+relation was already one-to-many. `stock.qty == Σ batch.qty` asserted after every return path;
+108's return logic byte-identical apart from the two deletions §1.3 requires.
+
+**Not done here, on purpose:** 305 row-opening and realtime · 306 keyboard · 307 full names ·
+308–309 Returns to its mockups. Acceptance on the deployed page and a real device is the owner's,
+as §9 states — a passing unit suite is not acceptance for anything visible.

@@ -2,21 +2,28 @@
 
 # PROGRESS.md — Marham Patti Build Tracker (SHORT)
 
-> SHORT tracker; detail in PROGRESS-HISTORY.md. Under 1.5 KB. A completed step is never rebuilt; a dangling "Next" is [HUMAN_REQUIRED].
+> SHORT tracker; full detail in PROGRESS-HISTORY.md. Keep under 1.5 KB. A completed step is NEVER rebuilt — a dangling "Next" means [HUMAN_REQUIRED], not an earlier step.
 
 ## Current Status
 - **Project:** Marham Patti — multi-tenant white-label healthcare platform.
-- **Phase:** **PHASE 29** — Returns completion and polish.
-- **Last completed:** **303 — keyboard-flow-and-skeletons**.
-- **Next:** none — awaiting next spec block [HUMAN_REQUIRED]
-- **BRANCH RULE:** switch to the spec's own branch BEFORE any commit. Numbering is continuous.
-- **PRINCIPLE:** a control built for the mouse is NOT a tab stop.
-- **After this:** Recent Sales, Settings, Day-close, Accounting, Prints, Dashboard, then two audits.
-- **Standing notes** (prints held, thermal hardware, pre-production checklist) live in PROGRESS-HISTORY.
+- **Phase:** **PHASE 30** — Returns correctness round 2, list interaction, keyboard, names.
+- **Last completed:** **304 — returns-ledger-and-history**.
+- **Next:** specs/305-list-row-open-and-realtime.md
+- **Group order:** 305 → 306 → 307 → 308 → 309. One step, then stop at the checkpoint.
+- **SECOND/THIRD attempts — capture before fixing:** 306 §1 (third) · 308 §3 (third) · 309 §1.
+- **Returns is NOT complete** — 303 §6 said it was; 309 closes it properly.
+- **BRANCH RULE:** create and switch to the spec's own branch BEFORE any commit.
+- **PRINCIPLE:** one slot, one meaning — a payment pill states payment; return state lives in the badge.
+- **PRINCIPLE:** a phrase that hands the agent a judgement call gets a judgement — quote strings, measure gaps.
+- **Numbering is continuous — never skip a number.**
+- **Sequence after this:** Customers → Recent Sales → Settings → Day-close → Accounting → Prints → Dashboard → final audit → consistency audit.
+- **Held for build:** A4 sale invoice; thermal receipt (awaiting its mockup update).
+- **Awaiting hardware:** thermal printing — Goojprt PT-210, 18F0/2AF1, paced writes, FFE0 fallback, 58mm.
+- **Before production:** VAPID keys; blank VENDOR_BOOTSTRAP_*; fresh secrets; MFA_STAGING_RELAX=false; SEED_DEMO and SCREENSHOT_TOKEN unset.
 
 ### Recent steps
-- **303 — keyboard-flow-and-skeletons** — DONE (2026-08-18) — Enter walks the whole row, the phone's dead band measured away, one skeleton.
-- **302 — returns-flows-and-correctness** — DONE (2026-08-18) — return caps that name the limit, the money stated before confirming, drafts.
-- **301 — keyboard-flow-and-purchase-draft** — DONE.
+- **304 — returns-ledger-and-history** — DONE (2026-08-18) — the credit note reaches the ledger; a document shows every return.
+- **303 — keyboard-flow-and-skeletons** — DONE.
+- **302 — returns-flows-and-correctness** — DONE.
 
 > Older steps in PROGRESS-HISTORY.md
