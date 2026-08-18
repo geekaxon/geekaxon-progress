@@ -18475,3 +18475,96 @@ suites (`pharmacy`, `billing`, `sample-tracking`) 1205/1205 green. Vendor untouc
 carry-forward bullets under Current Status (principles, sequence, held-for-build, before-production);
 this step added one Recent-steps line and removed one, so the file did not grow. Pruning operator
 carry-forwards was judged the larger risk and left to the controller.
+
+## 308 — returns-desktop-to-mockup — DONE (2026-08-18)
+
+**Branch:** `fix/308-returns-desktop-to-mockup` (WORK TYPE: FIX). Spec: `/specs/308-returns-desktop-to-mockup.md`.
+No CODEREF covers 308. Schema: none. RLS: unchanged. Money logic untouched — presentation only.
+
+### §1 — measure before, measure after
+
+Every §3 item, with the rule that produced the deployed value.
+
+| # | Item | Mockup value (`returns-desktop.html`) | Deployed value | Source of the deployed value | After |
+|---|---|---|---|---|---|
+| 1 | Gap below the step bar | 14px (`.pmain__inner{gap:14px}`, 1928, overriding 18px at 872) | 0px | no rule at all — the entry column is a plain block container (`<div class="mp-inv2 mp-ret">`) and `.stepnav` carries no margin | 14px |
+| 2 | Step-1 card → item table | 14px, same declaration | 0px | same: no column rhythm; `.card`/`.lineitems` carry no margin | 14px |
+| 3 | Below the item table | 14px, same declaration | 0px | same | 14px |
+| 4 | Below the credit-note block (purchase) / Step-3 block (sale) | 14px, same declaration | 0px | same | 14px |
+| 5 | Trailing checkbox → `Select every line` | gap 9px, `align-items:center` (`.check`, 533) | gap 0px, box pinned to the top of the label's line box | `.mp-ret .check` declared `display:inline-flex` with **neither** `align-items` nor `gap` | gap 9px, centred |
+| 6a | Reason select in the line table | height 30px (`--control-sm`), full column width (`.pos-sel__trigger` inline `height:30px`, 5461) | height 36px, width = content (`w-fit`) | `size="sm"`'s `TRIGGER_SM` (`h-9 w-fit`). The rule meant to fix this — `.mp-ret .lineitems .reasoncell .pos-sel__trigger` (302 §5) — names the MOCKUP's class; the cell renders the kit `<SearchSelect>`, which has no class at all. **Dead rule.** | 30px, full width, from the shared line-table density |
+| 6b | The `Other` note under it | height 30px (`.lineitems .input{height:var(--control-sm)}`, 3104) | height 44px | `CONTROL_BASE`'s `min-h-touch`; the companion `.reasoncell .input` rule is dead for the same reason (the kit `<Input>` never renders `.input`) | 30px, same shared rule |
+| 6c | Restocking-fee affix (sale, step 3) | one `.input-wrap` anatomy, 34px clearance (482-484) | correct, but from a **private copy** — `.mp-ret .input-wrap` duplicated the scope-free 256 §4 declaration | per-screen duplicate | duplicate removed; the shared anatomy serves |
+| 6d | Step-3 refund method / fee height | 36px (`--control-md`) | 44px | app-wide, deliberate: 63 §2.3's large-touch control anatomy (`min-h-touch`), the same on every screen. **Recorded, not "fixed"** — these fields DO come from the shared components; the 36→44 difference is the design system's own settled divergence from the mockups and reversing it would resize every control in the app. | unchanged (44px) |
+| — | The footer | `position:sticky; bottom:0; z-index:5` (3130) | `position:static` | `.mp-ret .entryfoot` never declared it; `.mp-pur2 .entryfoot` did — one component, two behaviours | sticky, declared once scope-free |
+| — | Reason select's open panel | sizes to its options | = trigger width (~90px, i.e. as wide as the chosen value) | `w-[var(--radix-popover-trigger-width)]` on `Popover.Content`, against a `w-fit` sm trigger | `w-max`, trigger width as the FLOOR, capped at the available width / 28rem |
+
+**§1's conclusion: items 1-4 are ONE cause, and it is the shared step-page layout.** Both screens render their blocks as
+direct children of a bare `<div class="mp-inv2 mp-ret">`, so every gap between them computed to 0px. 302 §5 recorded that it
+had fixed "spacing and gaps throughout"; the rule it actually added set `.formsec` and `.formrow2` — the gaps INSIDE a card —
+and never the column the cards sit in. One scope-free `.entrystack` at the mockup's 14px resolves all four together, and it
+also picks up a fifth divergence nobody had reported: New Purchase's own `.entrystack` stood at `--space-6` (20px) against
+the same 14px measurement, so it moves with them.
+
+Items 5, 6a, 6b and the footer are a **second, single cause of their own, worth naming**: a rule that spells the MOCKUP's
+class where the screen renders a kit component. `.pos-sel__trigger`, `.input` and (for the footer) a `.mp-pur2`-only scope
+all matched nothing on Returns, so three "fixes" from earlier rounds were never in force at all. Every one of them is now
+stated for the ELEMENT, unscoped, which is the move 256 §4 already made for `.input-wrap`.
+
+### What changed
+
+- **`apps/web/app/globals.css`**
+  - NEW scope-free `.entrystack` (flex column, gap 14px) + `.entrystack > *{flex:none;min-width:0}`; `.mp-pur2 .entrystack`
+    deleted, so New Purchase and both Returns entries share one rhythm.
+  - NEW scope-free `.entryfoot { position:sticky; bottom:0; z-index:5 }`; the sticky trio removed from `.mp-pur2 .entryfoot`.
+    `z-index:5` keeps it under `.mp-shell-ptop` (30). `.mp-ret .entryfoot` lift raised to `--shadow-md` (mockup 3130).
+  - The line-table control density (`height/min-height:var(--control-sm); font-size:13px; padding-inline:8px`) hoisted out of
+    `.mp-pur2 .lineitems` to a scope-free `.lineitems …` selector, with `[aria-haspopup="listbox"]` added so it reaches the
+    kit's select trigger (a class-less `<button>`). Two carve-outs: `.lineitems .retqty input` (a stepper read-out, not a
+    field) and `[data-identity]` (307 §1.2 — a trigger drawing a product name still grows to its second line).
+  - `.mp-ret .check` gains `align-items:center; gap:9px; user-select:none`. Deliberately NOT hoisted: `.check` is overloaded
+    in this file — under `.menu__item` it is a tick glyph, not a checkbox.
+  - `.mp-ret .lineitems .reasoncell` keeps only its 230px width + `> input { margin-top:6px }`; the dead sizing rule is gone.
+  - `.mp-ret .input-wrap` / `> svg` removed (256 §4's scope-free anatomy serves); only the tabular figures stay.
+- **`packages/ui/src/components/search-select.tsx`** — §5: `PANEL_WIDTH = w-max max-w-[min(28rem, available)]`, with the
+  trigger width as a single `min-width` floor (`min-w-[max(13rem|5.25rem, trigger-width)]`) so twMerge cannot drop half of
+  it. Applied to `SearchSelect` and `MultiSearchSelect` alike. Trigger now emits `data-identity` when `identity` is set.
+- **`packages/shared/src/nav-registry.ts`** — §2: both return routes claim their own `ROUTE_TITLE_KEYS`
+  (`rtnNewPurchase` / `rtnNewSale`) and `ROUTE_SUBTITLE_KEYS` (`rtnNewPurchaseDesc` / `rtnNewSaleDesc`), exact-route matched.
+- **i18n (en + ur)** — `rtnNewPurchaseDesc`, `rtnNewSaleDesc` (the owner's strings, quoted) and `rtnEntryTag` ("Draft").
+- **`NewPurchaseReturnClient.tsx` / `NewSaleReturnClient.tsx`** — root becomes `mp-inv2 mp-ret entrystack`; `<TopbarPublish
+  tag={rtnEntryTag} />` mounts the Draft chip from the same slot New Purchase uses (heading/description left to the
+  registry); `size="sm"` dropped from the reason select (a form field in a cell is not an in-toolbar picker); §4.2 the
+  highlighted option is revealed with 306 §2.4's shared `revealRow`, clear of `.mp-shell-ptop` above and `.mp-ret
+  .entryfoot` below, reading the row out of the DOM by the `.is-hi` class the arrows already paint.
+- **`NewPurchaseReturnClient.tsx`** — §4.1: the `.consq consq--credit` block moved ABOVE `.totals` (owner's decision; the
+  mockup already drew it there at 5697) so the consequence is read before the arithmetic that produced it.
+
+### Tests
+
+- NEW `packages/ui/src/lib/returns-desktop-to-mockup-308.spec.ts` — source assertions for every §1 measurement, the two
+  quoted headings + descriptions + EN/UR parity, the Draft chip, the checkbox gap, the shared density rule and its two
+  carve-outs, credit-note-before-totals, the `revealRow` wiring, the sticky footer, the panel-width rule, and the standing
+  "money logic byte-identical" guard (same endpoints, same bodies, same idempotency key).
+- UPDATED, because 308 supersedes what they pinned: `returns-flows-and-correctness-302.spec.ts` (the dead reasoncell sizing
+  rule), `returns-screens-to-mockup-293.spec.ts` (the private `.input-wrap` copy), `purchases-r4.spec.tsx` (the line-field
+  density is no longer `.mp-pur2`-scoped).
+
+### Gates
+
+`pnpm lint` clean (incl. design-drift, token-integrity, tenant-search-select, tenant-page-titles). `pnpm typecheck` clean
+across all 31 tasks. `@mp/i18n` and `@mp/shared` dists rebuilt so the new keys and routes resolve. `pnpm test:unit`,
+`pnpm test:e2e` and `pnpm build` deliberately not run (controller gate). No schema change, no migration, vendor untouched.
+
+### Decisions recorded
+
+- **The 36px → 44px control height is NOT changed.** The mockups draw form controls at `--control-md` (36px); the app runs
+  the kit's one control anatomy at `min-h-touch` (44px) by 63 §2.3's large-touch decision, everywhere. §3.6 asks that fields
+  come from the shared components and that divergences be recorded — they do, and this one is recorded here rather than
+  "fixed" by resizing every control in the product.
+- **`.check` stays scoped to `.mp-ret`** — the class is overloaded in `globals.css` and an unscoped gap would move furniture
+  on every menu row in the app.
+
+### 308 — gate fix (2026-08-18)
+
+`pnpm test:unit` failed on `packages/ui/src/lib/keyboard-flow-and-purchase-draft-301.spec.tsx`: 301 §3 pinned `Object.keys(ROUTE_TITLE_KEYS)` to the single entry `/pharmacy/purchase/new`, and 308 §2 added the two Returns entry routes to the same map. The exact-list assertion was a snapshot of the registry, not 301's claim; it now asserts the shape 301 actually owns — New Purchase is still in the map, and for every claimed route the PARENT path claims nothing, so no sub-route inherits its list's title. Test-only change; no product code touched. lint + typecheck pass.
