@@ -17805,3 +17805,182 @@ Files: `packages/shared/src/pharmacy-shortcuts.ts`, `packages/shared/src/nav-reg
   browser.
 - CLAUDE.md states this repo is a single package with no `pnpm-workspace.yaml`. It has one, and the
   root scripts are turbo-driven; `pnpm lint` / `pnpm typecheck` at the root were used as instructed.
+
+---
+
+## 303 — keyboard-flow-and-skeletons — DONE (2026-08-18)
+
+**Branch:** `fix/303-keyboard-flow-and-skeletons`. **Schema:** none. **RLS:** unchanged. **Money
+logic: byte-identical** — `splitPaymentSummary`, `lineTotalOf`, the return caps and every total
+are untouched; nothing in this step reads or writes a figure.
+
+### §1.1 — the Enter ring, second attempt
+
+**WHY 301 §1.3 FELL SHORT (the evidence rule, established before rebuilding).** It wired the
+MIDDLE of the ring and neither end, and the two directions therefore disagreed by one node per
+line:
+
+1. **`Enter` on the ROW ITSELF did nothing** — deliberately. The old comment in `onCartRowKey`
+   said so out loud: "a bare Enter on a focused row means nothing and must go on meaning
+   nothing." But the row is exactly where `↑`/`↓`, `Alt+I`/`Alt+L`, a removal and a restore all
+   LAND, so the cashier stood on the ring's first stop and the one key that walks it was ignored.
+   `Tab` moved on from there; `Enter` did not.
+2. **`Enter` on the quantity skipped a stop**, jumping to the NEXT LINE'S UNIT SELECT rather than
+   to the next ROW. Forward that reads plausibly, which is why it survived review — but it means
+   the row is never visited, so `Shift+Tab` (row → previous line's quantity, which 301 DID wire)
+   reversed a path `Enter` had never walked.
+3. **The unit select's case was answered from the TRIGGER only.** `choose()` closed the list and
+   returned focus to the trigger, so the `Enter` that picked an option out of the open list was
+   spent on the choosing and the cashier had to press it a SECOND time to reach the quantity.
+   This is the spec's own hypothesis — "choosing an option consumed the Enter that should have
+   advanced" — and it was correct.
+
+**THE RING NOW, exactly as §1.1 tabulates it** (`PosClient.tsx`, `onCartRowKey`):
+
+| Focus | `Enter` → | Reverse (`Shift+Tab`) |
+|---|---|---|
+| item row | that row's unit select (skipped when it has one sellable unit) | previous row's quantity |
+| unit select (incl. after choosing from the open list) | that row's quantity | the row |
+| quantity | the **next row** | the unit select |
+| quantity, last row | Proceed to payment (focused, never pressed) | — |
+
+`Enter` on the row does NOT open the list: `Enter` means "done here, move on" at every other
+stop, and a list that opened itself under it would swallow the next press. The list keeps its
+three ways in — `Space`, `U` from the row, and the `Tab` that lands on it — and `↑`/`↓` still
+change the unit without opening anything. A keyboard pick out of the open list now lands on the
+quantity; a MOUSE click still returns to the trigger, because a mouse user is not walking a ring
+and yanking their caret into a number box is the on-focus behaviour 300 §5 removed.
+
+### §1.2 — Split, then the amount field
+
+**Diagnosis.** 301 §1.5 focused the picked tile so `Tab` would reach the amount — but only when
+the cashier was not already typing, which is 284 §1's rule. The amount field is autofocused when
+the dialog opens (284 §5), so on the ordinary path the cashier IS "typing" and the tile is
+deliberately not focused. For Cash/Card/Online that is right: the box survives the pick and the
+caret belongs in it. **Split does not leave it standing** — the single tender is replaced by one
+box per method, the focused input unmounts, focus falls to `document.body`, and `Tab` from the
+body restarts the dialog at its first focusable node, the ✕. Exactly the owner's report.
+
+**Fix.** The typing exemption is withdrawn for the Split tile alone (`revealsFields`), so the
+pick lands on the tile and `Tab` walks into the board. `focusAmount()` now asks
+`.paysplit input, .paymix input` FIRST — before the generic `.paytender` sweep — because the
+advance row (227 §2.4) is a `.paytender` too and sits above the tiles: on a customer holding an
+advance, the walk would otherwise land back on money already settled.
+
+### §2 — the mobile discount gap, MEASURED
+
+**The number 301 §4 used was the mockup's discarded draft.** `pos-mobile.html` declares
+`.mscroll{padding:180px 15px 234px}` at line 1802 — and re-declares the same selector in its
+"mobile POS v4" block at line 2229 with `padding-bottom:176px`. Later rule, equal specificity:
+**176px is what the file renders**, and 234px is superseded. The counter was reserving a figure
+the mockup itself had thrown away.
+
+**Measured, resting bar, no warning rows:**
+
+| | reservation | occupied by the fixed stack | EMPTY BAND |
+|---|---|---|---|
+| before | 234px (`--mbar-h 66` + 90 + 78) | 156px (90px float offset + 66px bar) | **78px** |
+| after | 176px (`--mbar-h 66` + 90 + **20**) | 156px | **20px** |
+
+**Source named:** neither the block's own margin nor its container's padding. `.mp-pos2--mobile
+.disc` is `padding:14px 14px 16px` with `margin:0`, and `.mp-pos2-mobile` is a flex column whose
+13px `gap` contributes nothing after its last child — both were already correct and both were
+correct in 301 too. It is the **scroll reservation for the floating bar**, over-stated by 58px.
+The `--mbar-h` term stays measured so a warning strip still pushes the last card clear; only the
+trailing constant comes down to the file's 20px.
+
+### §3 — the New Purchase header
+
+301 §3 gave the route its own heading (`ROUTE_TITLE_KEYS`) and stopped there, so the line beneath
+went on falling through to the PARENT nav row's `navSub.pharmacyPurchase` — "Purchases, batches
+and supplier payments", a description of the LIST under a form for exactly one purchase.
+
+`ROUTE_SUBTITLE_KEYS` + `routeSubtitleKey()` added to `@mp/shared/nav-registry` beside the title
+map, so heading and description are set in one place (198 §2). `/pharmacy/purchase/new` claims
+`pdMEntryChooseSupplier` — the same string the phone's sub-header already shows. `TopbarExtras`
+gains a `subtitle`, and the entry screen publishes `supplier?.name ?? null`; the shell resolves
+in order live → route → nav row, so `null` leaves the registry's words standing rather than
+blanking the line. Desktop and mobile now read identically.
+
+### §4 — skeletons app-wide
+
+**One shared component.** `packages/ui/src/components/shimmer.tsx` — `Shimmer` (the atom, over
+globals.css's `.skeleton`/`.skel-line`/`.skel-circle` from 126 §2.3), the shapes `ShimmerLines`,
+`ShimmerRows`, `ShimmerTable`, `ShimmerKpis`, `ShimmerPanel`, `ShimmerChart`, and `Loading`,
+which every fetching surface mounts. Eleven screens were each hand-writing
+`<span className="skeleton" style={…}>` — 58 sites — and all 58 are converted. `grep -rn
+'className="skeleton' apps/web --include=*.tsx` returns **nothing**, and the spec asserts it.
+
+**Threshold: 180ms** (`SKELETON_DELAY_MS`, exported so no screen picks its own). Below ~100ms a
+change reads as instant and a shimmer inside it is a flicker; past ~1s an empty surface reads as
+broken. On the counter's LAN these fetches land in 40–120ms and must show nothing; a cold report
+or a phone on 3G takes seconds and must say so at once. 180ms sits above the first band, far
+below the second.
+
+**A failed fetch never shimmers.** `Loading` takes `error` and renders nothing at all when one is
+set, so the screen's own error state takes the space. This is enforced in the component, not per
+screen, so it cannot be forgotten.
+
+**THE AUDIT** — every surface that fetches on open or on change:
+
+| Surface | Before | Now |
+|---|---|---|
+| POS first load | had one (`PosSkeleton`, 213 §6) | unchanged, atom now shared |
+| POS cart resuming a hold | had one (`SkeletonCard`) | unchanged |
+| Inventory list / detail drawer | had one (`DetailSkeleton`, 213 §6) | unchanged, atom shared |
+| **Inventory → Adjust stock (open)** | **NONE — awaited the fetch, then mounted; the click did nothing visible** | dialog opens on the pending id, six field-shaped blocks, error line on failure |
+| Inventory → Adjust, item changed | none (form stayed, select disabled) | unchanged — the right behaviour for a CHANGE |
+| Stock alerts, tab switch | had one | unchanged |
+| Suppliers desk list | had one | unchanged, atom shared |
+| Suppliers detail drawer (desktop) | had one (250 §1, flash fixed 259 §6) | unchanged |
+| Suppliers sheet (phone) | none by design — the sheet's entrance covers the wait | unchanged |
+| Suppliers drawer/sheet tab switch | n/a — tabs filter data already held, no fetch | no skeleton needed |
+| Purchases desk list | had one (`PurchaseSkeleton`) | unchanged, atom shared |
+| Purchases date-range / month window | reloads through the list skeleton | unchanged |
+| Purchases view drawer | had one | unchanged |
+| **Purchases → print preview** | **NONE — the overlay appeared only once the invoice landed** | `InvoicePreviewSkeleton`: same scrim/`.printdlg` frame, one A4-proportioned (1:√2) sheet shimmering |
+| New Purchase entry | had one | unchanged |
+| **Reports, first load** | **NONE — one grey sentence, "Loading reports…"** | KPI strip + trend chart + six card outlines |
+| **Reports, range change** | **NONE — and worse than blank: the OLD figures sat there looking settled while a new range was fetched** | panels replaced by the same skeleton; the range control stays put |
+| Reports, failed read | left in `loading` forever | leaves loading; the error line stands, no shimmer |
+| Recent sales | had one | unchanged, atom shared |
+| Returns desk + both return flows | had one | unchanged, atom shared |
+| Global search | had one | unchanged, atom shared |
+| /ui kit gallery | hand-wrote the atom | mounts the shared component |
+
+### Files
+
+`packages/ui/src/components/shimmer.tsx` (new), `packages/ui/src/index.ts`,
+`packages/ui/src/lib/skeletons-and-keyboard-flow-303.spec.tsx` (new),
+`packages/shared/src/nav-registry.ts`, `packages/i18n/src/messages/{en,ur}.json`
+(`pinvAdjLoading`, `pinvAdjLoadFailed` — EN+UR parity),
+`apps/web/lib/nav.ts`, `apps/web/components/shell/{AppShell,topbar-slot,GlobalSearch}.tsx`,
+`apps/web/app/globals.css`, `apps/web/app/ui/StaffKit.tsx`, and the pharmacy clients: `pos/
+{PosClient,PaymentPanel}`, `purchase/PharmacyPurchaseClient`, `inventory/
+{PharmacyInventoryClient,alerts/StockAlertsClient}`, `reports/ReportsClient`, `suppliers/
+SuppliersClient`, `recent-sales/RecentSalesClient`, `returns/{ReturnsClient,new-sale-return,
+new-purchase-return}`.
+
+### Gates
+
+`pnpm typecheck` — 31/31 clean. `pnpm lint` — 17/17 clean (the one remaining warning, an unused
+eslint-disable in `apps/api/src/doctor-portal/doctor-portal.repositories.ts:220`, is pre-existing
+and outside this step's files). `design-drift-check.mjs` passes. Vendor untouched. The unit suite
+and build are the controller's to run.
+
+### Decisions recorded
+
+- **`Enter` on a row focuses the unit select without opening it.** One key per stop; an
+  auto-opened list would eat the next press.
+- **A mouse click on a unit option does NOT advance to the quantity.** Only the keyboard pick
+  does. A click is not a walk, and moving a mouse user's caret is 300 §5's defect.
+- **`Enter` on a quantity lands on the next ROW, not its unit select.** The row is the ring's
+  first node and it is where the row-level keys (`+`/`−`, digits, `U`, `Delete`) live; landing
+  inside a field would put those out of reach and would leave `Shift+Tab` reversing a path
+  `Enter` had not walked.
+- **180ms, one constant, exported.** Two definitions of "fast" in one app is the drift 249 §2
+  fixed for money fields.
+- **A failed fetch clears the skeleton in the COMPONENT, not in each screen.** Enforcement that
+  depends on every author remembering is not enforcement.
+- **The phone's supplier sheet still has no loading pane.** The file draws none and the sheet's
+  own entrance animation covers the wait; adding one would be a shimmer nobody sees.

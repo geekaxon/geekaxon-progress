@@ -7,16 +7,15 @@
 ## Current Status
 - **Project:** Marham Patti — multi-tenant white-label healthcare platform.
 - **Phase:** **PHASE 29** — Returns completion and polish.
-- **Last completed:** **302 — returns-flows-and-correctness**.
-- **Next:** **303 — keyboard-flow-and-skeletons** — specs/303-keyboard-flow-and-skeletons.md
-- **303 §1.1 and §2 are SECOND attempts** — record why the first fell short; measure before/after.
+- **Last completed:** **303 — keyboard-flow-and-skeletons**.
+- **Next:** none — awaiting next spec block [HUMAN_REQUIRED]
 - **BRANCH RULE:** switch to the spec's own branch BEFORE any commit. Numbering is continuous.
 - **PRINCIPLE:** a control built for the mouse is NOT a tab stop.
 - **After this:** Recent Sales, Settings, Day-close, Accounting, Prints, Dashboard, then two audits.
 - **Standing notes** (prints held, thermal hardware, pre-production checklist) live in PROGRESS-HISTORY.
 
 ### Recent steps
-- **303 — keyboard-flow-and-skeletons** — AUTHORED — the full Enter ring, Split→amount, measured mobile gap, skeletons app-wide.
+- **303 — keyboard-flow-and-skeletons** — DONE (2026-08-18) — Enter walks the whole row, the phone's dead band measured away, one skeleton.
 - **302 — returns-flows-and-correctness** — DONE (2026-08-18) — return caps that name the limit, the money stated before confirming, drafts.
 - **301 — keyboard-flow-and-purchase-draft** — DONE.
 
