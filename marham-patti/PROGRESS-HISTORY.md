@@ -17634,3 +17634,174 @@ what "global" now means), `command-menu-and-keyboard-286` (`Ctrl+<n>`), `pharmac
 untouched). `pnpm typecheck` clean, 31/31. Targeted suites green: `packages/ui` 102 suites / 2911 tests, and
 `apps/api` `src/pharmacy` + `src/pharmacy-shortcuts` 64 suites / 1075 tests. Vendor untouched; no schema, no
 migration, no money logic changed.
+
+## 301 — keyboard-flow-and-purchase-draft — DONE (2026-08-17)
+
+**Branch:** `fix/301-keyboard-flow-and-purchase-draft` (WORK TYPE: FIX). Spec: `/specs/301-keyboard-flow-and-purchase-draft.md`. No CODEREF for this range. Schema untouched, RLS untouched, money logic byte-identical.
+
+### §1 Keyboard flow — five corrections
+
+**§1.1 Shift+Tab out of the customer field.** `.pos-sel` (PosClient) now answers `Shift+Tab` from the trigger and from the open picker's search box: it shuts the panel and focuses the scan field, reversing 300 §2.1's forward hand-off. The cause was structural, so it is fixed structurally too — `PosSelectField`'s inline `+` and clear `✕` are `tabIndex={-1}`. That is the same rule 300 §2.6 applied to the quantity steppers, and it lands on the purchase supplier field as well (one component, two consumers). Nothing became unreachable: the picker's footer creates from what was typed, `Insert` does it from the search box, `Alt+N` adds a customer and `Alt+Shift+C` clears one.
+
+**§1.2 F3 removed.** `pos.selectCustomer` loses `alsoCombo: 'F3'`, so the engine, the `?` dialog, the settings screen and the printable map all drop it off the single registry. The held-sales window named `F3` too (`heldSearchCustomer`), which would have kept printing a struck-off key, so that fixed row is gone and `/` carries both search modes by toggling them — the badge beside the field says which is live, and nothing became unreachable. Two rows added to `REMOVED_SHORTCUTS` (the alias and the held-window key). Superseded assertions updated in `pos-shortcut-map-final-300.spec.tsx`, `keyboard-round-3-294.spec.tsx`, `shortcut-engine-284.spec.ts` and `pharmacy-shortcuts.service.spec.ts` — each now asserts F3 reaches nothing and `Alt+C` still opens the picker. `heldSearchRef`'s label merged to "Search by reference or customer" in both catalogues.
+
+**§1.3 Enter walks the line.** In `onCartRowKey`, before the card-only guard: `Enter` on the unit select focuses that line's quantity; `Enter` on the quantity focuses the next line's first field (its unit select, or its quantity when the select is dead — the same disabled-skip the Tab ring uses) and reveals the row; with no next line it focuses Proceed to payment via a new `focusProceed` and the new `data-postakepay` marker (on both the desktop `.fabar` button and the phone's `.mbar__go`). Focused, never pressed — a sale is committed by `F10` or a deliberate Enter on the button. The unit select's own `Enter` no longer opens the menu (`Space`, `↑`/`↓` and `U` all still do), which is what freed the key. Reverse: `Shift+Tab` off Proceed returns to the last line's quantity, and `Shift+Tab` off a cart ROW now goes to the previous line's quantity instead of the browser's next stop, which was that line's remove ✕. **Recorded decision:** forward keeps 300 §2.6's row anatomy (unit · quantity · remove); backward follows the entry path, because that is what "Shift+Tab reverses it" means and the ✕ is a mouse control by §6's rule.
+
+**§1.4 Discount keys from anywhere in the block.** `onDiscountKey` answers `P`, `R` and `0` before the `e.target !== e.currentTarget` guard, so they fire from the `%`/`Rs` toggle, any preset pill and the card itself. They stand down inside the value field, tested by identity against `discountRef` rather than by tag name (284 §1). `Enter` and `Esc` stay the card's own, so `Enter` on a focused preset still applies it.
+
+**§1.5 Tab after a payment method.** `Shift+1…4` now focuses the tile it picked — but only when the cashier was not already in a field, so the whole point of moving the methods onto Shift (type the amount while the tiles stay reachable) is preserved. `.paymeth`'s handler sends a forward `Tab` to the amount box: `input[data-payamount]`, falling back to the first `.paytender`/`.paymix` input in split mode. Guarded to the method row because the same handler serves the quick-tender chips, which sit below the box and would have made a loop.
+
+### §2 A purchase draft survives leaving the page
+
+`leave()` no longer calls `discardDraft()` on either tier — that one line was why navigating away lost the entry while a refresh did not. Saving still clears it. `usePurchaseDraft` gained `clearEntry` (Discard draft: blanks every field, mints a FRESH idempotency key so the discarded entry can never be retried, and clears storage; the persist effect writes the blank form back, which `savePurchaseDraft` stores as "nothing to keep") and `draftRestored`, which draws a `.pdraft` note on both tiers carrying that button. Restored silently with a note, per the owner's decision against a "continue?" prompt; the 296 toast stays. Per user: `purchaseDraftKey(userId)` suffixes the frozen `PURCHASE_DRAFT_KEY`, the owner read once into a ref from the new `sessionUserId()` in `lib/session.ts` (decodes the access token's `sub` — synchronous, because a restore effect cannot wait for a fetch; it grants no authority and scopes a storage key only). `clearPurchaseDraft` also removes the pre-scoping key so old drafts cannot be inherited. The abandon warning stays on the leave, with its wording corrected in both catalogues — it promised the lines would be lost, and they are now kept as a draft. `new-purchase-as-page-296.spec.ts` updated where 301 supersedes it (discard count 4 → 2, the scoped signatures).
+
+### §3 Headings and the supplier field
+
+`navPharmacyPurchase` → "Purchases", so sidebar, topbar, breadcrumbs and search all follow from the one registry row. The entry route is not a nav row and was inheriting its parent's heading, so `nav-registry.ts` gained `ROUTE_TITLE_KEYS` / `routeTitleKey()` — exact-match only, deliberately not longest-prefix — and `AppShell` asks it before the registry row. `/pharmacy/purchase/new` claims `pdNewPurchaseHeading` = "New Purchase"; `pdEntryCrumb`, `pdEntryTitle` and `pdNewPurchase` capitalised to match. Both tiers' supplier helper now reads "Choose a supplier" (`pdMEntryChooseSupplier`, the phone's own wording) and the chosen supplier's name once one is picked; the desktop panel's empty state keeps the longer "not listed yet" sentence, which is where that sentence is true.
+
+### §4 Mobile discount block
+
+The counter reserved the floating dock twice: `.mp-shell-main` gives every phone page 104px for it (248 §1) and `.mp-pos2--mobile` already reserved `--mbar-h + 90px + 14px`, where the 90px IS the dock offset. The shell's share now stands down on `[data-page-chrome='pos']` (safe-area only) and the surface reserves the committed `pos-mobile.html` figure: `--mbar-h + 90px + 78px`, i.e. the file's 234px under the last card. The `.disc` card's own phone sizing is untouched.
+
+### Gates and files
+
+`pnpm lint` and `pnpm typecheck` clean (one pre-existing unused-eslint-disable warning in `doctor-portal.repositories.ts`, untouched). Unit/e2e/build left to the controller per AGENT.md.
+
+Files: `packages/shared/src/pharmacy-shortcuts.ts`, `packages/shared/src/nav-registry.ts`, `apps/web/app/(app)/pharmacy/pos/PosClient.tsx`, `apps/web/app/(app)/pharmacy/pos/PaymentPanel.tsx`, `apps/web/components/pharmacy/PosSelectField.tsx`, `apps/web/app/(app)/pharmacy/purchase/PharmacyPurchaseClient.tsx`, `apps/web/app/(app)/pharmacy/purchase/purchase-draft.ts`, `apps/web/lib/session.ts`, `apps/web/lib/nav.ts`, `apps/web/components/shell/AppShell.tsx`, `apps/web/app/globals.css`, both message catalogues, new `packages/ui/src/lib/keyboard-flow-and-purchase-draft-301.spec.tsx`, plus the four superseded suites listed above.
+
+**Ends the block.** No step 302 is authored; `Next` is `none — awaiting next spec block [HUMAN_REQUIRED]`.
+
+---
+
+## 302 — returns-flows-and-correctness — DONE (2026-08-18)
+
+**Branch:** `feature/302-returns-flows-and-correctness` (WORK TYPE: FEATURE).
+**Spec:** `specs/302-returns-flows-and-correctness.md`. No CODEREF exists for 302 (the ranges stop at 113-121).
+
+### Standing notes moved out of PROGRESS.md (it was over its 1.5 KB ceiling)
+- **Held for build:** A4 sale invoice; thermal receipt (awaiting its mockup update).
+- **Awaiting hardware:** thermal printing — Goojprt PT-210, 18F0/2AF1, paced writes, FFE0 fallback, 58mm.
+- **Before production:** VAPID keys; blank VENDOR_BOOTSTRAP_*; fresh secrets; MFA_STAGING_RELAX=false; SEED_DEMO and SCREENSHOT_TOKEN unset.
+
+### Decisions
+
+1. **§1.2 needed a schema addition, and the spec allowed one ("additions only if a partial-return
+   cap genuinely needs one").** A sale return has always carried `original_sale_id`, so "how many of
+   this line are already back" is answerable. A purchase return had NO link to the invoice it came
+   off, and the lot's on-hand is not a substitute: a later delivery TOPS UP the same lot (same branch
+   + medicine + batch no + expiry — `receiveBatch`'s own identity), so an invoice cap read off stock
+   alone silently reopens by however much arrived, and a shop could send a distributor back more of
+   an invoice than that invoice ever delivered. Added `PurchaseReturn.originalPurchaseId` (nullable)
+   + `@@index([tenantId, originalPurchaseId])`, migration
+   `20260818000000_purchase_return_original_purchase` (ADD COLUMN IF NOT EXISTS + CREATE INDEX IF NOT
+   EXISTS; RLS untouched — ALTER does not disturb the forced tenant policies applied at 02).
+   **No backfill, deliberately:** the link was never recorded and guessing it from supplier + date
+   would attribute stock to an invoice it may not have come from. A purchase whose earlier returns
+   are all null-linked is capped by the shelf alone — exactly the rule those returns were raised
+   under — and `purchaseReturnLink` returns null rather than inventing an attribution. A test asserts
+   this ("a purchase return that names NO invoice is not attributed to one by guesswork").
+2. **108 stays frozen.** Nothing in `createSaleReturn` / `createPurchaseReturn` changed except that
+   the purchase return now RECORDS `originalPurchaseId`. No figure is computed from it; the credit
+   total, the batch guard and the stock movement are byte-identical. The invoice cap is enforced in
+   the READ model (`returnablePurchase`), which is where 289 already put "the second limit" — adding
+   a new server-side refusal would have been a second refund path by another name.
+3. **§1.1 keeps stock out of the sale cap on purpose**, and `saleReturnCap` exists (rather than a
+   bare `remainingReturnable` call) so that intent is named in code: a customer may return what they
+   bought even when the shop now holds none of it.
+4. **§1.3 — fully-returned sales are no longer filtered out** of `returnableSales`. `SaleStatus.RETURNED`
+   already marks them, so nothing new is derived; what changed is that they are shown, flagged
+   `fullyReturned`, rendered with a "Fully returned" pill and a `disabled` button, and skipped by the
+   Enter-opens-highlighted-row path. Purchases get the same flag, computed from the invoice cap over
+   one grouped read of `listPurchaseReturns` (one query for fifty rows, not fifty).
+5. **§2's two directions differ in kind, not just in wording.** `saleReturnConsequence` branches on
+   method and only sets `ledgerBefore/After` when the refund is CREDIT and a ledger exists (null on
+   both is a positive statement: "this one does not touch the account"). `purchaseReturnConsequence`
+   has no branch at all — a distributor does not hand money back. Read models gained
+   `customerOutstanding` (live, via `customerOutstanding`), `supplierOutstanding` (via `supplierLedger`)
+   and `ageDays`.
+6. **§3's guard is a REF, not state.** Two clicks inside one frame both read the same stale
+   `saving === false`; `savingRef` is checked and set before the first `await`, and released in
+   `finally` so a FAILED attempt re-enables the button. The `Idempotency-Key` is minted once and
+   carried IN THE DRAFT, so a refresh landing between Confirm and the answer retries the same
+   request rather than issuing a second refund.
+7. **§4 reuses 296/301's draft shape** in a new `return-draft.ts`: per-user key, two flows (`sale` /
+   `purchase`), decisions only (never a figure), restored SILENTLY with a toast + a footer note +
+   an explicit **Discard draft** that takes a fresh idempotency key. Restored line decisions are
+   re-applied onto FRESHLY fetched lines and clamped by `clampReturnQty`, so a quantity another till
+   has since taken drops to what is left instead of being posted and refused.
+8. **§6's scan button was removed by making `onScan` OPTIONAL on `MobileScanSearch`** rather than
+   forking a second search field: absence is expressed at the one shared control, the POS /
+   Inventory / alerts screens still pass it and are untouched, and the viewfinder is not mounted at
+   all on the return flows.
+9. **§6's step bar fix is 248 §1's cure applied to a third pair of screens.** The flows claimed
+   `sale-return` / `purchase-return`, neither of which was in the stylesheet's chrome list, so the
+   shell's generic 84px applied. Replaced with TWO keys by step — `return-find` (step 1, which has a
+   search row: 117px) and `return-step` (steps 2/3, title row alone: 59px) — each declaring
+   `--mchrome` once so padding and scroll-padding cannot drift. The same block sets
+   `padding-bottom:env(safe-area-inset-bottom)`, removing the shell's 96px dock reservation that was
+   stacking on top of `.mp-ret-flow`'s own 96px for the pinned total bar (§6's excess bottom space).
+10. **§7 pages server-side on both searches.** `limit`/`offset` on the two `returnable/*` endpoints,
+    clamped by `returnsPageSize` / `returnsOffset` in the controller (a caller cannot ask for the
+    whole book), `RETURNS_SEARCH_PAGE = 50` in `@mp/shared`, and `RETURNS_SEARCH_SCAN = 2000` as the
+    depth either search reads before filtering — 289 read 500 and served 25 from it, which is why a
+    three-month-old invoice could not be found. The window is cut out of the MATCHES, never out of a
+    loaded page. Sentinels use the shared `useInfiniteScroll` (218 §2), so they are re-observed when
+    step 1 unmounts on picking a document.
+11. **§8 links both ways.** `ReturnedLinkView` on the sale and purchase read models plus
+    `PurchaseDetailView.returnLink` and `RecentSaleReturnView.{id,returnNo,full}`; the register
+    deep-links on `?ret=<id>` and opens that row's drawer once (`openedRef`). Named `returnLink` on
+    the purchase detail because `PurchaseRowView.returned` is already a boolean.
+12. **§5's mockup diffs, per declaration:** checkbox 22→18px with a 12px tick and 5px radius (file
+    535-536); `.totals` given the file's `margin-inline-start:auto; width:320px` (3120) with the phone
+    and drawer overriding back to 100%; reason column 196→230px via a `.reasoncell` class that also
+    sizes its select and note field to the mockup's 30px row height; `.formsec` / `.formrow2` gaps
+    declared for `.mp-ret` (they had none and inherited each block's own margin); ↑/↓ on the return
+    quantity in both line tables, bounded by the same `clampReturnQty` cap the buttons use (300 §1).
+13. **§6.4 button order** on the register's mobile quick-actions: New purchase return first, New sale
+    return second — desktop's order.
+14. **New atoms:** `.consq` / `.consq--credit` (the consequence line — deliberately NOT an alert:
+    nothing has gone wrong, and a screen that shouts at every return teaches the counter to stop
+    reading it), `.retlink`, `.mfacts__age`, `.pill--done`, `.is-done` on `.pos-opt` / `.mpickrow`,
+    and a `.mp-spin` utility class reusing the existing `mp-spin` keyframe (it was a keyframe name
+    only, with no class behind it) with a reduced-motion opt-out.
+
+### Files
+
+- `packages/shared/src/pharmacy-returns.ts` — `saleReturnCap`, `purchaseReturnCap`, `fullyReturned`,
+  `documentAgeDays`, `saleReturnConsequence`, `purchaseReturnConsequence`, `RETURNS_SEARCH_PAGE`,
+  `ReturnCapLit` / `ReturnCapState`.
+- `packages/db/prisma/schema.prisma` + `migrations/20260818000000_purchase_return_original_purchase/`.
+- `apps/api/src/pharmacy/` — `pharmacy.service.ts` (the four returnable read models, the two purchase
+  helpers `purchaseReturnPools` / `purchaseReturnLink`, the sale + purchase detail links),
+  `pharmacy.repositories.ts` (`listPurchaseReturnsForPurchase`, the new column through the row/select/
+  create), `__fakes__.ts`, `pharmacy.dto.ts` (optional `originalPurchaseId`), `pharmacy.controller.ts`
+  (paging params + `returnsPageSize` / `returnsOffset`), `pharmacy.constants.ts` (`RETURNS_SEARCH_SCAN`).
+- `apps/web/app/(app)/pharmacy/returns/` — `return-draft.ts` (new), both new-return clients,
+  `ReturnsClient.tsx` (button order + `?ret=` deep link).
+- `apps/web/components/pharmacy/MobileScanSearch.tsx` — `onScan` optional.
+- `apps/web/app/globals.css`, `packages/i18n/src/messages/{en,ur}.json` (20 keys each).
+- Tests: `apps/api/src/pharmacy/returns-flows-and-correctness-302.spec.ts` (18),
+  `packages/ui/src/lib/returns-flows-and-correctness-302.spec.ts` (62).
+- `packages/ui/src/lib/returns-screens-to-mockup-293.spec.ts` — three assertions updated where 302
+  deliberately supersedes 293: the `pos-opt` class template now carries an `is-done` suffix, the
+  search names its parsed page (`rows`), and the phone flow no longer mounts a scanner.
+
+### Gates
+
+- `pnpm lint` — clean (one pre-existing unused-eslint-disable warning in `doctor-portal.repositories.ts`).
+- `pnpm typecheck` — 31/31 tasks pass.
+- `pnpm prisma generate` — run after the schema change.
+- Targeted suites: the new 302 API suite 18/18 and UI suite 62/62; the whole `apps/api/src/pharmacy`
+  folder 65 suites / 1093 tests pass; `@mp/i18n` parity passes; `packages/ui` 128/130 suites pass —
+  the two failures (`pdf-badges-and-mobile-warning-297`, `stale-allocation-and-stock-guard-298`) were
+  verified to FAIL on the clean pre-302 tree as well and are 301 leftovers, not regressions.
+- `pnpm test:unit` / `test:e2e` / `build` not run, per the standing rule.
+
+### Notes
+
+- Verification was by unit suite and by inspection; nothing here was checked on the deployed page or
+  a real device, which is what §9 asks for. The double-press behaviour in particular is asserted on
+  the guard (a ref set before the first `await`, released in `finally`) rather than driven through a
+  browser.
+- CLAUDE.md states this repo is a single package with no `pnpm-workspace.yaml`. It has one, and the
+  root scripts are turbo-driven; `pnpm lint` / `pnpm typecheck` at the root were used as instructed.
