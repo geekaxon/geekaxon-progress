@@ -18366,3 +18366,112 @@ the `list` action/fixed/screen/group labels, `setgKbdScreenList`, `rtnNewMenuLab
 
 Money logic byte-identical — `setLineUnit`, the pack maths, FEFO and the commit path are untouched.
 Vendor untouched. No schema, no RLS change.
+
+---
+
+## 307 — full-names-and-identity — DONE (2026-08-18)
+
+**Branch:** `fix/307-full-names-and-identity` · **Spec:** `/specs/307-full-names-and-identity.md` · **Work type:** FIX
+**Schema:** none. **RLS:** unchanged. **Money logic:** byte-identical (nothing under `entryLineMoney`, `splitPaymentSummary`, the ledger or the refund arithmetic was touched).
+
+### §1 — a medicine's name is never truncated
+
+Treated as the spec demands: a shared-component change, not a per-screen patch. The divergence the
+owner reported (Inventory and the New Purchase product select cut the name; POS search and
+Low-stock / Near-expiry did not) was not two screens behaving differently by design — it was six
+stylesheet blocks each choosing its own clip width, and POS search simply being the widest one. Its
+own rule (`.mp-pos2 .pos-res__nm b`) carried `white-space:nowrap; text-overflow:ellipsis` too.
+
+**Built once.** `packages/ui/src/components/med-name.tsx` — `<MedName>` and `<MedNameSub>`, exported
+from `@mp/ui`. The geometry is stated once in `apps/web/app/globals.css` as `.mp-name` (a
+`-webkit-box` clamped to two lines, `overflow-wrap:anywhere`, no ellipsis) and `.mp-name-sub` (still
+`nowrap` + ellipsis), plus a `--wrap` variant for §3's one named exception.
+
+**Owner decision recorded:** wrap, not a tooltip. A tooltip is a mouse affordance that does not exist
+on the counter's phone, and the tail it would reveal (*500mg (Tablet)*, *120ml (Syrup)*) is exactly
+the tail the truncation removed.
+
+**§1.3 — the column yields.** No width was added anywhere. Under `nowrap` the name's min-content width
+was the whole name, so a long one either widened the table or was clipped to protect the money
+columns; `overflow-wrap:anywhere` collapses that min-content width to a character, so the tabular
+money columns keep every pixel and the name column takes the remainder and reflows inside it. No
+table gains a horizontal scrollbar it did not have.
+
+**AUDIT — every surface that renders a product name, before → after:**
+
+| Surface | Before | After |
+| --- | --- | --- |
+| Inventory desktop table (`.medcell`) | `nowrap` + ellipsis on name AND sub | `<MedName>` + `<MedNameSub>`; name wraps to 2 lines, sub clips |
+| Inventory desktop cards (`.invcard__t`) | `display:block`, clipped by parent | `<MedName>` / `<MedNameSub>` |
+| Inventory mobile cards (`.minvcard__t`) | `nowrap` + ellipsis, both lines | `<MedName>` / `<MedNameSub>` |
+| Inventory mobile rows (`.minv__t`) | `nowrap` + ellipsis, both lines | `<MedName>` / `<MedNameSub>` |
+| Stock alerts — low + near-expiry, desktop table, desktop cards, mobile cards, mobile rows (8 name sites) | inherited `.medcell` / card clipping | `<MedName>` / `<MedNameSub>` throughout |
+| New Purchase product select — OPTIONS | `<span className="truncate">` in `search-select.tsx` | `identity` selects draw the label through `<MedName>` |
+| New Purchase product select — CLOSED DISPLAY | `truncate` on the trigger label | `<MedName>`; the trigger is `min-h-touch` so it grows to the second line |
+| Adjust stock item picker | same `truncate` | `identity` |
+| POS search results | `nowrap` + ellipsis (the "correct" surface — it was merely wider) | `<MedName>` / `<MedNameSub>` |
+| POS cart lines | `nowrap` + ellipsis | `<MedName>` |
+| Purchase view lines, desktop (`.vlines .li`) | `display:block`, clipped by column | `<MedName>` / `<MedNameSub>` |
+| Purchase view lines, mobile (`.mvline__t`) | `display:block` | `<MedName>` / `<MedNameSub>` |
+| Void-purchase confirmation lines | `nowrap` + ellipsis | `<MedName as="span">` |
+| Returns line table, desktop (`.cart__nm`) | `nowrap` + ellipsis | `<MedName>` |
+| Returns line table, mobile (`MobileReturnLine`) | unclamped `<b>` | `<MedName>` |
+| Sale-return + purchase-return line cards (step 2) | plain `<b>`/`<small>` | `<MedName>` / `<MedNameSub>` |
+| Sale-return + purchase-return desktop line tables | inline `style={{fontSize:'13.5px'}}` on a `<b>` | `<MedName className="rtnline__nm">`; the size moved to CSS |
+| Return search cards on mobile, both flows (`.mpickrow__t`) | document no. unclamped; supplier + date clipped mid-word | `<MedName>` + `<MedNameSub wrap>` — the meta wraps to two lines |
+
+**Deliberately NOT changed:** the A4 purchase document's `.li-name` already carries `text-wrap:pretty`
+and wraps freely — it is a printed sheet with a fixed page width, not a screen column, and it was
+never truncating. Non-product selects (unit, rows-per-page, supplier, customer) keep their one-line
+rows: a one-word option has no tail to lose, and `identity` is opt-in for exactly that reason.
+
+### §2 — a person is shown by name, never by login
+
+Root cause found at the source rather than on the screen: `actorDisplayName` (`@mp/shared`, 270 §2)
+resolved a nameless account to the WHOLE email address, and the New sale return's identity line and
+its **Counter** tile both read `view.sale.cashierName`, which is that function's output. Every
+credited surface in the API — recorded by, sold by, returned by, adjusted by, counter, approved by,
+day-close closer, movement actor — already routed through it, so one change fixed all of them.
+
+- Added `loginNamePart()`; `actorDisplayName` now falls back to the local part (`owner`, not
+  `owner@ganatra-clinic.mp`). A malformed `@domain` has no name part and falls through to
+  "Unknown user" rather than printing a lone domain. A `name` the tenant actually typed is still
+  returned verbatim even if it contains an `@` — the rule is about this function not inventing a
+  credential on a screen.
+- Three web surfaces were building their own identity and are now on the same function:
+  `VendorChrome` (`me?.name?.trim() || me?.email`), `UsersSection` (`?? user.email ?? user.id`) and
+  the admin `UserManager` row head, whose last rung was the **row id** — rule 7 in the open. The
+  vendor account menu still states the full address, which is the one place it means "the account
+  you are signed in to" rather than "who did this".
+
+### Tests
+
+`packages/ui/src/lib/full-names-and-identity-307.spec.tsx` — 19 cases. Behavioural where it can be
+(the component's two classes; the select truncating or not truncating by `identity`, in its options
+AND its trigger; `loginNamePart` / `actorDisplayName` as an input→output table; the owner's exact
+`owner@ganatra-clinic.mp` string proved to lose its `@`), and a census where the claim is about a set
+of files (every naming surface imports the one component; eleven named stylesheet rules asserted to
+contain NO `text-overflow` and NO `nowrap`; the Inventory rule that clipped identity and context in
+one declaration proved gone).
+
+Two existing suites needed honest adjustment:
+- `mobile-platform-polish.spec.ts` — its `polishBlock()` ran from the 195 banner to the END OF FILE,
+  so "the 195 block touches no overflow" had silently come to mean five thousand lines of every
+  later step's CSS. Bounded to the next section banner; it now asserts what it was written to assert.
+- `purchases-mobile-260.spec.tsx` — the mockup gives `.mvline__t b` a `display:block`, which is
+  exactly the per-screen decision 307 abolishes. That family moved out of the transcription table
+  into its own case that checks the mockup less `display`, with the deviation recorded in place.
+- `void-payment-reversal-270.spec.ts` — its email-fallback case restated to the narrowed rung.
+
+### Gates
+
+`pnpm lint` clean (the one `@mp/api` warning is pre-existing, in `doctor-portal.repositories.ts`,
+untouched here). `pnpm typecheck` clean, 31/31. `packages/ui` suite 3349/3349 green; the affected API
+suites (`pharmacy`, `billing`, `sample-tracking`) 1205/1205 green. Vendor untouched.
+
+### Note
+
+`PROGRESS.md` remains ~2.1 KB, as it was before this step. The overage is entirely in the standing
+carry-forward bullets under Current Status (principles, sequence, held-for-build, before-production);
+this step added one Recent-steps line and removed one, so the file did not grow. Pruning operator
+carry-forwards was judged the larger risk and left to the controller.
