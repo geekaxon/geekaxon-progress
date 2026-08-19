@@ -19092,3 +19092,143 @@ the shape 312 replaced. No product code changed; the specs were re-aimed at the 
 
 Gates: `pnpm lint` clean, `pnpm typecheck` clean; the six touched suites run green locally
 (281 tests).
+
+---
+
+## 313 — payments-and-permissions — DONE (2026-08-19)
+
+**WORK TYPE:** FEATURE — branch `feature/313-payments-and-permissions`. Spec: `specs/313-payments-and-permissions.md`.
+Mockups: `pos-desktop.html` / `pos-mobile.html` (`.payacct` — Account + Reference in Take Payment),
+`purchases-suppliers-desktop.html` (Record Payment).
+
+### The problem
+
+A non-cash payment recorded WHAT it was tendered on ("Card") and nothing about WHICH account it
+reached, so a shopkeeper reconciling a bank statement had no column to reconcile against. And a
+committed sale had exactly one correction — a sale return — so a mis-rung sale could not be undone
+at all.
+
+### §1 Payment accounts
+
+New table `payment_accounts` (tenant-scoped, forced fail-closed RLS from its FIRST migration).
+Add / rename / **deactivate, never delete** — a payment POINTS at the account it landed in, the same
+rule and the same reason as counters (221 §3). The built-in **Cash** row is provisioned lazily by
+the service on the first read of the list rather than by a migration that would have had to
+enumerate every existing tenant and then get it right again for every tenant created afterwards; it
+cannot be deactivated, and its Deactivate control is ABSENT rather than disabled-and-mysterious.
+Two refusals, both stated: deactivating Cash, and a duplicate name (which would put two
+indistinguishable rows in a select). Surface: Settings → Pharmacy → **Payment accounts**, one
+registry entry — the shell, the rail and the URL handling did not change (eighth step running).
+
+### §2 Account and reference at the moment of payment
+
+**Decision (owner's, applied):** account REQUIRED, reference OPTIONAL and editable afterwards. A
+forced reference field gets "123" typed into it, and a field that is routinely lied to is worse than
+an absent one.
+
+The rule lives in ONE pure predicate (`methodNeedsAccount` / `paymentAccountError`, `@mp/shared`):
+CASH goes to the till and CREDIT is a balance, so neither names an account; CARD, ONLINE and a
+SPLIT's non-cash legs do. The POS panel disables Confirm on it and the server refuses on it — one
+predicate, so a disabled control and a 400 can never disagree. Applied at the POS, the supplier
+desk's Record Payment, the customer desk's Record Payment and the sale-return refund.
+
+**New table `sale_payments`.** A POS sale had no payment row for an account to live on: spec 237
+recorded in writing that a sale stores only `total` and `credit_amount`, which is why the reprint
+could print no method lines, and parked persisting the tender split as a schema-changing follow-up.
+This is that follow-up. Written inside the existing idempotency seam, so a replayed commit writes
+the legs once. **Nothing reads them for money** — `sales.total`, `sales.credit_amount` and the
+day-close accrual are untouched, so every figure in the app is byte-identical, which is the
+boundary the spec froze.
+
+Also additive and unbackfilled: `supplier_payments.account_id`, `customer_payments.account_id`,
+`sale_returns.refund_account_id` + `refund_reference`. No backfill was attempted and none is
+wanted — a guessed account on a historical payment is worse than no account at all, and NULL is
+what "we did not record it" should read as.
+
+Reference editing is the ONLY field a recorded payment lets anyone change (three PUT routes, one
+service method): the amount, the method and the account are what the money DID, and those are
+corrected by a reversing entry (270 §1.2), never by a rewrite.
+
+### §3 Three permissions, each its own switch
+
+`pharmacy.backdateSale` already existed and was already server-enforced; what was wrong was the
+UI — the sale-date control was HIDDEN without it, which taught a cashier the sale has no date at
+all. It now always renders, reading today's date, disabled without the permission, on both the
+desktop dialog and the phone sheet.
+
+Two new TENANT keys, both behind the `pharmacy.pos` flag (flag first, then permission):
+`pharmacy.sale.void` (§4) and `pharmacy.print.only`. Defaults: Owner, Admin, Manager — the same
+reasoning `pharmacy.purchase.void` carries. Both join `CAPABILITY_KEYS` in the role editor so an
+owner ticks all three of this step's switches in one place.
+
+`pharmacy.print.only` opens a new read-only controller `pharmacy/print`: a document picker, a sale
+invoice, a purchase invoice, and an audited thermal reprint. It commits NOTHING — every route is a
+render plus an audit row. **JUDGEMENT CALL, RECORDED:** §3.2 names "receipt / invoice / quotation".
+The first two exist and are served; a QUOTATION document does not exist anywhere in this app, so
+there is nothing to re-render, and inventing one behind a print gate would be building a new
+document rather than opening the existing ones to a second role. It joins that controller as one
+route on the day the quotation itself is built; PROGRESS.md's "Held for build" list now names it.
+
+### §4 Void sale, from Recent Sales
+
+`SaleStatus.VOIDED` + `sales.voided_at / voided_by / void_reason`. The stamp lives ON the sale,
+which is what makes voiding twice impossible: the second attempt finds it and is refused by name
+and date.
+
+Everything is REVERSING ENTRIES, never deletions: one StockMovement per line (`refType`
+`sale.void`, distinct from a RETURN's, because the two mean different things to anyone reading the
+shelf's history), the lot topped back up where the line named one, and any udhaar the sale consumed
+given back as a **reversing CustomerPayment** — the ledger is folded from credit sales minus
+payments, so a void that wrote nothing would be correct only for as long as every reader remembered
+to exclude voided sales. One transaction, or nothing.
+
+Refusals, all server-side: a second void; ANY standing return against the sale (the same rule
+purchases carry, 304 §6 — a REJECTED return holds nothing and does not block). A printed receipt is
+deliberately not consulted: a printer never blocks money. A voided sale stays visible, marked, and
+is unselectable for returns — dropped from the returnable list AND refused by `createSaleReturn`,
+because a row merely absent from a screen is a courtesy.
+
+**The new state was swept, per the standing principle.** `RecentSalePaymentKind` gained `VOIDED`
+(ahead of RETURNED), the filter chips gained it, `recentSalesTotals` gained a `voided` figure and
+excludes voided sales from `value` / `settled` / `creditGiven` — the one place it differs from a
+return, deliberately: a return happened and was given back, a void says the sale should never have
+been rung, and counting a mis-rung Rs 24,000 into the day's takings and then explaining it away in
+a second column is the lie the split exists to avoid.
+
+### Files
+
+- schema + migration `20260819000000_payment_accounts_and_sale_void` (2 tables, 7 nullable columns,
+  1 enum value, `apply_tenant_rls` on both new tables, fully idempotent).
+- `@mp/shared`: new `payment-accounts.ts`; `permissions.ts` (2 keys + flags + role defaults);
+  `pharmacy-recent-sales.ts` (VOIDED + the void vocabulary).
+- API: `pharmacy-settings` (accounts CRUD, repo + service + controller + DTO), `pharmacy`
+  (repo/service/controller/DTO/constants/module/fakes — legs, void, reference edits, print controller).
+- Web: new `PaymentAccountsSection` + registry entry; `PaymentPanel` (`.payacct`), `PosClient`
+  (accounts + the disabled sale date), `RecordSupplierPayment` (account select), `RecentSalesClient`
+  (void action, confirmation, VOIDED pill, tender lines), `RolesSection`, `globals.css`.
+- i18n: EN + UR parity for every new key (settings list, `pdPayAccount*`, `prsVoid*`,
+  `pharmacyPos.v17.*`).
+
+### Tests written (controller runs them)
+
+- `apps/api/src/pharmacy/payments-and-permissions-313.spec.ts` — the account rule (pure), the three
+  permissions and their separateness, cash/card/split commits and the persisted legs, the
+  deactivated-account refusal, the account still displaying on an old payment, reference editing,
+  the supplier + customer desks, and the whole void: stock back with `stock.qty == Σ batch.qty`
+  holding, udhaar restored and the tab netting to zero, refused with a return, refused twice,
+  unselectable for returns, a printed receipt not blocking it, and the VOIDED classification/totals.
+- `apps/api/src/pharmacy-settings/pharmacy-settings.service.spec.ts` — §1 accounts: lazy Cash,
+  add/rename/deactivate-never-delete, the Cash refusal, duplicate names, cross-tenant 404.
+- `packages/db/src/payment-accounts-isolation.spec.ts` — the REAL migrations over pglite: forced
+  fail-closed RLS on both new tables, cross-tenant insert/update blocked, per-tenant name
+  uniqueness, every new column nullable, `SaleStatus` gained VOIDED, and re-running the migration is
+  a no-op.
+
+### Gates
+
+`pnpm prisma generate`, `pnpm lint` and `pnpm typecheck` run once at the end — clean (the only
+warning is a pre-existing unused eslint-disable in `doctor-portal.repositories.ts`, untouched here).
+Unit/build/e2e left to the controller per AGENT.md §4A.
+
+### 313 — gate fix (test:unit)
+Three pre-313 suites were still speaking the pre-313 dialect. `pos-checkout.spec.ts` and `dayclose.spec.ts` rang up a CARD tender with no account, which 313 §2 now refuses with a 400 — each test seeds an active bank account on the repo fake and names it on the card leg. `recent-sales.spec.ts` pinned the totals/byKind shape exactly, so it learned 313's VOIDED bucket and `voided` figure. No production code changed. Gates: pnpm lint (0 errors, 1 pre-existing warning in doctor-portal.repositories.ts) and pnpm typecheck both pass; the three suites pass locally (46 tests).
