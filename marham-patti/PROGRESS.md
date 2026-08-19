@@ -6,20 +6,25 @@
 
 ## Current Status
 - **Project:** Marham Patti — multi-tenant white-label healthcare platform.
-- **Phase:** **PHASE 30** — Returns round 2: correctness, lists, keyboard, names.
-- **Last completed:** **308 — returns-desktop-to-mockup**.
-- **Next:** specs/309-returns-mobile-and-copy.md
-- **Returns is NOT complete** — 309 closes it, and closes the group.
-- **BRANCH RULE:** switch to the spec's own branch BEFORE any commit. Numbering never skips.
-- **PRINCIPLE:** a phrase that hands the agent a judgement call gets a judgement — quote strings, measure gaps.
-- **Sequence after this:** Customers, Recent Sales, Settings, Day-close, Accounting, Prints, Dashboard, final audit.
-- **Held for build:** A4 sale invoice; thermal receipt (awaiting its mockup).
-- **Awaiting hardware:** thermal printing, Goojprt PT-210, 58mm.
-- **Before production:** fresh secrets and keys; blank bootstrap vars; staging relaxations off; demo seed off.
+- **Phase:** **PHASE 31** — ledger truth, payments and personalization.
+- **Last completed:** **310 — ledger-truth**.
+- **Next:** specs/311-names-and-identity.md
+- **Group order:** 311 → 312 → 313 → 314 → 315 → 316. One step, then stop at the checkpoint.
+- **SECOND/THIRD attempts — capture before fixing:** 311 §1 · 312 §1.
+- **310 §5 awaits the owner** — run docs/310-supplier-advance-verification.sql; never delete a row.
+- **Mockups are the latest committed standalone files** — badge/pills/ledger/margin work is in them.
+- **304's components are MOUNTED in 315, never rebuilt.**
+- **BRANCH RULE:** create and switch to the spec's own branch BEFORE any commit.
+- **PRINCIPLE:** when a rule creates a new state, audit every surface rendering the old states.
+- **Numbering is continuous — never skip a number.**
+- **Sequence after this:** returns retest round (mobile, waterfalls, window) → Customers → Recent Sales → Settings → Day-close → Accounting → Prints → Dashboard → audits.
+- **Held for build:** A4 sale invoice; thermal receipt (awaiting its mockup update).
+- **Awaiting hardware:** thermal printing — Goojprt PT-210, 18F0/2AF1, paced writes, FFE0 fallback, 58mm.
+- **Before production:** VAPID keys; blank VENDOR_BOOTSTRAP_*; fresh secrets; MFA_STAGING_RELAX=false; SEED_DEMO and SCREENSHOT_TOKEN unset.
 
 ### Recent steps
-- **308 — returns-desktop-to-mockup** — DONE (2026-08-18) — one stack sets the page rhythm and a list shows its options in full.
-- **307 — full-names-and-identity** — DONE (2026-08-18) — a medicine's name is never cut short, and a person is shown by name.
-- **306 — keyboard-unit-select-and-list-preset** — DONE (2026-08-18) — arrows browse, Enter chooses, one keyboard for four lists.
+- **310 — ledger-truth** — DONE (2026-08-19) — advance instead of a floored zero, all returns, real counts.
+- **309 — returns-mobile-and-copy** — DONE (2026-08-19) — the whole card ticks its box, blank band measured away.
+- **308 — returns-desktop-to-mockup** — DONE (2026-08-18) — one stack sets the page rhythm, a list shows every option.
 
 > Older steps in PROGRESS-HISTORY.md

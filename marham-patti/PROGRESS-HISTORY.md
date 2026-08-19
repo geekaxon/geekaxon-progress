@@ -18568,3 +18568,240 @@ across all 31 tasks. `@mp/i18n` and `@mp/shared` dists rebuilt so the new keys a
 ### 308 — gate fix (2026-08-18)
 
 `pnpm test:unit` failed on `packages/ui/src/lib/keyboard-flow-and-purchase-draft-301.spec.tsx`: 301 §3 pinned `Object.keys(ROUTE_TITLE_KEYS)` to the single entry `/pharmacy/purchase/new`, and 308 §2 added the two Returns entry routes to the same map. The exact-list assertion was a snapshot of the registry, not 301's claim; it now asserts the shape 301 actually owns — New Purchase is still in the map, and for every claimed route the PARENT path claims nothing, so no sub-route inherits its list's title. Test-only change; no product code touched. lint + typecheck pass.
+
+---
+
+## 309 — returns-mobile-and-copy — DONE (2026-08-18)
+
+**Branch:** `fix/309-returns-mobile-and-copy` (from the 308 head). **Spec:** `/specs/309-returns-mobile-and-copy.md`.
+**Schema:** none. **RLS:** unchanged. **Money logic:** untouched — 108's return maths, the caps, the fee and the
+credit-note posting are byte-identical; every change below is presentation, copy or a read-model field.
+
+### §1 The empty space below the results — measured, and its source named
+
+**Measured before, step 1, both flows, phone tier.** The body's bottom reservation computed to
+`96px + env(safe-area-inset-bottom)`. The committed file draws step 1 as `.mscroll--nodock`
+(`returns-mobile.html` 4988 for the sale flow, 5269 for the purchase flow) and declares
+`.mscroll--nodock{padding-bottom:28px}` at 4565. **Excess: 68px**, directly under the last search result.
+
+**Source named, and it is NOT the defect 302 believed it was fixing.** 302 §6 removed the SHELL's second
+reservation (`.mp-shell[data-page-chrome='return-find'] .mp-shell-main` keeps the safe-area inset and nothing
+else) and that removal HELD — verified in the live file and pinned by a test. This was a **third** reservation,
+and a different one: `.mp-ret-flow { padding-bottom:96px }` — the room that clears the pinned `.mtotalbar` —
+was declared unconditionally, on all three steps, and **step 1 draws no total bar at all**. So it is not two
+reservations stacking; it is one correct reservation applied on a step that has nothing to reserve for.
+
+**Measured after:** 28px on step 1, 96px on steps 2 and 3 (the file's own inline `padding-bottom:96px`,
+5059/5168/5303/5358). The reservation now reads off the bar's presence — `.mp-ret-flow:has(.mtotalbar)` — so it
+cannot outlive the bar again. The safe-area inset is the shell's and is unchanged.
+
+**The full-file diff (§5) found a second, larger one, and it is 308 §1 on the phone tier.** The flow's blocks
+are direct children of a plain block `<div class="mp-mobile mp-ret-mobile mp-ret-flow">`, so the computed gap
+between every pair — step bar to fact strip, fact strip to warning, card to card — was **0px**, and had been
+since 290. The file's scroller is `display:flex; flex-direction:column` and states its gap per screen: 12px on
+step 1 and step 3, 11px on the lines step. Both numbers are now in the app, distinguished by the thing that
+distinguishes those screens (`:has(.mretcard)` — the lines step is the only one drawing line cards), plus the
+file's own `.mscroll>*{flex:none}` so a child that clips its overflow keeps its height in a flex column.
+This is the sixth surface where a screen's column had no rhythm of its own.
+
+### §2 The whole item card ticks its checkbox
+
+Wired through **305 §1.2's shared handler**, `rowOpenProps` in `apps/web/lib/row-open.ts` — grep proves one
+call per flow and no second implementation. Everything §2 asks for comes with it: the quantity field, its
+stepper and the reason trigger are `button`/`input`/`label`, so the shared ignore walk stops the tap at the
+control the thumb actually landed on; a press-drag that selects the medicine's name does not toggle; and
+`.row-open:active { background:var(--surface-hover) }` is the press feedback the mockup specifies for the same
+family (`.mpickrow:active`, 4432).
+
+**One option added to the shared module: `controlOwnsFocus`.** The card must take the tap "without becoming a
+second control in the accessibility tree", and `as:'card'` would have given it `role="button"`, a name and a
+tab stop on top of a checkbox that already carries the line's name. With the flag the row keeps the pointer
+half — the same `onClick`, reached by re-entering the same function, not a copy of it — and gives up its role,
+its label, its tab stop and its `data-row-open`. A line with `remaining === 0` gets no handler at all: its
+checkbox is disabled and the card says the same thing.
+
+### §3 The quantity field — the divergence recorded
+
+`.mp-ret .retqty` already held the file's anatomy (289, verbatim from the mockup). The phone had its own
+**full re-declaration** of the control, `.mp-ret-flow .retqty--lg` (five rules), and re-declaring is what let
+it drift four ways:
+
+| | file (`returns-mobile.html` 4278-4288) | deployed | now |
+|---|---|---|---|
+| border | `1px solid var(--border-strong)` | `var(--border-hairline)` | file |
+| height | `var(--control-lg)` = 44px on the box | 44px on the BUTTONS, nothing on the box → **46px** | file |
+| divider | none | `border-inline` hairline down each side of the number | file |
+| field | 54px / 16px | 52px / 15px | file |
+| glyph | 17px | 16px | file |
+
+Fixed where the anatomy is: the re-declaration is **deleted** and `--lg` is now the file's four declarations on
+top of the shared control (`.mp-ret .retqty--lg`), so the seventh surface to mount `.retqty` inherits it rather
+than copying it. One deliberate addition — `flex:none` — because `.mretcard__qty` is a `space-between` row and
+the label beside the stepper is translated, so it must not shrink under a longer word than the English file
+carries. The reason trigger beside it went the same way: `min-height:48px` → `height:var(--control-lg)`, the
+file's own value (4422), so the two controls stacked in one card body are no longer 4px apart.
+
+### §4 Copy
+
+- **4.1** Both phone footers read **`Confirm`** (`rtnMConfirm`, en + ur). `rtnConfirmPurchaseReturn` survives on
+  the DESK alone, where `returns-desktop.html` states the longer label and the room exists for it.
+- **4.2** `rtnFindLabel` and `rtnFindPlaceholder` are both **`Invoice number, customer`** — no barcode, no
+  scanning, following 302 §6's removal of the scan button. Both keys are shared with the desk picker, which is
+  correct: the desk lost the scan control in the same step. Urdu updated to match.
+- **4.3** The return-window explainer is no longer a boxed `.mp-alert--info` after the results. It is **one
+  quiet line under the search field**, inside the chrome so it sits against the field it qualifies:
+  `rtnMWindowNote` = "Returns accepted within {days} days", 12px, tertiary, no box and no glyph. **Absent when
+  no window is set** — a rule with its number is worth reading and one without is not. `rtnMFindNote` is
+  deleted from the app and from both locales. The chrome reserves the line it now carries from ONE `--mchrome`
+  declaration (248 §1): 117px, and 139px when the note is present (16px line box over a 6px gap), read off the
+  note's own presence rather than off a second chrome key.
+
+### API
+
+`ReturnablePurchaseRowView` gains **`windowDays`**. The sale search rows have carried the window since 289 §5
+(inside `window`); a purchase invoice has no per-document window state to report — the window is a
+`Settings → Returns` fact about the shop — so the number travels on its own. `returnablePurchases` adds one
+`settings.resolve` to its existing `Promise.all`; no extra round trip per row. Both flows remember the value in
+state rather than re-reading it off the current rows, so a query that matches nothing does not take the
+standing rule off the screen with it. Additive field only — no `toEqual` assertion on these rows anywhere.
+
+### Known mockup element NOT built, on either surface
+
+`returns-mobile.html` 5176 draws a **Return date** field on the sale flow's step 3, and 5366 a **Credit note
+number** field on the purchase flow's. Neither exists on the desk either (289/293/302/308 never built them; a
+return is dated now and the credit-note number is minted server-side and gapless). Recorded here rather than
+silently skipped — it is the one remaining difference the full-file diff turns up, and it is a spec question,
+not a defect.
+
+### Files
+
+- `apps/web/app/globals.css` — §1 reservation + column rhythm; §3 stepper and reason trigger; §4.3 `.retwindow`
+  and its `--mchrome`.
+- `apps/web/lib/row-open.ts` — `controlOwnsFocus`.
+- `apps/web/app/(app)/pharmacy/returns/new-sale-return/NewSaleReturnClient.tsx`
+- `apps/web/app/(app)/pharmacy/returns/new-purchase-return/NewPurchaseReturnClient.tsx`
+- `apps/api/src/pharmacy/pharmacy.service.ts` — `windowDays` on the purchase search rows.
+- `packages/i18n/src/messages/{en,ur}.json` — `rtnMConfirm`, `rtnMWindowNote` added; `rtnMFindNote` removed;
+  `rtnFindLabel` / `rtnFindPlaceholder` rewritten.
+- `packages/ui/src/lib/returns-mobile-and-copy-309.spec.ts` — NEW. Pins the measurements: the two reservations
+  and both gap values against the committed file, the shared-handler wiring and the a11y rule, the four stepper
+  divergences (each asserted absent), every string in both locales, and the chrome arithmetic.
+
+### Gates
+
+`pnpm lint` clean (one pre-existing unused-eslint-disable warning in `doctor-portal.repositories.ts`, not
+this step's). `pnpm typecheck` clean, 31/31. Per CLAUDE.md the unit/e2e/build gates are the controller's.
+Vendor untouched. Phase-12 suites untouched.
+
+## 310 — ledger-truth — DONE (2026-08-19) — branch `fix/310-ledger-truth`
+
+**WORK TYPE: FIX.** Four defects; three of them are one defect wearing different clothes — a
+screen deciding, on its own, something the book had already decided.
+
+### §1 — the clamp, found and named
+
+**THE CLAMP IS CLIENT-SIDE AND THERE ARE EIGHT OF IT.** `Math.max(0, …)` written inline at eight
+separate places in `apps/web/app/(app)/pharmacy/suppliers/SuppliersClient.tsx`: the phone card,
+the phone list row, the grid card's anchor, the desktop table cell, the sheet headline, the
+sheet's per-entry running balance, the drawer headline and the ledger's closing cell. Nothing on
+the server floors anything — `supplierSummary` in `packages/shared/src/pharmacy-purchase.ts`
+returns `opening + trade − paid − credited` signed and always has, and `listSupplierSummaries`
+passes it through untouched. The one surface that never asked — the running-balance COLUMN — was
+right, which is exactly why the header and the column disagreed.
+
+227 §2.2 had already made this decision correctly for the CUSTOMER half of the book
+(`customerBalanceParts`). The supplier half never got it. So the split moved to one neutral home,
+`packages/shared/src/party-balance.ts` → `partyBalanceParts` / `partyBalanceFigure`, and
+`customerBalanceParts` now delegates to it rather than keeping a second copy.
+
+- `BalanceTone` gains a FOURTH reading, `advance`; `balanceTone` returns it for a balance past
+  zero, and `purchaseCardReading.canPay` narrows to `owed | overdue` (an advance is set against
+  the next invoice, so no payment is offered on top of it — desk drawer and phone sheet both).
+- Label rule, one rule: a FIGURE slot prints the amount at stake (never negative, never Rs 0 over
+  an advance); a LEDGER slot prints the book's signed figure `− Rs 2,083.10` via `moneySigned`,
+  because it sits in or under the running-balance column and must agree with it; the WORD beside
+  either says which way it points — `Advance with supplier Rs 2,083.10` where there is room for a
+  sentence, `Advance held` in a caption or chip. **DECISION:** the `.balhead` "Running balance"
+  keeps the mockup's own signed reading (`purchases-suppliers-desktop.html` line 6232-6234 draws
+  `− Rs 2,083.10` with status `Advance with supplier Rs 2,083.10`); the spec's "never a minus in
+  a you-owe-them slot" governs the Outstanding slots, which is where the minus was wrong.
+- Audited every surface: supplier card, phone list row, grid card, table cell, drawer header,
+  sheet header, ledger closing row, mobile ledger row, the drawer's success alert (an advance is
+  not "nothing owed" — it gets the mockup's `.alert--info` and its own sentence), the Owing /
+  Settled filter buckets AND their chip counts, and the purchase-return "You owe them" tile.
+- Customer half: `saleReturnConsequence.ledgerAfter` was `Math.max(0, before − net)` — the same
+  clamp, telling a cashier that refunding Rs 5,000 against Rs 3,000 of udhaar "reduces udhaar to
+  Rs 0" while 227 posts Rs 2,000 of advance. Signed now; the sentence branches in `udhaarSentence`.
+  **This overrules a 302 expectation on the record** (`packages/ui/.../302.spec.ts`, "never drives
+  a customer balance below zero"): it asserted the floor §1 reports as the defect.
+- CSS: `.bal--advance`, `.balhead--advance`, `.balhead__note`, `.pcard--advance`, in the mockup's
+  accent. Money logic byte-identical — no posting, no fold, no endpoint changed.
+
+### §2 — third attempt: WHY 304's FIX DID NOT TAKE
+
+**Evidence.** `git log` on `pharmacy.service.ts`: 304 (`8c6bc5c`) built `DocumentReturns` +
+`foldDocumentReturns` and hung it on `PurchaseDetailView.returns` — the purchase VIEW. It did not
+touch `ReturnablePurchaseView` / `ReturnableSaleView`, which are the read models the New-return
+FLOW's Step 1/2 card reads (`GET /pharmacy/returns/returnable/purchase/:id`). Those still carried
+302 §8's `ReturnedLinkView` — literally `held[held.length - 1]`, "the LAST return" — so the card
+rendered `view.returned` and one line. **Not a `findFirst`, not an unmerged fix: the spec's own
+predicted cause, a different surface reading the old way.**
+
+Fixed at the source rather than at the card: both read models now return
+`returns: DocumentReturns | null`. Purchase reuses the existing private `purchaseReturns` (given
+the already-fetched rows, so no second query); sale gets a new `saleReturns` fold — `settlement`
+left null there deliberately, because "Cash refund" assembled on the server arrives in English on
+an Urdu screen, whereas a credit-note number is not language. `ReturnedLinkView` is **removed**,
+not deprecated: there is no shape left in the API that can express "the last return of a document"
+for a fourth surface to pick up. New shared component `DocumentReturnLinks` (`2 returns · RET-P-9 ·
+RET-P-11`, newest first, each its own button) mounted on BOTH flows, desk and phone — four call
+sites, one component, alongside 304's table/list/badge/summary.
+
+### §3 — newest first, and the count
+
+Desktop drawer ledger now `.reverse()`s after filtering (the phone sheet has since 250). Order
+only: the server folds the running balance onto each row, and `closing` folds `allEntries`, so
+neither the per-row balance nor the closing foot moves with the sort or the page.
+
+The count was not an off-by-one. All FIVE pagers in the app were handed `pagedRows.length` as
+"shown" — the current page's row count, presented as a position in the book ("Showing 1 of 31
+entries" on page 4). New `packages/shared/src/pager.ts` → `pageRange(page, size, total)`; the
+copy became `Showing {from}–{to} of {total}` in EN and UR for `pdDrawShowingLedger`,
+`pdDrawShowingInvoices`, `pdDrawShowingPayments`, `pdSupShowing`, `pdShowingPurchases`,
+`rtnShowing`, `prsShowing`. On the two phone lists the window always starts at row 1.
+
+### §4 — export-toast audit
+
+Root cause: `useCatalogueExport` is the app's ONLY exporter, is handed the entity (it names the
+endpoint and the file), and then hard-coded `pinvExportDone` into the toast. Audited all five call
+sites / four entities: inventory + stock-alerts → `Catalogue exported` (correct, both export the
+catalogue), suppliers → `Suppliers exported`, customers → `Customers exported`, purchases →
+`Purchases exported`. Keyed off the entity through `IO_EXPORT_DONE`, with a neutral
+`ioExportDone` fallback so an unmapped entity gets a true sentence rather than the first noun in
+the map.
+
+### §5 — VERIFY, human-gated. NOT RUN HERE.
+
+The query is supplied as `docs/310-supplier-advance-verification.sql` (three queries: the
+supplier's payable, every payment grouped by reference+amount with `n`/`ids`/`paid_at` and
+reversal flags, and the same question asked of the charges). It **cannot be run from the build
+environment** — the repo `.env` carries placeholders only (`postgresql://USER@HOST/DBNAME`), which
+is the standing no-secrets rule. Nothing is deleted by it or by this step. The owner runs it
+against the deployed database; if a reference appears twice with the same amount, the correction
+is the ledger drawer's ↺ Reverse on the second id (270 §1.2 — a recorded payment is never removed).
+
+### Gates
+
+`pnpm lint` clean (one pre-existing warning in `doctor-portal.repositories.ts`, untouched).
+`pnpm typecheck` clean, 31/31. `@mp/ui` jest 112 suites / 3223 tests green; `@mp/api`
+`src/pharmacy` 61 suites / 992 tests green. New suite: `packages/ui/src/lib/ledger-truth-310.spec.ts`
+(25 tests).
+
+**Pre-existing failures cleared on the way, all caused by the operator's recommitted mockups and
+none by this step's code** (verified by stashing `specs/mockups/` and re-running): `.printdlg`
+background → `--surface-raised`, `.printdlg__hd` padding → `15px 14px 14px 18px`,
+`.dtbl--purch --dt-inner` → `588px` (CSS realigned to the authoritative mockup; 315 owns the
+LAYOUT move, not these three declarations), plus two source-assertion tests that had become
+length/spelling assertions about intervening prose: 293's `setCandidates(rows) … setHi(0)` window
+(309 §4.3 pushed them 531 chars apart) and r4's assertion that the mockup still spells its empty
+state `.recentblk__none` (the recommitted file draws an `.emptystate`).
