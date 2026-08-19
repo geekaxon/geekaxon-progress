@@ -18939,3 +18939,156 @@ census was pinned on the closing brace, not on the fact it exists to guard. Re-p
 (`select: { id: true, name: true, email: true`) so it still fails if the email the Unknown-user fallback
 needs stops being selected, and no longer fails when a field is added beside it. No production code
 changed. void-payment-reversal-270: 36/36 pass; `pnpm lint` + `pnpm typecheck` clean.
+
+---
+
+## 312 — realtime-and-interaction — DONE (2026-08-19)
+
+**WORK TYPE:** FIX — branch `fix/312-realtime-and-interaction`. Spec `/specs/312-realtime-and-interaction.md`.
+No CODEREF covers 312. Schema: none. RLS: unchanged. Money logic byte-identical. Realtime remains display only.
+
+### §1 — THE CAPTURE (second attempt; evidence before fixing)
+
+Two sessions were not available to the agent, so the capture was made where it is repeatable and
+where it now stays green: every create was driven through the real service against the repo fake
+with the assertion on what the BUS received (`apps/api/src/pharmacy/created-rows-arrive-312.spec.ts`,
+the shape 291 §1 established), and the client half was reproduced against the pure ordering function
+(`packages/ui/src/lib/realtime-and-interaction-312.spec.tsx`). THREE causes, not one — the spec
+offered two candidate shapes and the truth was both of them plus a third:
+
+1. **Purchase / Return — the server DOES emit a create.** `publishPurchaseChange(… reason:'created')`
+   fires on a recorded purchase and `publishReturnRecorded` on every return. The subscriptions do not
+   filter by id either: all three screens accept by event TYPE. The defect is on the CLIENT, in
+   305 §2.2's `pinRowOrder`: a row not in the pin was APPENDED to the tail of the whole pinned order.
+   These lists are read whole (`GET /pharmacy/purchase` returns the book) and PAGED in the browser at
+   25/50/100 rows, so a purchase created a second ago — newest, in a newest-first list — landed at
+   index N of a several-hundred-row array, i.e. on the LAST page of the pager and outside the phone's
+   infinite-scroll window. The row was never missing; it was invisible, which to the reader on page 1
+   is the same thing. Reproduced as the first test in the 312 suite.
+2. **Supplier — the server emitted NOTHING.** `createSupplier` published no event at all. 305 wired
+   only what MOVED an existing supplier's money (a payment, a purchase, 304's credit note), so the one
+   row that had to ARRIVE was the one case with no announcement.
+3. **Item — the server emitted NOTHING, and could not have.** Inventory subscribes to the STOCK scope
+   (291 §1), and a catalogue row created with no batch moves no stock, so there was no event to miss.
+
+### §1 — THE FIX
+
+* `packages/shared/src/pharmacy-desk-live.ts` — `pinRowOrder` now MERGES an arrival at its natural
+  position instead of appending it: walking the incoming (server-sorted) order gives every arrival an
+  anchor (the first already-pinned row that follows it there), then the pinned order is laid out and
+  each anchor's arrivals dropped in just before it. Rows already on screen keep their positions
+  RELATIVE to one another — §2.2's actual rule, that nothing slides out from under a pointer — while a
+  created purchase appears at the top of a newest-first list, marked. Arrivals the server sorts last
+  still go last. The 305 suite's "appended to the end" expectation is superseded in place with the
+  reason written beside it.
+* `createSupplier` now calls `publishPurchaseChange(… reason:'created')`, which raises the desk scope's
+  existing `supplier.balance.updated` (and `purchase.updated`) envelopes. No new event type, no amount
+  on the wire — the list re-reads the summary it first rendered from.
+* `createMedicine` now publishes `stock.updated` at the resolved primary branch with qty 0. That is
+  the honest figure for a brand-new product, it rides the ONE connection every screen already holds
+  (299 §3), and it needs no new type, subscription or gate. A till that hears it patches a medicine it
+  does not stock, which is a no-op.
+
+### §2 + §3 — ONE SHELL, ONE LAYER (the two reports were one defect)
+
+**The captured history stack.** The print dialogue was TWO components: `InvoicePreviewSkeleton` while
+the document was fetched, then `InvoiceOverlay`. Each registered its own layer, so the commit in which
+the fetch landed ran `closeLayer(skeleton)` and `pushLayer(document)` back to back. `closeLayer` calls
+`history.back()`, whose TARGET STEP is resolved when it is called and traversed later; the `pushState`
+that followed slipped in between, so the queued traversal skipped the document's brand-new entry and
+consumed the one below it. The document was then a layer with NO history entry of its own — depth
+drifted by one — so closing print ate the drawer's entry and closing the drawer ate the ROUTE's,
+landing on whatever preceded Purchases: the Suppliers page, exactly as reported. 203 §2 warned about
+this asynchrony; what was new was a layer being SWAPPED under it. (259 §6 had already found and named
+this shape on the Suppliers ledger drawer and fixed it the same way: "there is only ever ONE drawer".)
+
+* `InvoiceOverlay` + `InvoicePreviewSkeleton` are replaced by ONE `InvoiceDialog`, mounted on
+  `invoiceOpen` from the press and unmounted by the close. What changes inside it is the CONTENT —
+  a shimmering A4 page (`Loading`, 303's 180ms threshold) until the document arrives. One dialogue,
+  one layer, for its whole life. That is also what 303 §4 asked for in words and did not get.
+* The desk surface now mounts the KIT's `Dialog`/`DialogContent`, so the scrim colour, the blur, the
+  elevation (`OVERLAY_LAYER`), the focus trap, the scroll lock, `Escape` and the ✕ (`DialogClose`,
+  239 §1's one dismissal) are the same objects View Purchase's drawer and Record Payment use. The
+  hand-rolled `role="dialog" aria-modal` div, its `useLayerHistory`/`isTopLayer` gate and its own
+  keydown listener are gone. The `.printdlg` card inside is untouched — 275/279/288's transcription,
+  its header row, its page breaks and its `.mp-print-surface` are byte-identical.
+* `globals.css` — `.mp-pur2 .printscrim` was the second overlay implementation (`position:fixed`,
+  `z-index:60`, a 55% ink wash, no blur, beside the kit's 70 / 50% / `backdrop-blur-sm`). It keeps the
+  class name (the print stylesheet and the 283/288 cascade suites key on it) and is now just the
+  shell's own box, centring the 880px card. The `@media print` half is unchanged.
+* Audit of every nested open: `grep useLayerHistory` across `apps/web` and `packages/ui` — the POS
+  sheet, PaymentPanel, MobileReturnFlow, CatalogueIO, BarcodeScanner, the search-select and date
+  pickers each register once for a component that is stable across its life. Record Payment (from the
+  ledger and from the purchases list) and Edit-from-view are single components on a single flag. The
+  swap-under-an-open-dialogue shape existed only here.
+
+### §4 — A PRESS ACKNOWLEDGED AT ONCE
+
+* **§4.1 the pill switches.** New shared hook `apps/web/lib/list-filter-switch.ts` — `useFilterSwitch`.
+  None of these three pills fetches; the rows are already in the browser, and the press felt dead
+  because the filter, the sort and a re-render of several hundred rows ran synchronously before React
+  could paint the pill's own pressed state. The two halves are now separated with React's own
+  primitives: the PILL's state is urgent and moves in the frame of the click; the LIST reads a
+  `useDeferredValue` of it and catches up at lower priority, with the kit skeleton in the list area
+  while it does. 303's threshold is not re-picked — `useDeferredPending` is imported, so a switch that
+  lands inside 180ms shows no shimmer at all. Mounted on Inventory (`typeChip` + health chips, as one
+  memoised selection so they cannot catch up in different frames), Suppliers (`filter`) and Purchases
+  (`statusFilter`); each screen's `resetKey` for `useLiveOrder` follows the APPLIED value so the pin
+  and the rows never disagree.
+* **§4.2 Adjust stock** already opened instantly — 303 §4 fixed it (`openAdjust` mounts the dialog on
+  the pending id and `AdjustDialog` shimmers its own form until the batches and the chain land). No
+  change; it is now pinned by a regression test so it cannot quietly revert.
+* **§4.3 the desk card** was the one surface of Inventory with no way in: the table row, the phone card
+  and the phone list row all spread 305 §1's `rowOpenProps`, and the desktop `.invcard` had nothing.
+  It now mounts the SAME function with `as:'card'` — not a second `onClick` — so the §1.2 ignore walk
+  keeps `RowActions` doing its own job, §1.3 keeps a press-drag a selection, and §1.4 gives the card
+  its role, its accessible name (the product, never an id), its tab stop and Enter.
+
+### FILES
+
+`packages/shared/src/pharmacy-desk-live.ts`; `apps/api/src/pharmacy/pharmacy.service.ts`
+(createSupplier, createMedicine); `apps/web/lib/list-filter-switch.ts` (new);
+`apps/web/app/(app)/pharmacy/purchase/PharmacyPurchaseClient.tsx`;
+`apps/web/app/(app)/pharmacy/suppliers/SuppliersClient.tsx`;
+`apps/web/app/(app)/pharmacy/inventory/PharmacyInventoryClient.tsx`; `apps/web/app/globals.css`;
+`apps/api/src/pharmacy/created-rows-arrive-312.spec.ts` (new);
+`packages/ui/src/lib/realtime-and-interaction-312.spec.tsx` (new);
+`packages/ui/src/lib/list-row-open-and-realtime-305.spec.tsx` (one superseded expectation).
+
+### GATES
+
+`pnpm lint` — clean (one pre-existing unused-eslint-disable warning in `doctor-portal.repositories.ts`,
+untouched by this step). `pnpm typecheck` — clean. `pnpm prisma generate` not run: schema untouched.
+`test:unit` / `build` left to the controller per the standing rule. UI design self-check by inspection:
+the print dialogue now wears the same scrim, blur, elevation and ✕ as every other purchase dialogue;
+the `.printdlg` card, the A4 sheets and the print stylesheet are unchanged.
+
+### DECISIONS RECORDED (no approval gate)
+
+* A created ITEM announces on the STOCK scope at qty 0 rather than getting a new catalogue event type
+  and a new subscription on Inventory. Zero is the quantity a new product has, so nothing is invented,
+  and it keeps the "no second realtime system, no second socket" rule 184/299 set.
+* An arrival pushes pinned rows DOWN by one when the server sorts it above them. That is a reorder in
+  the strictest reading of 305 §2.2, and it is the right one: the rule protects a row from sliding out
+  from under a pointer relative to its neighbours, and a list that will not show a purchase that exists
+  is the worse failure — 305's own comment says so and then did the opposite.
+
+## 312 — gate fix: the print-dialogue specs follow the component that was renamed
+
+`pnpm test:unit` failed 9 tests in 5 suites, all of them source-text assertions left pointing at
+the shape 312 replaced. No product code changed; the specs were re-aimed at the same behaviour.
+
+- 261/264/275/279 sliced the desk surface at `function InvoiceOverlay(` — §2/§3 merged the preview
+  skeleton and the document into one `InvoiceDialog`, so the marker matched nothing and every
+  assertion read an empty (or whole-file) slice. Marker updated in all four.
+- 261's phone slice ended at the old hand-rolled `aria-label={\`${tr(lang` on the desk branch; it
+  now ends at `<Dialog open`, and the document assertion follows the single `body` node both tiers
+  render (`phone={mobile}` / `onPages={setMeasured}`). Same change to 275's A4Document assertion.
+- 305 pinned `resetKey` to the raw filter state; §4.1 computes rows from the APPLIED filter, so the
+  keys are now `appliedFilter` / `appliedStatus`.
+- 305's one allowed `stopPropagation` was the print dialogue's own backdrop. That scrim is the
+  kit's `<DialogContent>` now, so the assertion is the stronger one: Purchases reaches for
+  `stopPropagation` nowhere, and mounts the shared shell.
+
+Gates: `pnpm lint` clean, `pnpm typecheck` clean; the six touched suites run green locally
+(281 tests).
