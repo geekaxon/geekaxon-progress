@@ -18805,3 +18805,137 @@ LAYOUT move, not these three declarations), plus two source-assertion tests that
 length/spelling assertions about intervening prose: 293's `setCandidates(rows) … setHi(0)` window
 (309 §4.3 pushed them 531 chars apart) and r4's assertion that the mockup still spells its empty
 state `.recentblk__none` (the recommitted file draws an `.emptystate`).
+
+---
+
+## 311 — names-and-identity — DONE (2026-08-19)
+
+**Branch:** `fix/311-names-and-identity` (WORK TYPE: FIX). Spec: `specs/311-names-and-identity.md`. Schema: none. RLS: unchanged. Money logic untouched.
+
+### Why 307 fell short — recorded as the spec demands
+
+307 read the owner's report *"the item name is cut off"* as TRUNCATION and answered it with a
+wrap rule (`<MedName>` / `.mp-name`, two-line clamp, `overflow-wrap:anywhere`) plus wider
+columns. That rule is correct and it stays. It was not the defect. The owner's follow-up
+screenshots showed the SAME BUILD printing `Actifed` on Inventory and `Actifed 60ml (Syrup)` on
+Returns, at widths where nothing was being clipped. The text was never on the page to be cut:
+the two screens were COMPOSING DIFFERENT NAMES. Inventory rendered the raw `brandName` column
+and pushed strength into the sub-line; Returns rendered `medicineLabel` (`Name Strength (Form)`);
+the New Purchase select had a third join; POS search a fourth. A width fix could not have closed
+that, and 307's census — which checked that no screen truncates — could not have caught it,
+because none of them were truncating.
+
+### §1 — one display name, composed once
+
+- NEW `packages/shared/src/med-display-name.ts`: `composeMedName(parts) → { primary, secondary }`,
+  plus `medNameOneLine` for tooltips/documents. **primary = brandName + strength**
+  (`Augmentin 625mg`); **secondary = generic · form · pack**
+  (`Amoxicillin + Clavulanate · Tablets · 10s`). A GENERAL item's secondary is its category (228 §1).
+  Exported from `@mp/shared`.
+- The four hand-rolled joins are DELETED, not left beside it:
+  `medicineSub` (Inventory), `itemHint`'s `[generic, strength]` (Purchase), `resultDesc`'s
+  `const composition = …` (POS), `medSub` (Alerts). The 311 suite asserts each string's absence.
+- Callers audited and converted: Inventory desktop table / mobile rows / both card views / the
+  detail header / `pickerOption` (adjust-stock + item chooser); Stock Alerts low-stock and
+  near-expiry, desk and phone, list and card (these printed `label` AND repeated its parts below —
+  the strength appeared twice on every row); New Purchase product select, paged source AND the
+  offline fallback AND the closed display (`productPickPatch`, `productLabel`); POS search desk and
+  phone, the cart line, the added-to-cart toast, the resume patch; both return flows' line tables
+  and mobile cards.
+- API now ships the PARTS every surface needs: `MedicinePickerOption` gained `form` + `packSize`;
+  `LowStockRow` gained `brandName`; `NearExpiryItem` gained `brandName` + `packSize`;
+  `ReturnableSaleLineView` and `ReturnablePurchaseLineView` gained brand/generic/strength/form/pack
+  beside their existing one-string `name`. `medicineLabel` is untouched and still serves sorting,
+  reorder pre-fills and printed documents — it is no longer a screen's name.
+- The alerts client degrades rather than invents: a payload cached before this step has no
+  `brandName`, so it keeps the one-string `label` instead of composing a name out of a strength.
+
+### §2 — the repeated strength
+
+1. **Composer is defensive.** A secondary part equal (trimmed, case-insensitive) to something
+   already printed is dropped, so `Actifed / 60ml / Syrup / 60ml` renders
+   `Actifed 60ml` + `Triprolidine+Pseudoephedrine · Syrup`. A genuinely different pack (`120ml`)
+   is left alone — this is de-duplication, not a filter.
+2. **The item form warns.** `strengthLooksLikePackSize(form, strength)` — a form containing
+   syrup/suspension/drop/cream/ointment/gel (substring, because the column is free text) whose
+   strength carries neither `/` nor `%`. `FormField` gained a `warn` slot (new `.field__warn`
+   rule, warning colour, `AlertTriangle`) that marks nothing invalid and blocks no submit —
+   the margin-guard rule. i18n key `pinvStrengthLooksLikePack` added to en + ur.
+3. **The catalogue report is `docs/311-catalogue-strength-report.sql`** — two read-only queries
+   (strength = pack size; liquid/cream strength without `/` or `%`), mirroring the shared
+   predicate so the report and the warning cannot disagree. **The list itself could NOT be
+   produced here:** this checkout's `.env` carries placeholder credentials only (per the repo's
+   no-secrets rule), so there is no catalogue to read. The owner runs the file against the tenant
+   database and corrects the rows through the item form. **No UPDATE is in that file and none
+   should be added — the agent does not edit catalogue data.** PROGRESS.md carries the pointer.
+
+### §3 — a person is a name and a role
+
+- NEW `personIdentity()` in `packages/shared/src/actor-names.ts` → `{ name, role }`, on top of
+  270's `actorDisplayName` ladder (name → login's name part → "Unknown user").
+- NEW `apps/web/components/pharmacy/PersonName.tsx`: the ONE identity component
+  (`<span class="mp-person">` = name + `·` + role chip), plus `personCredit()` — the same rule as a
+  string, for tooltips, sentences and documents where markup cannot go, so a row and its tooltip
+  cannot resolve a person two different ways. `roleWords()` sentence-cases the `Role` enum
+  (`TENANT_OWNER` → "Tenant owner") and passes a CUSTOM role's own name through untouched.
+- API: `findStaffNames` now returns `{ id, name, role }` — role is the custom role's name if the
+  account has one, else the `Role` enum token — resolved in the SAME batched query, never a second
+  round trip. New private `staffRole()` beside `staffName()`. Fake + reset updated (`staffRoles`).
+- Wire-level additions: `MovementView.actorRole`; `HeldSaleView.heldByRole` (optional, resolved on
+  READ in `listHeldSales` only — a role is a fact about the person now, not about the moment they
+  parked a cart, and no schema change was permitted or needed); `ReturnableSaleView.sale.cashierRole`;
+  `SaleReturnView`/`PurchaseReturnView.processedByRole`; `PurchaseDetail.createdByRole`;
+  `DocumentReturnRow.actorRole`; the supplier ledger's credit-note `actorRole`.
+- Surfaces converted: the POS held rail (tooltip) and the held sheet row — the exact string join
+  `` ` · ${h.heldByName}` `` that put `owner@ganatra-clinic.mp` in the owner's screenshot is gone;
+  Inventory's movement rows; the sale-return **Counter** tile and its picked-sale sub-line;
+  the purchase detail's "Recorded by", desk and phone; the returns drawer's "Processed by", desk
+  and phone; `DocumentReturns`' "by" column and its phone card; the supplier ledger's credit-note
+  attribution note. `movementLines` no longer names the actor at all — four branches each decided
+  where the name went and none could show a role; who did it is the component's job now.
+
+### §4 — stock movements readable at a glance
+
+`HistRow`'s quantity keeps its always-printed sign and gains `is-up` / `is-down`
+(`--success` / `--danger`). The colour is a second reading of a character that is already there,
+so it is never the only carrier. Icon tile colours are untouched (the mockup's). Every row renders
+`<PersonName name={mv.actorName} role={mv.actorRole} />`.
+
+### §5 — the icon shown twice
+
+The View Item header drew the product-type mark in its avatar tile AND again, smaller, beside the
+name (`titleNode`'s `<TypeTag>`) — two identical pills millimetres apart on the phone. `titleNode`
+is now `undefined`; the tile is the mockup's header and stays. LIST rows keep their `<TypeTag>` —
+there is no avatar tile in a table cell for it to duplicate.
+
+### Tests
+
+NEW `packages/ui/src/lib/names-and-identity-311.spec.tsx` — the composer as a table of inputs and
+outputs (including the owner's exact `Actifed` row and the exact `Augmentin 625mg` the spec names);
+`<PersonName>` rendered, asserting no `@` reaches the screen for a nameless account and that the
+role still shows; the §1 census (every naming surface imports the composer; none re-declares it;
+each of the four dead joins asserted ABSENT — 303's rule); the §3 census (every crediting surface
+imports the one component; the four raw interpolations asserted absent; the server sends the role
+in the batched query); §4's sign + colour; §5's single header icon. Updated
+`purchases-mobile-260.spec.tsx` and `purchases-desktop-r2-264.spec.tsx`, whose assertions quoted
+`itemHint`'s old join verbatim.
+
+### Gates
+
+`pnpm lint` — clean (one pre-existing warning in `doctor-portal.repositories.ts:220`, untouched by
+this step). `pnpm typecheck` — 31/31 successful. Per CLAUDE.md the agent did not run
+`test:unit` / `test:e2e` / `build`; the controller's gates follow. Vendor untouched, no schema
+change, no migration, money logic byte-identical.
+
+### 311 gate fix (2026-08-19)
+- `apps/api/src/pharmacy/picker-search.spec.ts` — the picker-projection test pinned the exact key set of a `MedicinePickerOption`; 311 §1 added `form` and `packSize` so the picker composes the same name every other surface does. Expected key list widened by those two display fields; the "never cost, price, tax or stock" assertion is untouched. Gates: lint + typecheck clean.
+
+### 311 — names-and-identity — gate fix (2026-08-19)
+`pnpm test:unit`: 1 failing test, `packages/ui/src/lib/void-payment-reversal-270.spec.tsx` — "the rule is
+stated ONCE, app-wide". 270's census pinned the staff-name query as the literal
+`select: { id: true, name: true, email: true }`; 311 §3 added `role` + `customRole` to that same select
+(`pharmacy.repositories.ts` `findStaffNames`) so the role travels with the name in one round trip. The
+census was pinned on the closing brace, not on the fact it exists to guard. Re-pinned it on the fields
+(`select: { id: true, name: true, email: true`) so it still fails if the email the Unknown-user fallback
+needs stops being selected, and no longer fails when a field is added beside it. No production code
+changed. void-payment-reversal-270: 36/36 pass; `pnpm lint` + `pnpm typecheck` clean.
