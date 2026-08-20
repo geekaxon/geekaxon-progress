@@ -7,9 +7,9 @@
 ## Current Status
 - **Project:** Marham Patti — multi-tenant white-label healthcare platform.
 - **Phase:** **PHASE 31** — ledger truth, payments, personalization.
-- **Last completed:** **313 — payments-and-permissions**.
-- **Next:** specs/314-supplier-ledger.md
-- **Group order:** 314 → 315 → 316. One step, then the checkpoint.
+- **Last completed:** **314 — supplier-ledger**.
+- **Next:** specs/315-inventory-and-purchase-view.md
+- **Group order:** 315 → 316. One step, then the checkpoint.
 - **Owner:** run the 310/311 verification scripts in docs/ (read only).
 - **Rules:** branch before any commit; 304's components mount in 315, never rebuilt; a new state means auditing every surface showing old ones.
 - **After this:** returns retest → Customers → Recent Sales → Settings.
@@ -17,8 +17,8 @@
 - **Before production:** VAPID keys; fresh secrets; staging relaxations off.
 
 ### Recent steps
+- **314 — supplier-ledger** — DONE (2026-08-20) — one book read two ways, returns of its own, and an advance that can come home.
 - **313 — payments-and-permissions** — DONE (2026-08-19) — money names where it lands; a mis-rung sale is voided.
 - **312 — realtime-and-interaction** — DONE (2026-08-19) — a row lands where it belongs; one print shell; a press answered at once.
-- **311 — names-and-identity** — DONE (2026-08-19) — one composer names every item; one component credits every person.
 
 > Older steps in PROGRESS-HISTORY.md

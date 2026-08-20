@@ -19232,3 +19232,145 @@ Unit/build/e2e left to the controller per AGENT.md §4A.
 
 ### 313 — gate fix (test:unit)
 Three pre-313 suites were still speaking the pre-313 dialect. `pos-checkout.spec.ts` and `dayclose.spec.ts` rang up a CARD tender with no account, which 313 §2 now refuses with a 400 — each test seeds an active bank account on the repo fake and names it on the card leg. `recent-sales.spec.ts` pinned the totals/byKind shape exactly, so it learned 313's VOIDED bucket and `voided` figure. No production code changed. Gates: pnpm lint (0 errors, 1 pre-existing warning in doctor-portal.repositories.ts) and pnpm typecheck both pass; the three suites pass locally (46 tests).
+
+---
+
+## 314 — supplier-ledger — DONE (2026-08-20)
+
+**WORK TYPE: FEATURE (branch feature/314-supplier-ledger)** — spec `specs/314-supplier-ledger.md`. No CODEREF
+companion exists for this range. **Schema: none** (as the spec expected). **RLS: unchanged.**
+
+### §1 The drawer header
+The desk drawer gained the info block the phone sheet has carried since 241 §3: `.supfacts` — Contact ·
+Phone · Last purchase — above the tabs, transcribed from `purchases-suppliers-desktop.html` part D. The
+drawer's own header states contact and phone as one joined subtitle, which is a byline, not a fact grid; a
+desk user reading a ledger and reaching for the telephone had a `tel:` link on the phone and a
+comma-separated string on the desk. The phone number is the same `tel:` affordance on both now.
+
+### §2 Simple and Pro
+A `.ledview` switcher on the Ledger tab, both surfaces, from ONE component (`<LedgerViewSwitch>`).
+
+* **Pro** — Debit / Credit / Balance, today's desk rendering, now on `.dtbl--ledger` with a sixth column.
+* **Simple** — one signed amount column (`.dtbl--ledgers`), running balance beside it.
+* Both branches map the SAME `pagedEntries` (the suite asserts exactly one such map in the file): the switch
+  re-renders and never re-fetches, never re-filters, never re-orders. The mode reaches class names, column
+  choices and the stored preference — never a fold.
+* On the phone Pro is not a wider table (a 360px screen cannot carry two money columns): it is the file's
+  `.mledcard`, one card per entry, movement as the hero figure with its own Debit/Credit chip and the
+  running balance on a sunken strip. Simple stays the `.mledrow` this sheet has drawn since 250.
+* **Stored per user** through a new `useLedgerModePref` on the ONE `mp.datalist.*` contract
+  (`mp.datalist.ledger.<list>`), which is the interface 316 swaps the backing of. Both surfaces read the same
+  key, so a choice made at the counter holds on the phone; only the FALLBACK differs (Pro on the desk,
+  Simple on the phone, per the two mockups).
+
+**DECISION recorded — the sign convention.** §2's prose says "money you now owe more of in red with −".
+Both the committed mockup and the phone rendering §2 itself names as the reference draw the opposite: a
+debit (an invoice, a reversal, a refund) leads `+` in the warning tone, a credit (a payment, a credit note)
+leads `−` in the success tone. Two of the three authorities agree and the third is the prose; following the
+prose would have inverted every ledger row the app already ships. The mockup's pairing is implemented, and
+one shared `signedReading`/`signedMoney` now spells it for the Simple ledger, the Payments column and both
+phone renderings, so the four cannot drift.
+
+### §3 The Returns tab
+A fourth tab on both surfaces. Its rows are the ledger's own `CREDIT_NOTE` entries — every purchase return
+has posted a credit note against the payable since 304 §1.2 — folded by one `filterTabReturns` both tiers
+call, so the tab's total and the running balance cannot come apart. Desk: `.dtbl--supret`, Date · Return no.
+· Purchase · Value, sortable, paged, with a foot stating what has gone back. Phone: the file's `.mretc` card.
+Count in the tab label, newest first, each row opening that return at `/pharmacy/returns?ret=<id>` — the one
+destination the Purchases desk already routes to — through 305 §1.4's shared `rowOpenProps`.
+
+* API: `SupplierLedgerRowView` gained `creditNo` so the tab draws the credit-note number under the return
+  number without splitting the composed `"CN-1207 · PI-20455"` reference back apart on the screen.
+* 304 §7's census requires `.mretc` to be declared exactly once in the app. The card anatomy was therefore
+  EXTRACTED from `DocumentReturnsList` into a shared `<ReturnCard>`; both callers supply their own reading.
+
+### §4 The rows tell the whole truth
+* **Reference and Description no longer ellipse** on the Ledger and Payments tabs — they wrap per 307's rule
+  and the row grows for them (`--dt-row` is a floor). `.refcell` moved to `align-items:flex-start` so a
+  two-line cell sits level with its date, and the Payments reversal row's fixed 70px became a `min-height`
+  so a wrapped reference cannot crop the reversal note. The Purchases tab keeps its ellipsis: an invoice
+  number is short by construction and that column is the one giving way to the pill beside it.
+* **Purchases columns widened**: Items 68→96px, Status 104→130px, the 54px coming out of the invoice column
+  (`--dt-inner` 588→616). **Deliberate deviation from the mockup's literal widths, recorded**: the file
+  draws a head reading "Items" over a pill reading "Partial" and sizes for those; this app's own words are
+  "Items received" and "Partly paid" (304 §5's set — the pill the owner queried is correct), and Urdu's are
+  longer again. §4's operative clause is "wide enough for their content". Asserted with its reason in the
+  279 §1 per-selector diff so a later reader does not "restore" the mockup's number.
+* **Payments amounts are signed and coloured** through the same shared reading as Simple, which is the
+  owner's report answered: a payment out and its reversal were both plain black in that column.
+* **THE MISSING REVERSE BUTTON — the answer §4 asked to be recorded: it was NEVER RENDERED.** Not
+  permission-hidden (`ReverseAction` is presentation; the server gate is `pharmacy.stock.adjust` on the
+  endpoint, unchanged) and not width-clipped (the Payments tab's 98px slot renders fine). 270 §1.3 gave the
+  action to the desk's PAYMENTS tab and to the phone's LEDGER rows, and the desk's Ledger tab — the tab the
+  drawer opens on — was built with five columns and no action slot at all. So a desk user looking at a
+  payment in the book had no control while the same payment on the same row on a phone had one. The mockup's
+  `has-act` variant is the fix: a sixth column in Pro, a fifth in Simple, mounting the same `<ReverseAction>`.
+* **Recent Purchases / Recent Payments removed**, both surfaces, with `<RecentBlock>` and `recentOf`. 310 §3
+  made all tabs newest-first, so each block's ten rows were the ten rows directly above it. `.recentblk`
+  stays in the stylesheet — it is the mockup's own atom. 250 §2's and §5.5's suites are rewritten to assert
+  the removal rather than deleted, so nobody restores the block on the strength of a superseded spec.
+
+### §5 Getting an advance back
+`Record payment` now offers a DIRECTION, and only where there is one to choose: with an advance held it
+opens on **Refund received**, capped at the advance, amount pre-filled and selected, account label reworded
+to "Account it landed in", title/subtitle/primary all reworded. Without an advance the flow is byte-identical.
+
+* **No schema.** A refund is a NEGATIVE `SupplierPayment` that reverses nothing — the shape 270 §1.2 already
+  established for a debit against the payment stream. `assembleLedger` now classifies each stored row
+  explicitly rather than by its sign (`reversalOfId` set → REVERSAL whatever the sign, because the reversal
+  OF a refund is positive; negative and reversing nothing → REFUND; else PAYMENT), and passes that down as
+  `SupplierLedgerMovement.entry`. `buildSupplierLedger` uses it for the row's KIND ONLY — the debit/credit
+  split and the running balance are still the sign's, so every pre-314 caller and every stored row today
+  produces byte-identical figures and byte-identical kinds. New `REFUND` kind, ordered after PAYMENT on a
+  shared instant (a refund comes out of an advance a payment created) and before REVERSAL.
+* **The cap is one shared figure**: `refundCap` / `refundExceedsAdvance` in `@mp/shared`. The dialog disables
+  Save on it and the server re-reads the ledger and refuses on it — refusing BY NAME, stating the advance
+  actually held, never a bare "cannot".
+* **A refund is reversible** and its reversal is a reversing entry: `reversible()` now answers for PAYMENT
+  and REFUND alike, and a REVERSAL is still not reversible.
+* The drawer/sheet primary is no longer DEAD over an advance. 310's reading holds — you do not pay more on
+  top of money the supplier is holding — but the surface behind the button now records the opposite
+  movement, so only a genuinely flat book disables it. 310's advance hint said "recording a payment is
+  unavailable until then"; that sentence is no longer true and was rewritten in EN and UR.
+
+### §6 Sheets stack, app-wide
+Fixed in `<MobileSheet>`, not per screen. The kit pins every live sheet at scrim 60 / panel 61
+(`.mp-mobile--live`), which is right for one sheet and wrong the moment a sheet opens another: two panels in
+one plane order by DOM position, so the CHILD's scrim (60) landed under the PARENT's panel (61) — the parent
+never dimmed and, where the two overlapped, read as being in front. That is the owner's report exactly, and
+no screen could have fixed it. New `layerDepthOf(id)` on the shared layer stack (the same stack that already
+answers "whose gesture is this" since 216 §2 and "what does back close" since 195 §3) plus `sheetStackZ`:
+each step up raises the pair by two, so the child's scrim covers the parent's panel and its own panel covers
+that. Depth 0 emits NO inline z-index, so the lone-sheet case is untouched. Capped at depth 4 → max 68/69,
+which keeps the ladder under the dialog layer (70) and the select sheet (81/82), both of which are opened
+from inside sheets and must outrank them.
+
+**Sheet-from-sheet audit (§6 asks for the list).** Every one inherits the fix, because every one is either
+`<MobileSheet>` directly or `<Panel mobile>`, which is `<MobileSheet>`:
+`SuppliersClient` — Record payment, Reverse payment, Edit/Add supplier and Import, all from the supplier
+ledger sheet; `PharmacyPurchaseClient` — View purchase → Record payment / Print / Reverse payment;
+`PharmacyInventoryClient` — View item → Adjust stock / Edit item / Import; `ReturnsClient` — the return
+detail sheet → Reject; `NewPurchaseReturnClient` and `NewSaleReturnClient` — their picker sheets;
+`PosClient` / `PaymentPanel` — the customer chooser and the payment sheet; `NotificationBell`,
+`GlobalDiscountSection`, and the kit's own `SearchSelect` and `DatePicker` sheets, which open from inside
+any of the above. The last two already outranked their parent by hand (`.selsheet__panel` at 81/82, 214 §6);
+that rule is untouched and still wins, which is why the ladder is capped below it.
+
+### Gates
+`pnpm lint` and `pnpm typecheck` clean over the changed packages. New suites:
+`packages/ui/src/lib/supplier-ledger-314.spec.tsx` (33 tests) and
+`apps/api/src/pharmacy/supplier-ledger-314.spec.ts` (14 tests), both green. Pre-314 suites updated to the
+new truth, all green: 279 (drawer tables), 277 (reverse control + tab fit), 270 (which rows reverse), 310
+(the advance button), 250/r4 (recent blocks retired, pager/scroller counts, the pre-fill), 248/r3 and 244/r2
+(`.mledbar` returns as the switcher; four segments), 265 (the sheet foot's label), 260 (the pre-fill).
+Also fixed one PRE-EXISTING failure not caused by this step: `recent-sales-screen.spec.tsx` asserted the
+screen makes exactly one POST, which stopped being true when 313 §4 added the void.
+
+**Money computation byte-identical**: no arithmetic changed. `buildSupplierLedger`'s balance, `supplierSummary`
+and every list stat are untouched; `entry` decides a WORD on a row and nothing else, and the only new write
+path is a negative payment row the existing fold already knew how to add up.
+
+## 314 gate fix — the seven POS keys 313 overwrote, and three suites that read the reformatted source
+- Real bug: step 313 replaced the whole `pharmacyPos.v17` block in en.json/ur.json with its eight payment-account keys, deleting the seven keys still referenced by PosClient.tsx (`namePlaceholder`, `nameHelp`, `phonePlaceholder`, `phoneHelp`, `hasUdhaar`, `inAdvance`, `holdUpdatedNumber`). The customer-capture card and the hold toast were rendering raw key paths. Restored all seven above the account keys in both catalogs; EN↔UR parity holds.
+- Stale source-text assertions updated to the code 313 reformatted: `pos-credit-and-customer-attribution` and `pos-credit-ux-and-fullpage-payment` now match the wrapped `blockedBalance && !needsCustomer ? (` branch by regex (313 hung `accountMissing`/`accountUnchosen` off the same chain), and `shortcut-engine-and-pos-keys-284` expects the direct-save cash leg with its `accountId: null, reference: null`, plus a new count assertion that it is still exactly one leg.
+- Gates: `pnpm lint` and `pnpm typecheck` clean; the four failing suites plus `pos-and-global-fixes-r8`, `pos-fixes-r9` and the i18n parity spec re-run green.
