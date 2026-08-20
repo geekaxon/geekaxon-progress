@@ -7,8 +7,8 @@
 ## Current Status
 - **Project:** Marham Patti — multi-tenant white-label healthcare platform.
 - **Phase:** **PHASE 32** — allocation, payments round 2, screens to mockup.
-- **Last completed:** **318 — payments-round-2**.
-- **Next:** specs/319-supplier-ledger-to-mockup.md
+- **Last completed:** **319 — supplier-ledger-to-mockup**.
+- **Next:** **320 — purchase-view-to-mockup** — specs/320-purchase-view-to-mockup.md
 - **Group order:** 317 → 318 → 319 → 320 → 321 → 322. One step, then stop at the checkpoint.
 - **BRANCH RULE:** create and switch to the spec's own branch BEFORE any commit.
 - **PRINCIPLE:** a payments rule is specified against every surface that takes a payment.
@@ -19,8 +19,8 @@
 - **Before production:** fresh secrets and keys; staging relaxations and demo switches off.
 
 ### Recent steps
+- **319 — supplier-ledger-to-mockup** — DONE (2026-08-20) — both supplier ledgers to the mockup, and every row opens its record.
 - **318 — payments-round-2** — DONE (2026-08-20) — every split leg names its own account, and the cart prints without selling.
 - **317 — credit-allocation** — DONE (2026-08-20) — credit lands on the oldest open invoice, and the invoice says so.
-- **316 — personalization-and-language** — DONE (2026-08-20) — a view that follows the person, a name you can fix.
 
 > Older steps in PROGRESS-HISTORY.md

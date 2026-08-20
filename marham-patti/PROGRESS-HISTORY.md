@@ -19772,3 +19772,113 @@ holds.
 ### Gates run here
 `pnpm lint` and `pnpm typecheck` — both clean (one pre-existing unrelated warning in
 `doctor-portal.repositories.ts`). `pnpm test:unit` / `build` deliberately not run (AGENT.md §4A).
+
+## 319 — supplier-ledger-to-mockup — DONE (2026-08-20)
+
+**Work type:** FIX. **Branch:** `fix/319-supplier-ledger-to-mockup`. **Spec:** `/specs/319-supplier-ledger-to-mockup.md`.
+**Mockups:** `specs/mockups/pharmacy/purchases-suppliers-desktop.html`, `purchases-suppliers-mobile.html`.
+**Schema:** none. **RLS:** unchanged. Presentation only — no figure on either surface changed.
+
+### §1 — the desk drawer
+
+- **Header byline removed.** The head joined contact and phone into one grey `<span className="sub">`
+  and the `.supfacts` block eight pixels below stated the same two facts as their own rows — where
+  the phone number is a `tel:` link. The head is now the mark, the name and the two badges the
+  mockup draws; `DrawerDescription` stays as an `sr-only` name for the dialog (a `<DrawerContent>`
+  must be named) and states the reading rather than repeating the block.
+- **Closing-balance row centred — measured.** 307 top-aligned every cell in `.dtbl--ledger` /
+  `.dtbl--ledgers` so a *wrapped* reference sits level with the date beside it; `tfoot` was caught
+  by the same selector. Before: the closing row's text sat on the top edge of its 44px strip with
+  ~20px of empty sunken surface under it. After: `vertical-align:middle` for `tfoot td` only —
+  body rows still align to their first line.
+- **Amounts signed and coloured, balance always white.** Simple and the Payments tab both read
+  `signedReading(e)` (`amt-debit` warning / `amt-credit` success). Pro's `.led-debit` was
+  `var(--danger)` while Simple's signed column beside it was `var(--warning)` — the same invoice
+  read as an alarm in one view and an ordinary movement in the other; it is `--warning` now, and
+  `--danger` stays reserved for the overdue reading (`.amt--late`), which is a fact about time.
+  The closing cell takes the column's own `led-run` class, so "the balance is white in every
+  state" is one rule holding body and foot together. The phone's Pro card dropped its `is-clear`
+  green balance for the same reason.
+- **Pay · Refund · Record payment.** Four private ternaries became one `payActionKey(tone)` /
+  `payActionLabelKey(tone)` pair, read by the desk footer, the sheet footer, the desktop card
+  action and the list row action. New words: `pdSupPayNow` "Pay", `pdSupRefundNow` "Refund"
+  (`pdPayRefundSubmit` "Record refund" is the payment sheet's own submit and stays there).
+  The row/card money action was `disabled={r.outstanding <= 0}`, which killed it over an advance —
+  the state whose whole point since 314 §5 is that a refund can be recorded; it is
+  `read.tone === 'settled'` now, matching both footers.
+- **The broken advance card — measured.** Owner screenshot: `Rs 2,083.1` wrapping mid-figure in
+  `.scard__anchor`. Cause found in two existing rules, not in the number: `.scard__note` is
+  `white-space:nowrap; flex:none` and `.scard__amt` is `min-width:0`, and the note held the whole
+  sentence "Advance with supplier Rs 2,083.10" (≈32 chars at 11.5px ≈ 190px) inside a 276px-min
+  card — so the note took the band and the 22px figure was the child that gave way. Fixed at both
+  ends and EDITED IN PLACE on the single declaration of each selector (279's rule against
+  shadowing): the figure never wraps, the note ellipsises. The note text is now the two-word
+  `pdSupAdvanceWithShort` "With supplier" — the caption already says "Advance held" and the figure
+  says how much. New `.scard--advance` variant in the accent an advance already wears elsewhere
+  (`.bal--advance`, `.balhead--advance`). The phone LIST's `SigChip` carried the same sentence in
+  a 24px chip and took the same two words — the shared-component rule binds the fix.
+
+### §2 — the phone sheet
+
+- **Head:** contact/phone byline out, `.supbadges` (terms + Overdue) in, as the desk head has had
+  since 243.
+- **`.mfacts` is 2×2:** `.mfacts__hd` carried the supplier's mark and name across the top of the
+  grid, directly under a sheet header that had just drawn the same mark and name at 38px. Gone;
+  the block is Contact · Phone · Terms · Last purchase and nothing else. It now sits ABOVE the
+  balance block, as the mockup orders them.
+- **Advance block redesigned:** was "Running balance − Rs 2,083.10" + a wrapped
+  `.balhead__note` + the whole sentence crammed into the 13px `flex:none` right-hand slot — three
+  statements of one fact, none fitting. Now the mockup's: caption `pdSupAdvanceCap` "Advance with
+  supplier", figure `money(balAmount(...))` (no minus), and "Since <date>" beside it.
+  `advanceSince()` derives that date from the book itself — the first entry of the unbroken run of
+  negative balances the ledger currently ends on, i.e. the movement that carried the account past
+  zero — over the WHOLE book, not the visible range. No new figure is computed. `balhead--green`
+  gives it the success family the phone mockup uses.
+- **One row anatomy, four tabs.** `rowDescription()` composes reference/date/description ONCE for
+  both tiers and replaced `paymentMeta()`, which LED with the date the row's header line already
+  drew (the doubled date in the owner's Pro screenshot) and degraded to a bare date on a purchase
+  row (why the description was missing there entirely). Every row is now header (tag · reference ·
+  date) → `.mledrow__desc` → money; Payments rows show reference and description always.
+- **Pro card to the mockup:** date once, `.mledcard__desc`, and `.mledcard__dc` with Debit and
+  Credit as two labelled values (`—` on the side that does not apply) instead of one hero figure
+  plus a chip that asked the reader to infer a column from a colour. `.mledcard__amt` /
+  `.mledcard__kind--*` removed, not shadowed.
+- **Returns tab wears the Purchases tab's row** (owner decision). `.mretc` is right on the Returns
+  register and wrong inside a sheet whose other three tabs are a `.mledger` of `.mledrow`s at a
+  different height, inset and type scale. `ReturnCard` keeps its single declaration in
+  `DocumentReturns` and its own screens; the import is dropped here. New word `pdSupRetCredited`.
+
+### §3 — rows open their records
+
+Purchases-tab row (desk `<tr>`) and card (phone) both spread 305 §1's `rowOpenProps`, exactly as
+the Returns tab already does, and open `/pharmacy/purchase?pi=<id>` — the ONE reader of that
+document (105's own drawer) rather than a second copy of it here. The purchases screen gained the
+`?pi=` deep link mirroring the returns register's `?ret=` (302 §8): a row the current month window
+holds opens straight away on the skeleton-becomes-content path, and an invoice outside it — most of
+what an old ledger names — is fetched by id so the link never lands silently at the top of a list.
+Fires once per id via `openedRef`. Desk rows take the cursor and focus ring `.dtbl--supret` already had.
+
+### Tests
+
+New `packages/ui/src/lib/supplier-ledger-to-mockup-319.spec.tsx` — a wiring census in the 305/314
+shape (the claims are about which words, classes and handler a slot carries; rendering one
+component cannot settle them), covering all four sections plus en/ur for the nine new keys.
+Three existing suites were updated where 319 supersedes their assertion, each with the reason in
+place: `ledger-truth-310` (the footer word is now one three-state derivation; the closing cell
+carries `led-run`), `purchases-mobile-r2-265` (same footer expression), `void-payment-reversal-270`
+(its `between()` end-marker was `function paymentMeta(`, which no longer exists).
+
+### Gates
+
+`pnpm lint` clean (one pre-existing `@mp/api` unused-eslint-disable warning, present on the base
+commit too). `pnpm typecheck` clean. Every literal the new suite asserts was verified against the
+sources before commit. `pnpm test:unit` / `build` left to the controller per the standing rules.
+
+### Decisions recorded
+
+- The mobile sheet's "Last purchase" fact still binds `reading.dueAt`; the spec's per-declaration
+  diff does not touch it and the step is presentation-only, so it was left as found and is flagged
+  here for whoever owns the next supplier step.
+- The sheet header badges follow the DESKTOP set (terms + Overdue) because §2 says "as desktop has
+  them"; the mobile mockup additionally draws "Advance held" / "Settled" pills, which were not
+  added.
