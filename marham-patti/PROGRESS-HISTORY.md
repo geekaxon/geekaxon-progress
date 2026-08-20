@@ -19438,3 +19438,197 @@ EN + UR parity for `pinvSrcItemPrice`, `pinvSrcStoreRule`, `pinvSrcStoreRuleScop
 ### Gates
 
 `pnpm typecheck` clean, `pnpm lint` clean (one pre-existing unrelated warning in `doctor-portal.repositories.ts`, untouched). Unit/e2e/build left to the controller per AGENT.md §4A. Vendor untouched; no secrets; staging only.
+
+---
+
+## 316 — personalization-and-language — DONE (2026-08-20)
+
+**Branch:** `feature/316-personalization-and-language` (FEATURE). Spec: `/specs/316-personalization-and-language.md`. No CODEREF for this range.
+
+### §1 — one per-user preference store
+
+New table `user_ui_preferences` (`tenant_id`, `user_id`, `screen`, `pref`, `value`; unique on all four keys), under the canonical `apply_tenant_rls()` — ENABLE + FORCE + fail-closed `tenant_isolation`. Narrow key/value on purpose: the next screen that offers card/list must not need a migration, and there is no meaning here for the database to enforce.
+
+- API: `GET /me/preferences/ui` (every choice in ONE read) and `PUT /me/preferences/ui` on the existing `PreferencesModule`. The write is deliberately NOT `@Audited` — a counter hand flipping Suppliers to cards forty times an evening is not accountability data, and it would bury the rows that are. The language switch stays audited.
+- Validation lives in `@mp/shared/user-ui-prefs.ts` (`UI_PREF_KEYS`, `UI_PREF_VALUES`, `isUiPrefScreen`, `defaultListView`) and is read by BOTH sides, so a value a control can emit is a value the endpoint accepts. Rows are re-validated on the way OUT too: a row from an older build is dropped, not handed to a control with no matching option.
+- Web: `apps/web/lib/user-prefs.ts` — module-scope map, one fetch per session, `localStorage` demoted from truth to MIRROR (first paint), writes fire-and-forget. `clearSessionCache()` now clears it, so the next person at the counter does not inherit the previous one's view.
+- `useListViewPref` / `useLedgerModePref` in `lib/list-prefs.ts` were re-pointed at it; the local `mp.datalist.view.*` / `.ledger.*` readers are deleted. **No screen moved** — that was the point of 213 §7 / 314 §2 putting the interface there.
+- Defaults: card on mobile, list on desktop. The tier comes from `useMobileTier()` (the kit's one breakpoint) and is passed as the store's re-decode key, because the device is not knowable during the server render. A STORED choice still paints from the state initialiser on either tier; only the never-chosen case settles one frame after mount.
+- RecentSales and Returns dropped their hardcoded `'list'` fallback so the device default applies.
+
+### §2 — the profile edits its name
+
+`MeProfileController` at `me/profile` (`GET`/`PUT`), self-scoped by construction — the principal supplies both tenant and user, so there is no addressable "other user". `@Audited`. Role is absent from the contract: roles are assigned, not chosen, and a field the server ignores is worse than one it refuses. `lib/me.ts` gained session subscribers + `refreshSession()`, so a saved name lands on the shell's user card and the pane's own header in the same frame. Settings → Profile shows Full name (editable) beside Role (read-only text, not a disabled select).
+
+### §3 — the words
+
+Owner decisions applied to `packages/i18n/src/messages/en.json` ONLY (the tenant app is English-only; the UR values already read بقایا/اُدھار and parity is by key). Vendor console untouched — its subtree is skipped by the new gate.
+
+Changed: `psupIntro`, `psupStatOutstanding`, `psupColOutstanding`, `psupOutstanding`, `pcusStatOutstanding`, `pcusColOutstanding`, `pcusOutstanding`, `pcusOutstandingCredit`, `pdShowingPurchases`, `pdSupKpiOutstanding`, `pdSupColOutstanding`, `pdPaySub`, `pdPayLeaves`, `pdPayOutstandingWord`, `pdMKpiOutstanding`, `pharmacyPos.v13.outstanding`, `platformBilling.suspendedBanner`.
+
+Decisions recorded: (a) balance-owed LABELS read **Baqaya** on supplier and customer surfaces alike, including the POS credit panel — two words for one figure, one tap apart, is the confusion §3 exists to end; (b) prose about a customer's udhaar keeps "old udhaar", because the table locks Udhaar as unchanged; (c) the platform-billing banner drops "outstanding" for "unpaid" rather than taking Baqaya — that word means what a customer or supplier owes the shop, not what the shop owes the platform; (d) "Credit limit" already read "Udhaar limit" everywhere; (e) database columns, API fields and code identifiers (`totalOutstanding`, `creditLimit`, `ReturnReason`) are NOT renamed. New gate: `packages/i18n/src/wording-316.spec.ts` walks every tenant string and fails on "Outstanding" / "Credit limit".
+
+### §4 — return reasons, split and editable
+
+New enum `ReturnReasonKind` and table `return_reason_options` (`tenant_id`, `kind`, `label`, `code`, `is_free_text`, `active`, `sort_order`; unique per tenant+kind+label), same forced RLS. Own repo seam + service + controller inside `PharmacySettingsModule` (`pharmacy/settings/return-reasons`): reads flag-gated only (the two return FLOWS read them and hold `pharmacy.sell`, never `pharmacy.settings.manage`), writes `pharmacy.settings.manage` + `@Audited`. **No DELETE route, permanently.**
+
+- Defaults seeded LAZILY on first read, per kind, only when that kind is completely empty. Not in the migration and not in tenant creation: those are two paths that must agree forever, and a tenant created between the migration and the deploy would get neither. A shop that has turned five defaults off is never re-seeded.
+- **No return table changed.** The frozen `ReturnReason` enum is what the row still stores (`code`, null → OTHER) and the option's LABEL is snapshotted into the line's `reasonNote`, so: money logic byte-identical, every report/export/audit reads what it always read, a reason the enum has no word for ("Excess supply") stays readable, and renaming an option tomorrow does not rewrite a return recorded today. `returnReasonPost()` in `@mp/shared` is the one mapper.
+- Both flows read their own list via `lib/return-reasons.ts`; the draft gained an optional `reasonId` so a pre-316 saved draft restores unchanged. `ReturnsClient` gained one `reasonText()` — the note, when present, IS the reason; a pre-316 line has none except on OTHER, so old returns read exactly as before.
+- Settings → Returns gained two `ReasonList` cards: add / rename / turn off / turn on. Adding back a deactivated label revives that row rather than colliding with the unique index. The free-text option cannot be turned off — a return with no sayable reason is how a shop files everything under the nearest wrong word.
+
+### Tests written (controller runs them)
+
+`apps/api/src/preferences/personalization-and-language-316.spec.ts` (store defaults, per-screen, ledger on the same store, tenant AND user bounding, stale-row drop, DTOs, profile name), `apps/api/src/pharmacy-settings/return-reasons-316.spec.ts` (seed order per kind, seed-once, no re-seed of a deactivated default, add/rename/deactivate, revive, free-text protection, cross-tenant 404, what a chosen option posts), `packages/db/src/personalization-isolation-316.spec.ts` (pglite over the REAL migrations: RLS enabled+forced, policy present, per-tenant reads, WITH CHECK refusal, fail-closed with no context, two users in one tenant), `packages/i18n/src/wording-316.spec.ts`.
+
+Updated the source-text guards that 213/314 left on `list-prefs.ts` (`inventory-desktop-r2-and-global-fixes`, `stock-alerts-screen-polish`, `supplier-ledger-314`) — they asserted the local-storage initialiser those steps shipped; they now assert 316's store, which is the same lesson one layer deeper.
+
+### Gates
+
+`pnpm prisma generate`, `pnpm lint`, `pnpm typecheck` — all clean (one pre-existing unrelated warning in `doctor-portal.repositories.ts`). Unit suites left to the controller per AGENT.md §4A.
+
+### Migration
+
+`packages/db/prisma/migrations/20260820000000_user_ui_prefs_and_return_reasons/migration.sql` — additive only, `CREATE TABLE IF NOT EXISTS` + guarded `CREATE TYPE`, both tables through `apply_tenant_rls()`.
+
+---
+
+## 317 — credit-allocation — DONE (2026-08-20)
+
+**WORK TYPE:** FEATURE (branch `feature/317-credit-allocation`) + the FIX it carries.
+**Spec:** `specs/317-credit-allocation.md`. No CODEREF exists for this range.
+
+### The problem
+A purchase return was raised against an invoice that was already paid in full. 304 posted its
+credit note correctly — the supplier's outstanding fell by the credit — and the balance on an
+OVERDUE invoice with the same supplier did not move by a paisa. The cause was not the posting:
+`documentBalance` floors at zero, so credit larger than its own invoice's balance evaporated at
+DOCUMENT level while staying perfectly correct at SUPPLIER level. The owner reads invoices, so
+the shop was overdue on paper against money it had already sent back.
+
+### The rule built (§1, locked)
+A credit note allocates automatically at posting: (1) its own invoice's remaining balance, up to
+it; (2) any excess to the supplier's OLDEST OPEN invoice, then the next oldest; (3) any remainder
+stays as an advance (310's state, which is simply the signed supplier balance going negative).
+
+### Schema / RLS
+New table `credit_allocations` (`CreditAllocation`): tenant_id, supplier_id, credit_note_id
+(→ PurchaseReturn), purchase_order_id, amount DECIMAL(12,2), allocated_by/at, and 270 §1.2's
+reversal quartet (reversal_of_id / reversal_reason / reversed_at / reversed_by). Migration
+`20260820010000_credit_allocations`, `SELECT apply_tenant_rls('credit_allocations')` — FORCE RLS,
+fail-closed, from the FIRST migration. Three indexes: (tenant, supplier), (tenant, purchase_order),
+(tenant, credit_note). ADDITIVE ONLY: no column added to any existing table, NO BACKFILL, so every
+figure in the app is byte-identical the instant the migration finishes.
+
+### Decisions, and the reasoning (I decided these; nothing was escalated)
+
+1. **The balance formula, and why it does not regress.**
+   `owed = max(0, grand − returnedValue − creditApplied − paid)`, where `returnedValue` is 304's
+   unchanged "what came back off THIS document" and `creditApplied` is Σ net allocations from
+   credit notes belonging to a DIFFERENT invoice. Own-invoice allocations are written but
+   EXCLUDED from `creditApplied`, because the same rupees are already subtracted as
+   `returnedValue`. The arithmetic works out: an own-invoice allocation is capped by the
+   invoice's room, so `returnedValue ≥ A_own`, and any over-subtraction only occurs where the
+   floor at zero has already bitten. `creditApplied` is zero everywhere until the reconciliation
+   runs, so no invoice's balance, pill or KPI moves on deploy.
+
+2. **Why the planner is pure and re-plans from scratch.** `@mp/shared/credit-allocation.ts` takes
+   a supplier's invoices (gross open = grand − paid) and credit notes and returns a PLAN;
+   `diffCreditAllocations` compares that plan to the stored net and returns only the difference.
+   That buys §3's idempotence for free (same book → same plan → empty diff) and makes §1's last
+   clause fall out: a void, a payment, a payment reversal, an approval and a fresh return are all
+   just "the book changed", handled by one method (`allocateSupplierCredit`). Triggers wired:
+   createPurchaseReturn (unheld only), approvePurchaseReturn, recordSupplierPayment,
+   reverseSupplierPayment, voidPurchase, and the §3 reconciliation.
+
+3. **Reversed by entries, never deleted.** A give-back is a NEGATIVE row, so the effective
+   allocation of a pair is Σ amount and never "last row wins". `reversal_of_id` (and hence the
+   stamp on the original) is claimed ONLY when the give-back exactly cancels one still-standing
+   row; a partial give-back carries its reason and no false stamp. Provenance is never bought
+   with a lie, and the net sum is authoritative either way.
+
+4. **Allocation failures never roll back the document that triggered them.** `reallocateAfter`
+   swallows. Allocation is ATTRIBUTION, not money: it cannot make a return, a payment or a void
+   wrong, and the next trigger (or the reconciliation) re-plans from scratch. A missed pass is a
+   delay, never a wrong figure.
+
+5. **The reconciliation is report-first.** `POST pharmacy/purchases/credit-allocations/reconcile`,
+   body `{ apply?: boolean }`, and `apply` must be a literal `true`. Everything else is a REPORT
+   — per supplier: credit-note count, credit total, allocated, advance, rows-that-would-be-written
+   — because a tenant-wide re-attribution of credit is something a person wants to read first.
+   The report IS the plan (same code path), so it is not a forecast. Permission:
+   `pharmacy.purchase.void` rather than `pharmacy.stock.adjust` — this is the owner's or
+   manager's correction across a whole tenant, not a counter action, which is the same reasoning
+   261 recorded for that key. `@Audited` as `pharmacy.credit.reconcile`.
+
+6. **The migration does not backfill.** A migration cannot report to anybody, cannot be inspected
+   before it commits, and would have to reimplement the allocation rule in SQL beside the
+   TypeScript that owns it. Two copies of a money rule is how the two stop agreeing.
+
+7. **§4 — attribution is `Full Name (Role)`.** 311 joined name and role with the same middot the
+   app uses to separate FACTS, and on the supplier ledger that produced
+   *"Ganatra Owners · Tenant owner · Testing Supplier"* — three peers, two of which are one
+   person. The role became a bracketed qualifier and the middot went back to one job. One
+   formatter, `formatPersonIdentity` in `@mp/shared` (not in the web component) because printed
+   documents, toasts, aria-labels and server-composed lines credit people too. `<PersonName>` and
+   `personCredit` both render through it, so every crediting surface inherited the change.
+   `.mp-person__sep` is now `display:none` — declared, so stray markup never draws unstyled.
+
+### Endpoints
+- `POST pharmacy/purchases/credit-allocations/reconcile` (new) — `{ apply?: boolean }`.
+- No endpoint changed shape. `PurchaseRowView` gained `creditApplied`; `PurchaseDetailView`
+  gained `appliedCredits[]` (returnId, creditNo, returnNo, fromInvoiceNo, amount, at).
+
+### Screens (§2)
+Desktop drawer and mobile sheet both gained the aggregate `Credit applied` totals row (between
+`Returned` and `Paid`, negative, so the column reconciles to the balance below it) and the
+per-credit `.sub` lines inside the balance row — *"Credit applied Rs 2,000.00 · CN-7"*, the CN a
+link to the return. Both from ONE shared pair in `DocumentReturns.tsx`
+(`AppliedCreditTotalRow` / `AppliedCreditLines`, gated by `showsAppliedCredit`), so the two
+surfaces cannot state different arithmetic about one invoice. The pill responds to allocated
+credit exactly as it does to a payment (`documentPaymentState` gained `creditApplied`), so an
+invoice a credit note closed reads `Settled` and leaves the Due-this-week KPI.
+
+### i18n
+EN + UR parity: `docCreditTotalsRow`, `docCreditFromOn`, `docCreditApplied`.
+
+### Flags / isolation / audit
+No new flag — this is the purchase module's own behaviour under `pharmacy.*`, gated exactly as
+the surfaces that carry it already are. Every read and write goes through `runWithTenant`; no
+query widens; the new table is FORCE-RLS fail-closed and proved so. The reconciliation is
+`@Audited`; every allocation row carries `allocated_by` and every give-back carries its reason.
+
+### Tests written (controller runs them)
+- `apps/api/src/pharmacy/credit-allocation-plan-317.spec.ts` — the pure rule: own invoice, oldest
+  open, advance, oldest-note-first contention, void/absent own invoice, epsilon, stable ties, and
+  the diff's four cases. Every scenario asserts CONSERVATION (allocated + advance = credit
+  raised). Lives in apps/api because `@mp/shared` carries no test runner — the same reason 304's
+  `documentBalance` is proved from `returns-ledger-and-history-304.spec.ts`.
+- `apps/api/src/pharmacy/credit-allocation-317.spec.ts` — the acceptance: the owner's report, the
+  partly-paid case, the advance, the row-not-an-edit rule, payments untouched, the pill and the
+  KPI, approval gating, void-an-invoice re-allocation, void-a-payment re-allocation with the
+  reversing entry, the whole §3 report/apply/idempotence trio, and §4's format.
+- `packages/db/src/credit-allocations-isolation.spec.ts` — RLS over pglite against the REAL
+  migrations: own rows only, cross-tenant INSERT refused by WITH CHECK, zero rows with no tenant
+  context, FORCE RLS asserted from `pg_class`, negative reversing row nets to zero with the
+  original still present, table starts empty, migration re-applies as a no-op.
+- Updated `names-and-identity-311.spec.tsx` (the format 317 §4 supersedes) and one assertion in
+  `returns-ledger-and-history-304.spec.ts` — a return naming NO invoice now relieves the oldest
+  open one, which is 317 §1.2 superseding 304's "no invoice's balance is reduced by a guess". The
+  supersession is recorded in that suite rather than in a new file, so the next reader of the
+  rule finds where it moved.
+
+### Gates
+`pnpm prisma generate` ok. `pnpm lint` — 0 errors (1 pre-existing warning in
+`doctor-portal.repositories.ts`, untouched). `pnpm typecheck` — clean, 31/31.
+
+### Note for the controller — a RED gate this step did not cause
+`packages/ui` fails 8 suites in the current working tree. With the UNCOMMITTED
+`specs/mockups/**` updates reverted, that drops to the SAME 3 suites that fail on the committed
+HEAD — this step adds ZERO failures. The 3 pre-existing: `purchases-void-261` (a source census
+for a chip-count expression 315 replaced with the shared `documentMatchesFilter`),
+`take-payment-redesign-and-udhaar-wording` (expects `pcusOutstanding === 'Old udhaar'`; 316
+renamed it to 'Baqaya'), and `realtime-and-interaction-312`. The other 5 (272, 275, 279, 283,
+264) are CSS/mockup censuses failing against the updated mockups, which is exactly the work
+steps 319–322 exist to do. None of the 8 was touched here: fixing 261's and 316's stale censuses
+would be guessing at those steps' intent, and bringing the app CSS to the new mockups is 319–322.
