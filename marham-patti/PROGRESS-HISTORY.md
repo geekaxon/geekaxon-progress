@@ -19632,3 +19632,143 @@ renamed it to 'Baqaya'), and `realtime-and-interaction-312`. The other 5 (272, 2
 264) are CSS/mockup censuses failing against the updated mockups, which is exactly the work
 steps 319–322 exist to do. None of the 8 was touched here: fixing 261's and 316's stale censuses
 would be guessing at those steps' intent, and bringing the app CSS to the new mockups is 319–322.
+
+---
+
+## 318 — payments-round-2 — DONE (2026-08-20)
+
+**WORK TYPE: FEATURE (branch feature/318-payments-round-2)** — split legs tracked, advance as a
+payment source, print quotation — plus the two FIXes the spec folds in (held back-dated sale,
+held-by stale name). Spec: `/specs/318-payments-round-2.md`. No CODEREF covers 318 (the highest
+is 113–121). **Schema: none** — checked, as the spec asks: `SalePayment` and `SupplierPayment`
+already carry `accountId` + `reference` from 313, and a supplier split is several ROWS, which the
+table has always allowed. No migration, no `prisma generate`.
+
+### §1 — every non-cash leg names its own account
+- `@mp/shared` gains `paymentLegsError(legs, known)`: the per-LEG form of 313's one rule, first
+  failing leg wins, zero-amount legs skipped (a split board gives every method a box and the
+  untouched ones are placeholders, not tenders). The panel disables Confirm on it and the server
+  refuses on the same predicate — the checkout endpoint has validated per leg since 313, so §1 on
+  the POS was purely a UI change.
+- `PaymentPanel`: the single `accountId`/`payReference` pair becomes state KEYED BY METHOD, which
+  serves both shapes — a non-split payment is the lead method's own entry. The `.payacct` block
+  now stands down entirely in split mode; each leg carries its own `.paymix__acct` pair.
+- **The phone's `.paysplit` board is retired.** The recommitted pos-mobile.html draws `.paymix` on
+  both surfaces, and it has to: two split boards would mean asking the per-leg question twice, in
+  two anatomies, with two chances to disagree about which legs must answer it. One board now.
+  Recorded so a later diff against an older mockup does not restore it.
+- **New Purchase's inline payment** — the surface 313 §2 missed — asks the same two questions on
+  both tiers, through ONE local `<PurchasePayAccount>`; the server refuses a non-cash tender
+  without an account via the same `assertPaymentAccount`. `SupplierPayment` has one free-text
+  column and the structural `po:<id>` link owns it, so the operator's slip number is COMPOSED
+  behind it (`po:<id> · REF`, the same `·` 243 §6 already composes with) and
+  `purchaseIdFromPaymentReference` reads the id up to the separator. An id has no spaces or
+  middot, so every stored row reads exactly as before.
+
+### §2 — paying from an advance
+**Decision recorded (no approval gate; the reasoning matters for 319–322).** This codebase's
+supplier advance is `partyBalanceParts(outstanding).advance` — `max(0, −outstanding)`, 310's own
+figure, the same one 314 §5 caps a refund at. The mockups draw an advance as a pot standing
+BESIDE a positive outstanding; making that real would be a ledger change touching 310, 314 and
+317 and is far beyond one step. So §2 is implemented against the advance this ledger actually
+has, and every bullet of §2 is met literally: the leg needs no account, is capped at what is
+held, refuses more BY NAME (270 §1.3), reduces 310's figure immediately, and is reversed by 270's
+entries like any other row.
+- The leg is a `SupplierPayment` with a NEGATIVE amount and tender `CREDIT` — the one method in
+  the enum that is not money moving — and `accountId: null`. Negative-for-a-debit is 270 §1.2's
+  established shape; `CREDIT` is what tells it apart from 314's refund (cash back through the
+  door) on read. **No column, no enum value, no migration, no backfill**: no supplier payment row
+  written before this step carries `CREDIT`, so existing data classifies exactly as it did.
+- `SupplierLedgerEntryKind` / `SupplierLedgerKind` gain `ADVANCE`, ordered after PAYMENT and
+  before REFUND on a shared instant (it spends what a payment or a credit note already put there).
+- `recordSupplierPayment` takes `advanceAmount`: 0 is every payment the frozen path ever wrote,
+  `= amount` is "all of it", between is §2's SPLIT — the advance row plus the ordinary remainder
+  row. An advance-only payment writes NO second row (a zero-amount entry says nothing true).
+  Combining an advance leg with a REFUND is refused rather than netted.
+- New Purchase's inline payment takes the same field and writes the same shape.
+- `RecordSupplierPayment` gains the mockup's `.advchip` ("Advance available Rs X"), a **Pay from**
+  select (Method · Advance held · Split, the last two offered only when there IS an advance), and
+  the `.paylegs` list where the advance leg carries a NOTE instead of an account select.
+- **Sign bug fixed on the way (§2 depends on it).** The dialog read `refundCap(-target.outstanding)`
+  — which is `max(0, outstanding)`, the OWED figure. A supplier owing Rs 215,280 therefore "held
+  an advance of Rs 215,280", the direction segments appeared and the dialog opened in REFUND mode
+  on an ordinary payment. `refundExceedsAdvance` in the same file and the server's own cap both
+  pass the outstanding straight through; this was the one caller of three reading it mirrored.
+
+### §3 — the held back-dated sale
+The permission governs who SETS a date, not who completes a sale. `heldSaleAuthorizedDate` reads
+the date off the hold's STORED payload (never off the request), and the commit gate accepts a
+back-dated resumed sale whose date matches it; anything else — a fresh back-dated sale, or a
+resumed hold the cashier has re-dated — still needs `pharmacy.backdateSale`. Fails closed (no
+hold / no stored date → the permission is required, exactly as before). The back-date AuditLog
+entry is unchanged and still fires. On screen the picker now reads `saleDate || today` on BOTH
+tiers rather than today-when-unpermitted (which lied about what would be committed in front of
+the customer); "Manager only" is gone — it is permission-based, and a tenant may clone a role
+that holds it. The phone's disabled date wears the app's disabled convention (reduced opacity,
+default cursor, no active transform).
+
+### §4 — held by, resolved live — AND THE SNAPSHOT AUDIT §4 ASKS FOR
+`listHeldSales` already batched `findStaffNames` for the ROLE (311 §3); it now takes the NAME from
+the same one query. A name is a fact about a person, not about the moment a cart was parked, and
+the row already stores the only thing that is a fact about the moment: the user id. `heldByName`
+on the row STAYS and is still written — it is the fallback for a deleted account and what the
+audit trail quotes. Live first, stored second.
+
+**The audit (§4's "the same defect class will exist on drafts"), recorded here as the spec asks.**
+Surfaces that snapshot a name where an id belongs:
+1. `HeldSale.heldByName` — **fixed** (resolved live on the rail).
+2. The POS's local-storage resumed-hold pointer (`mp.pharmacy.pos.hold`) carried a name and the
+   cart header printed it after a refresh, with no role — **fixed**: the header resolves from the
+   rail by id through `personCredit`, with the stored name as the last resort.
+3. `HeldSale.resumedByName` / `completedByName` — snapshots, NOT fixed and deliberately so: they
+   are attribution about a moment that has closed, and they are read as messages, not as live
+   credit lines. Left as history.
+4. The held-sale REALTIME event carries the parker's name; a rename between the event and the next
+   full list read shows the old one until the rail refetches. Bounded and self-healing.
+5. `SupplierPayment.reversedBy` / purchase meta actor names resolve through `staffName` already.
+No draft surface was found holding a name where an id belongs; the purchase draft stores ids.
+
+### §5 — print quotation
+- `ThermalReceiptInput.quotation` (shared, so the screen document and the paper one are ONE fact).
+  The ESC/POS renderer prints the `QUOTATION` title where the REPRINT mark goes, the qualifying
+  line under it, **no invoice row and no barcode**; `isCashDocument` can never kick the drawer for
+  one. `PrintLabels` gains `quotationTitle` / `quotationNote` (ASCII — a thermal head has no
+  middot glyph).
+- `<QuotationSheet>` (new) renders BOTH papers from ONE model: the A4 sheet on `@mp/ui`'s existing
+  `InvoiceDoc` / `InvTable` / `InvTot` invoice anatomy titled QUOTATION, and the thermal slip
+  through the SAME `<ThermalReceipt>` the checkout receipt uses. Thermal printing goes through
+  282 §3's one entry point; A4 through the browser dialog on the mounted sheet.
+- The model is built in the BROWSER from the cart on screen — a quotation quotes the prices the
+  cashier has just discussed, and re-pricing server-side would introduce the one thing it must not
+  have: a figure the customer was not shown. Identity is the RESOLVED tenant brand (`useBrand`),
+  never hardcoded. It posts nothing: no sale row, no stock movement, no reserved number, and the
+  cart is untouched — closing the sheet returns the cashier to exactly what they left.
+- Action on the POS cart on BOTH surfaces, gated on 313's `pharmacy.print.only`, which SALESMAN,
+  CASHIER and PHARMACIST now hold by default (§5: "roles that can sell may also hold it" — it
+  grants nothing a seller does not already have, because printing a price commits nothing).
+  Registered in 284's shortcut registry as `pos.printQuotation` / `Ctrl+Alt+P`, so it is listed in
+  the `?` overlay with its key.
+
+### Money computation
+Untouched. `splitPaymentSummary`, `computePosCartTotals`, `allocateOverpayment`,
+`planCreditAllocation` and the checkout money path are byte-identical; this step records WHERE
+money moved and WHO may date or print, never how much.
+
+### i18n
+`pharmacyPos.v18.*` (9 keys) EN+UR; nine `pd*` keys for the supplier payment dialog EN+UR. Parity
+holds.
+
+### Tests written (controller runs them)
+- `apps/api/src/pharmacy/payments-round-2-318.spec.ts` — §1 per-leg refusal incl. the two-non-cash-
+  leg acceptance case, zero-amount legs, deactivated accounts, the composed purchase reference;
+  §2 the cap, the epsilon and the by-name refusals; §3 the stored-date read and its fail-closed
+  cases; §4 the live-name resolve and the deleted-account fallback (and that the stored snapshot is
+  NOT rewritten); §5 the model, the shortcut registry entry and the role defaults.
+- `packages/escpos/src/quotation-318.spec.ts` — what the paper actually says: the title, the
+  qualifying line, NO invoice row, NO barcode, and a real receipt left exactly as it was.
+- No Playwright harness exists in this repo (no config, no `test:e2e` script), so there was
+  nothing to add a `page.goto` test to.
+
+### Gates run here
+`pnpm lint` and `pnpm typecheck` — both clean (one pre-existing unrelated warning in
+`doctor-portal.repositories.ts`). `pnpm test:unit` / `build` deliberately not run (AGENT.md §4A).
