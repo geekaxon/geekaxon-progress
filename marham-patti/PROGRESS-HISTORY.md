@@ -19882,3 +19882,113 @@ sources before commit. `pnpm test:unit` / `build` left to the controller per the
 - The sheet header badges follow the DESKTOP set (terms + Overdue) because §2 says "as desktop has
   them"; the mobile mockup additionally draws "Advance held" / "Settled" pills, which were not
   added.
+
+## 320 — purchase-view-to-mockup — DONE (2026-08-20)
+
+**Branch:** `fix/320-purchase-view-to-mockup` (WORK TYPE: FIX). Spec: `/specs/320-purchase-view-to-mockup.md`.
+No CODEREF covers 320. **Schema: none. RLS: unchanged. i18n: no new keys.** Presentation only —
+no figure on any surface changes.
+
+### §1 View Purchase, both surfaces
+
+**Header stops repeating the body.** The mockup's drawer head (`purchases-suppliers-desktop.html`,
+the View-purchase sheet) is the invoice number, its state pill and its date — nothing else. The desk
+head also carried `.supmark--xs` + the supplier name inside `.vdsub`; the phone head carried a 44px
+`lead` medallion, `subtitle={row.supplierName}` and a `UserRound` "recorded by" chip. All four are
+removed. The `.factrow` (desk) and `.mfacts` (phone) grids four pixels below already state supplier
+(with its mark) and recorded-by, so nothing is lost and the number gets the width it needed.
+
+**The returns table IS the items table.** 304 §4.1's `DocumentReturnsTable` stays ONE component and
+its columns are unchanged (Date · Return no. with the credit note beneath · Lines · Value · By); what
+changed is the chrome it wears in this drawer. It was `.dtbl--fit` — 13px type, a 38px head at 10px
+caps, 52px rows, 14px `--dt-edge` — sitting directly under `.vlines`' 12.5px/27px/9px items table, so
+one document drew two tables. `.dtbl--ret` now restates the items table's type scale, head padding,
+cell padding and `vertical-align:top`, with `height:auto` overriding `--dt-row`.
+
+*The date overflow, measured.* The owner's screenshot showed the date cut off. It is arithmetic, not
+wrapping: `.dtbl--fit tbody td` carries `overflow:hidden` and `.date` carries `nowrap`, and the column
+was 88px with 24px of `--dt-edge` chrome inside it — 64px of room for "12 Aug 2026" (~78px at 13px).
+The column is now 104px against the items table's own 9px padding (86px of room), and the five columns
+re-budget to 279 §1's 657px usable width for this same 700px drawer: 104 / auto (245) / 58 / 120 / 130.
+
+**Totals take 319's colour rule.** `Returned` now carries `--back` alongside `Credit applied` on both
+surfaces, and `--back b` moves from `--text-secondary` to `--success` with semibold weight: the two
+rows that reduce what is owed are credits, and a credit is green wherever this app states one. Both
+keep the component's own leading `−`, so it is never colour alone. The **balance is primary ink at
+every state** on both surfaces (`--bal b`, `.is-late b`, `.is-clear b`) — 319's running-balance rule.
+Weight and size still separate a live balance from a settled one; overdue is said by the header pill
+and the `Due …` sub-line, which is twice already, and neither of them is the total. The mobile block
+therefore drops `--warning-ink` / `--danger-ink` on the balance only; every other `-ink` use stands
+(the 260 suite's assertion was retargeted, not deleted).
+
+### §2 List and card
+
+**List:** the supplier column's initials medallion is removed — name and terms only. Recorded
+deliberately: the committed mockups still draw `.supcell > .supmark`, and the spec is authoritative
+(CLAUDE.md §3), so this is a knowing deviation from the file, not a transcription slip. The mark
+survives everywhere it identifies something the words do not — the drawer's fact grid, the phone
+card, the supplier's own card.
+
+**Card:** the disagreement was real and structural. `.icard--{state}` is a PAY-STATUS reading
+(`invoiceCardState`: unpaid / partial / paid / returned) and it was colouring the balance figure,
+while the table coloured its own from `balanceTone` (danger only once the money is actually late).
+So an UNPAID invoice still well inside its terms read danger on the card and warning in the table
+beside it, and a PARTIALLY paid one three weeks late read warning where the table read danger. The
+figure now carries the table's `bal bal--{tone}` class; the state rules keep only the emphasis
+(`font-size`, `font-weight`), the `em` caption and the overdue anchor tint. `.icard--voided` is
+declared after the tone rules at equal specificity so a void still reads struck-through and receded —
+a void is not a balance state.
+
+### §3 The print dialogue
+
+Both halves fixed in the SHARED shell (`packages/ui/src/components/dialog.tsx`), plus one dead
+selector in `globals.css`.
+
+*The dead selector.* `.mp-pur2 .printscrim` is a DESCENDANT selector, and both classes sit on the
+same element (`mp-inv2 mp-pur2 printscrim`). It matched nothing — since 312 §2 moved the class onto
+the shell's box — so `.printdlg`'s `max-height:100%` resolved against an auto-height ancestor and did
+nothing, and the preview scrolled as one long page, header and all. Corrected to `.mp-pur2.printscrim`
+here and in the `@media print` block, where the same form was equally dead.
+
+*The shell.* `DialogContent` gains a documented `bare` prop for surfaces that bring their own card.
+It replaces the four utility classes (`max-w-full border-0 bg-transparent p-0 shadow-none`) that
+flattened the LOOK and left the BEHAVIOUR: the box becomes a transparent, full-size centring layer
+with `overflow-hidden` (so the card's body owns the scrolling, never the dialogue), and a pointerdown
+whose target IS the box — i.e. the empty space beside the card — runs the layer's single `dismiss`,
+the same function `Escape` and the ✕ run. Gated on `bare`, so an ordinary dialog's own padding is
+still part of the dialog and a press on it closes nothing. `.printdlg__hd` gains `position:sticky;
+top:0; flex:none` so Print / Save PDF / ✕ stay reachable at every scroll position of a long document.
+
+### §4 The blue left border
+
+**The selector, recorded as the spec asks:** `.row-open.is-live-marked > *:first-child` and its card
+forms (`.pcard`, `.icard`, `.minv__row`, `.mcard`, …), `box-shadow: inset 3px 0 0 0 var(--accent)`,
+`globals.css` — 305 §2.2's "this row arrived or moved while you were reading" marker, mirrored for
+RTL. **It is NOT a `:focus-visible` / `:focus-within` rule** and no container was ever styled; the
+spec's hypothesis is recorded as refuted. Every row genuinely was being reported as an arrival.
+
+**The cause is one template hole.** `useLiveOrder`'s reset key was
+`` `${appliedStatus}|${debounced}|${monthWin}` `` and `monthWin` is an object (`{from,to}`), so the
+month interpolated to the constant `[object Object]`. The key could never change on a month change,
+the pin held the OLD month's ids, and `pinRowOrder` marked every row of the new month as an arrival —
+which is exactly what it is for and exactly what it should not have been asked here. Key now spells
+the window out field by field. No focus rule was touched, so nothing was traded away (294); the
+suite asserts the month button's, the topbar tag's and the row's focus rings are intact.
+
+### Files
+
+- `apps/web/app/(app)/pharmacy/purchase/PharmacyPurchaseClient.tsx` — §1 heads, §1 totals row classes,
+  §2 supplier cell + `.icard__bal` tone, §3 `bare`, §4 reset key.
+- `apps/web/app/globals.css` — `.dtbl--ret` anatomy + widths, `--back` / `--bal` inks (desk + phone),
+  `.icard__bal` tone rules, `.printdlg__hd` sticky, `.printscrim` selector (twice).
+- `packages/ui/src/components/dialog.tsx` — `DialogContent`'s `bare`.
+- `packages/ui/src/lib/purchase-view-to-mockup-320.spec.tsx` — NEW, §1–§4.
+- Retargeted: `purchases-mobile-260.spec.tsx` (the sheet's `lead`; the balance ink),
+  `realtime-and-interaction-312.spec.tsx` (the `.printscrim` selector),
+  `list-row-open-and-realtime-305.spec.tsx` (the reset key, plus a refusal of any bare object in one).
+
+### Gates
+
+`pnpm lint` clean (design-drift, token-integrity, tenant-english-only, tenant-search-select and
+tenant-page-titles all pass). `pnpm typecheck` clean. `pnpm test:unit` is the controller's gate.
+Vendor untouched; no schema, no migration, no new i18n key.
