@@ -19374,3 +19374,67 @@ path is a negative payment row the existing fold already knew how to add up.
 - Real bug: step 313 replaced the whole `pharmacyPos.v17` block in en.json/ur.json with its eight payment-account keys, deleting the seven keys still referenced by PosClient.tsx (`namePlaceholder`, `nameHelp`, `phonePlaceholder`, `phoneHelp`, `hasUdhaar`, `inAdvance`, `holdUpdatedNumber`). The customer-capture card and the hold toast were rendering raw key paths. Restored all seven above the account keys in both catalogs; EN↔UR parity holds.
 - Stale source-text assertions updated to the code 313 reformatted: `pos-credit-and-customer-attribution` and `pos-credit-ux-and-fullpage-payment` now match the wrapped `blockedBalance && !needsCustomer ? (` branch by regex (313 hung `accountMissing`/`accountUnchosen` off the same chain), and `shortcut-engine-and-pos-keys-284` expects the direct-save cash leg with its `accountId: null, reference: null`, plus a new count assertion that it is still exactly one leg.
 - Gates: `pnpm lint` and `pnpm typecheck` clean; the four failing suites plus `pos-and-global-fixes-r8`, `pos-fixes-r9` and the i18n parity spec re-run green.
+
+---
+
+## 315 — inventory-and-purchase-view — DONE (2026-08-20)
+
+**Branch:** `fix/315-inventory-and-purchase-view` (from the 314 head). **Schema: none. RLS: unchanged. Money logic byte-identical** — nothing below prices, charges, totals or blocks anything.
+
+### §1 The margin badge
+
+`packages/shared/src/pharmacy-pricing.ts` gains two pure, display-only functions: `costMarkupPct(cost, sale)` — the mockup's own formula, `(sale − cost) / cost`, markup ON COST, the reading retail pharmacy quotes and the only one that can exceed 100% — and `costMarkupState(pct)` for the mockup's three thresholds (`< 0` danger, `< 10` warn, else the earning state).
+
+`FormMarginBadge` in `PharmacyInventoryClient.tsx` mounts it on the Add/Edit item form's Pricing & tax heading, which becomes the mockup's `.formsec__hd--split`. It recalculates on every keystroke because it reads the draft's own two strings; a blank or half-typed side reads "not yet", never a zero.
+
+**Decision recorded — the badge does NOT share a body with `marginVerdict`, and that is deliberate.** `marginVerdict` is the GUARD: it measures the NET price after the concession, and it has no verdict to give when nothing is priced. The badge answers a different question — "what is the markup on the two numbers currently under my fingers" — where a sale price of 0 against a real cost is a readable −100%, not an unknown. Routing the badge through the guard would have made it silent in exactly the state the owner is typing through. The guard, its floor, its warning and everything downstream are untouched; a unit test asserts the two agree on the plain case and are deliberately different on the two edge cases.
+
+**Two deviations from the mockup's inline script, both taken toward the deployed app and both recorded:**
+1. **Icon.** The mockup always draws `trending-up`; a negative margin here turns the arrow DOWN, as View item's own pricing badge has since 271/283. One badge anatomy on one screen should not point two ways about the same fact.
+2. **The "Margin —" state.** The mockup's script removes only `--warn`/`--danger`, so an unknown margin renders GREEN. Its own stylesheet declares `.mgnbadge--none` for exactly this ("neutral when it cannot be known") and the script simply never reaches for it. A green badge reading "Margin —" is the one state on the screen that asserts something it does not know, so the neutral class is used. Formula, thresholds and the three colour states are the mockup's, exactly.
+
+### §2 Inherited values say what they are
+
+New `apps/web/components/pharmacy/InheritedValue.tsx` — **the only implementation**, exporting `<InheritedValue value source />` and `inheritedValueText(value, source)`. `.inhsrc` is declared **unscoped** in `globals.css` (like `.pickmark`, 265 §4) because every surface that mounts it is a drawer or a sheet portalled to the document root, where `.mp-inv2` / `.mp-pur2` no longer reach — the 237 §3.3 trap. `grep -rn "inhsrc" apps/` returns the component and the one CSS rule and nothing else; there is no second implementation.
+
+**Server side.** `MedicineDetailView` gains `inherited: { defaultTaxRate, globalDiscount }`, resolved in `medicineDetail` through the SAME two functions everything else uses — `PharmacySettingsService.resolve` (branch-over-tenant) and `globalDiscountFor` / `resolveGlobalDiscount` (the scope ladder, with the per-product exclusion still beating every rule). **Neither ladder is changed. The resolution orders are byte-identical** — this step reports their output and picks no winner. The web-side field is optional so a client held open across the deploy draws exactly what it drew before rather than an empty bracket.
+
+**The audited list — every surface on this screen showing an inheritable value:**
+| Surface | Before | After |
+|---|---|---|
+| View item · Tax rate | `Tenant default` (no figure at all) | `17% (Tenant default)` |
+| View item · Discount | `—` when the product set none | `5% (Store rule)` / `5% (Store rule · <category>)` |
+| FEFO table · Sells at | muted `Product's price` | `Rs 12.00 (Item sale price)` |
+| View item · Cost / Sale / Last discount | already `displayedFigure` (271 §1) — leads with the product figure, names `Last …` in the label | unchanged, deliberately: that pair is two TRUE figures, not an inheritance |
+
+The mockup's KV list also carries a `FEFO sells at → Item sale price (Tenant default)` row. **Not added, and recorded as a decision:** the spec's audit list names "the FEFO table's Sells-at", which is the column that was actually saying the name of a rung instead of a figure, and the deployed FEFO table already answers this per lot. A whole new KV row summarising a setting that does not exist under that name (`fefoPriceMode` is SPLIT/BLENDED) would have been an invention, not a diff.
+
+### §3 Purchases to the latest mockups — per-declaration diff
+
+Measured off `purchases-suppliers-desktop.html` / `-mobile.html`, mockup value · deployed value · source · after (308's method):
+
+- **Chip set** · mockup `All · Unpaid · Partly paid · Paid · Settled · Overdue ┊ Partially returned · Fully returned` (desktop 4944-4954, mobile 4480-4489) · deployed `All · Unpaid · Partial · Paid · Voided` · the chips were folded off the stored `payStatus` while the row's PILL had read `documentPaymentState` since 304 §5 · **after: the mockup's row.** `Settled` and `Overdue` were words a row could render and no filter could select; `Partial` was a fourth name for `Partly paid`.
+- **`Voided`** · absent from the mockup · present and live since 261 §1.5, and 313 made voids ordinary · the mockup predates the void · **after: kept, on the returned side of the hairline** — it is a DOCUMENT state, which is exactly the grouping the hairline draws. Dropping a live capability to match a drawing is not a redesign.
+- **Chip order, phone vs desk** · one order in both mockups · desk read `All · Unpaid · Partial · Paid · Voided`, phone `All · Paid · Partial · Unpaid · Voided` · two hand-written arrays · **after: one `DOCUMENT_LIST_FILTERS` in `@mp/shared`, one `<StatusChips>` drawn by both tiers.**
+- **Separator** · `.filterchips__sep` `flex:none; width:1px; height:20px; margin:0 2px`, and `align-self:center; height:18px` inside `.mchips` (4274-4277) · the rule existed without `flex:none` or the margin and had no `.mchips` variant · **after: both, measured.**
+- **Chip icon** · `.filterchip>svg` 14×14, `flex:none`, tertiary, `currentColor` when active (4275-4276) · no rule under `.mp-inv2` · **after: added.** The two returned chips wear `undo-2`, as the mockup draws them.
+- **Count element** · mockup desktop `<span class="n">`, mockup mobile `<em>` · deployed `<em>` on both tiers, and `.mp-inv2 .filterchip em` is what globals.css styles · **after: `<em>` kept on both** — one element beats matching a file that disagrees with itself.
+- **Desktop table, invoice cell** · `<span class="retdoc"><b>PI-…</b><span class="retbadge">…</span></span>` (4991) · bare `<b>` · 304 §3.1 built the lockup and mounted it on the phone's two lists only · **after: `<DocumentNumber>` mounted, same component, same `rowReturns`, same tooltip.** The one surface an owner reads a whole month on was the one that never said stock had gone back.
+- **Desktop card, `.icard__t`** · same lockup (5134) · bare `<b>` · same cause · **after: `<DocumentNumber>` mounted.** No new CSS needed — `.mp-pur2 .icard__t b` is already `display:block`, which is what the mockup's `.icard__t .retdoc>b` rule exists to do.
+- **Desktop table, GRN sub-line** · `<small>GRN-8836</small>` under the invoice number · absent · **no goods-received number exists in the data model** · after: not drawn. Recorded rather than faked.
+- **View Purchase — 304's four components** · badge, summary line, `Returned` totals row, returns block · already mounted on drawer, sheet, table and card in the mockups' positions (drawer header badge inside the `<h4>` via `DocumentNumber`; sheet head `retbadge · pill · date`, matching mobile 6746) · **after: unchanged, mounted not rebuilt.** `grep` for `DocumentReturn*` / `ReturnedTotalRow` shows one implementation in `components/pharmacy/DocumentReturns.tsx` and no second one.
+- **Void with returns** · mockup leaves it enabled on the partially returned example · deployed disables it with `docVoidHasReturns` on BOTH the desk drawer and the phone sheet (304 §6) · **after: verified, unchanged** — the mockup is wrong here and 304 already said so.
+
+**One predicate.** `documentMatchesFilter` in `@mp/shared` decides both what a chip COUNTS and which rows the list shows; the counts were folded off `payStatus` and the list filtered on it, so a fully returned unpaid invoice counted under `Unpaid`, listed under `Unpaid`, and rendered `Settled` on its own row. `VOIDED` is tested first and takes a row out of every other bucket. Written generically (`DocumentFilterFacts`, not "purchase") so Recent Sales mounts the same fold rather than a copy. The 312 §4.1 press-to-skeleton path is untouched — `useFilterSwitch` still drives it.
+
+### i18n
+
+EN + UR parity for `pinvSrcItemPrice`, `pinvSrcStoreRule`, `pinvSrcStoreRuleScoped`. The chips now read from the `docPay*` set 304 §5 defined, so chip and pill spell the same word; `pdFilterPaid` / `pdFilterPartial` / `pdFilterUnpaid` fall out of use and are left in place (removing keys is a separate, riskier sweep).
+
+### Tests
+
+`apps/api/src/pharmacy/inventory-and-purchase-view-315.spec.ts` — §1 the mockup's own worked example (Rs 9.20 / Rs 12.00 → +30.4%), markup exceeding 100%, the three thresholds, the null cases, and the deliberate divergence from `marginVerdict`; §2 `medicineDetail` carries the resolved rate and rule, a product's own rate still wins, and the per-product exclusion still beats every rule; §3 the chip row's exact order and hairline position, chip-vs-pill agreement row by row, exactly one settlement bucket per row, partial vs full returned, voided exclusivity, and counts-equal-listing over a whole book.
+
+### Gates
+
+`pnpm typecheck` clean, `pnpm lint` clean (one pre-existing unrelated warning in `doctor-portal.repositories.ts`, untouched). Unit/e2e/build left to the controller per AGENT.md §4A. Vendor untouched; no secrets; staging only.
