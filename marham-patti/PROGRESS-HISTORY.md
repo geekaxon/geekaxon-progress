@@ -19992,3 +19992,133 @@ suite asserts the month button's, the topbar tag's and the row's focus rings are
 `pnpm lint` clean (design-drift, token-integrity, tenant-english-only, tenant-search-select and
 tenant-page-titles all pass). `pnpm typecheck` clean. `pnpm test:unit` is the controller's gate.
 Vendor untouched; no schema, no migration, no new i18n key.
+
+---
+
+## 321 — inventory-polish — DONE (2026-08-20)
+
+**Branch:** `fix/321-inventory-polish` (from the 320 head). **WORK TYPE:** FIX (§1, §2, §4) + FEATURE (§3).
+**Schema:** none. **RLS / auth / permissions / flags:** unchanged — every change is presentation on
+surfaces the operator already reaches. **Endpoints:** none added or changed.
+
+### §1 — the icon twice: fixed at the class
+
+311 §5 removed the doubled product-type glyph from the View Item header; the owner then found it on
+the DESKTOP CARD and the MOBILE CARD. That is the shared-component rule broken by the fix itself: 311
+fixed one instance of a shape, not the shape.
+
+The shape, stated: **wherever an avatar tile and a name sit in one lockup, the tile carries the type
+and the name carries the name.** `<TypeTag>` removed from `.invcard__t` and `.minvcard__t`; the
+`.invcard__ic` / `.minvcard__ic` tiles are untouched.
+
+THE AUDIT (§1's recorded list). `<ProductTypeMark>` is the only item mark this app draws, so the audit
+is its call sites:
+
+| surface | shape | verdict |
+| --- | --- | --- |
+| Inventory desktop card `.invcard` | tile + name | **fixed** — tag removed |
+| Inventory mobile card `.minvcard` | tile + name | **fixed** — tag removed |
+| View Item drawer / sheet header | tile + name | already fixed (311 §5), still holds |
+| Inventory desktop table `.medcell` | name only | keeps its tag — no tile to duplicate |
+| Inventory mobile list row `.minv__t` | name only | keeps its tag — no tile to duplicate |
+| Inventory item picker option | icon slot + label | clean — one mark |
+| Purchase entry pickers (4 call sites) | icon slot + label | clean — one mark |
+
+No other screen composes an item name beside a mark: the returns screens, the POS and the alerts
+screen all draw `composeMedName` with no mark at all. The suite pins the census — `<TypeTag>` is
+rendered EXACTLY TWICE in the whole repo, and both are rows — so a third one fails on the day it is
+written rather than on the day it is photographed.
+
+### §2 — the FEFO batch table: tighten, do not scroll
+
+Owner report: values wrap to a second line. Decision (owner delegated, recorded): **tighten.** A
+horizontal scroll hides the rightmost column and the reader is here to COMPARE batches.
+
+Cause: the table is no longer the mockup's five columns. 215 §2.4 added the grip, 253 §4 added Cost and
+Sells-at, 315 §2 put a source under the price — seven columns at the mockup's own 12.5px / 9px-10px.
+
+MEASURED, against the detail drawer's 656px content box (700px − 2×22px):
+
+| column | before | after |
+| --- | --- | --- |
+| grip | 56 | 44 |
+| Batch | 65 | 57 |
+| Expiry | 93 | 84 |
+| Qty | 125 | 115 |
+| Cost | 90 | 81 |
+| Sells at | 95 | 86 |
+| end cluster | 158 | 147 |
+| **total** | **682 (26 over)** | **614 (42 under)** |
+
+Changes: table font 12.5px → `var(--text-xs)` (12px, one step down the kit's small-table scale); th
+padding 8px 10px → 6px 7px; td 9px 10px → 7px 7px; grip column 56 → 44px; `.uqcell` figures 12.5/10.5
+→ 12/10px; `white-space:nowrap` on every date, mono and numeric cell — the two kinds that were
+breaking. Dates were already the mockup's short `02 Mar 2028` (`dmy`); the new `.fefo__exp` class is
+what stops that format being split across two lines.
+
+ALSO FIXED HERE, and it is 273's defect class again: every `.fefo` / `.uqcell` rule was declared for
+`.mp-inv2` only. View Item is `.mp-inv2-sheet` on the phone and the sheet is PORTALLED to the document
+root, so it cannot inherit the page's scope — the phone's batch table was rendering as a raw
+unstyled table. All 45 rules in the block now name both scopes, and the sheet takes the tightening one
+step further (11.5px, 5px/6px padding, 38px grip) as the mockup's own `.sheet .fefo` override does.
+A test walks the whole CSS block and fails on any `.mp-inv2 ` selector that does not also name
+`.mp-inv2-sheet`.
+
+Mobile "Reset to FEFO" → **`Reset`** with its icon (new key `pinvFefoResetShort`). The full sentence
+stays as `title` and `aria-label`, so nothing is lost to a screen reader or a tooltip — only the
+visible words are shorter where the width is.
+
+### §3 — margin after the discount, and the resolved Sells-at
+
+**Owner decision, recorded: the badge's base does not move.** It stays markup on cost against the SALE
+price — the figure quoted when a supplier's offer is judged — and **tax never enters it**, because tax
+is collected on behalf of the state, not earned. What was missing is that a product carrying a standing
+concession never sells at that price, so the badge alone overstated what the shop keeps.
+
+- Add/Edit item: `FormMarginBadge` gains `discount` and, where a product discount exists, a muted
+  second line `After discount: 12.4%` — the SAME formula on `netUnitPrice(sale, discountPct)`. A
+  product without a discount shows the badge and nothing else; the heading is then pixel-identical to
+  what it was (`.mgnstack` takes over the badge's `margin-inline-start:auto`; the line is absent, not
+  reserved).
+- FEFO "Sells at" now states the figure the CUSTOMER would pay today: `resolveLinePricing` +
+  `netUnitPrice`, with the undiscounted price and the concession that took it there muted beneath
+  (`pinvSellsBase`). 315 §2's inherited-source marker survives on a borrowed price.
+
+**Nothing about resolution changed.** Price is still batch → product → error; discount is still manual
+→ batch → product → global, first match, never stacked. There is no manual rung on this screen —
+nobody is ringing anything up — so the cashier's slot is left empty and the ladder starts at the lot,
+exactly as it would at the counter. The store rule comes from the payload the server already resolves
+for 315 §2 (`inherited.globalDiscount`), so the screen picks no winner. The suite greps both regions
+for hand-written `1 − pct/100` arithmetic and for `taxRate`, and finds neither.
+
+JUDGEMENT CALL: the global (store) rung is included in the resolved figure. §3 names "batch/product",
+but §5 requires the cell to equal what a POS sale of the same batch would charge, and the POS applies
+the store rule. A figure that ignored it would be a second, quieter reading of "sells at" — the exact
+defect this section is closing.
+
+### §4 — movement attribution
+
+Verified rather than rewritten: the movement row already credits its actor through `<PersonName>`,
+which 317 §4 moved onto `formatPersonIdentity` — `Ayesha R. (Cashier)`, brackets, no middot between a
+name and its role. `movementLines` names no actor at all. The stale 311-era comment that still showed
+`Moiz A. · Cashier` as the row's shape was corrected, and the suite now RENDERS the component and
+asserts the string, so the shape is pinned rather than described.
+
+The `·` that remains in the row joins the PERSON to the CONTEXT (`Ayesha R. (Cashier) · Counter 2`) —
+two separate facts about one movement, which is the join 317 §4 deliberately kept.
+
+### Files
+
+- `apps/web/app/(app)/pharmacy/inventory/PharmacyInventoryClient.tsx` — §1 both cards; §2 the reset
+  label + `.fefo__exp`; §3 `FefoOrder` discount rungs + resolved Sells-at, `FormMarginBadge` second
+  line; §4 comments.
+- `apps/web/app/globals.css` — the FEFO block rescoped to both tiers and tightened; `.mgnstack`.
+- `packages/i18n/src/messages/{en,ur}.json` — `pinvFefoResetShort`, `pinvSellsBase`,
+  `pinvMarginAfterDisc` (EN + UR parity).
+- `packages/ui/src/lib/inventory-polish-321.spec.tsx` — new, 29 tests across the four sections.
+
+### Gates
+
+`pnpm lint` clean; `pnpm typecheck` clean. The step's own suite and the seven existing suites that
+touch these files or this CSS were confirmed green before the checkpoint (306 tests). No schema, no
+migration, no vendor change; the full gates are the controller's.

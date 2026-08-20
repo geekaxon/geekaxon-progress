@@ -7,8 +7,8 @@
 ## Current Status
 - **Project:** multi-tenant white-label healthcare.
 - **Phase:** **PHASE 32** — allocation, payments round 2, screens to mockup.
-- **Last completed:** **320 — purchase-view-to-mockup**.
-- **Next:** **321 — inventory-polish** — specs/321-inventory-polish.md
+- **Last completed:** **321 — inventory-polish**.
+- **Next:** **322 — app-polish** — specs/322-app-polish.md
 - **Group order:** 317 → … → 322. One step, then the checkpoint.
 - **BRANCH RULE:** switch to the spec's own branch BEFORE any commit.
 - **PRINCIPLE:** a payments rule is specified against every surface that takes one.
@@ -19,8 +19,8 @@
 - **Before production:** fresh secrets; demo off.
 
 ### Recent steps
+- **321 — inventory-polish** — DONE (2026-08-20) — the type icon once per lockup, a batch table that fits, margin after the discount.
 - **320 — purchase-view-to-mockup** — DONE (2026-08-20) — View Purchase to the mockup, and the month filter stops painting blue.
 - **319 — supplier-ledger-to-mockup** — DONE (2026-08-20) — both supplier ledgers to the mockup, every row opening its record.
-- **318 — payments-round-2** — DONE (2026-08-20) — every split leg names its account, and the cart prints without selling.
 
 > Older steps in PROGRESS-HISTORY.md
