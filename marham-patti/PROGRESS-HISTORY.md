@@ -20614,3 +20614,104 @@ r4, 304, 296, 275, 283, 288, 319, 324, 261, 279, 310, 311, 260, 264, inventory-m
 that is the only amount-owed figure in the block that is not the balance, and 320 §1 and 319 both put the
 balance in primary ink. It makes the document and the supplier ledger state a purchase in the same colour: a
 debit is warning wherever this app states one.
+
+---
+
+## 326 — pos-inline-pricing — DONE (2026-08-21)
+
+**Branch:** `feature/326-pos-inline-pricing` (FEATURE). **Spec:** `/specs/326-pos-inline-pricing.md`. No CODEREF.
+**Schema:** none. **RLS:** unchanged. **Resolution ladders:** byte-identical (price batch→product→error; discount manual→batch→product→global, first match, never stacked).
+
+### §1 — Per-line rounding (owner decision, locked)
+
+`computePosLine` now rounds ONCE per line, on the price of one unit:
+`unitFinal = round2(unitPrice × (1 − itemDiscount%) × (1 + taxRate%))`, `final = round2(unitFinal × qty)`,
+and the line's `tax` is DERIVED as `final − taxable`, so `gross − discount + tax === final` is exact on
+every line. `computePosCartTotals` gained `finalSubtotal` = Σ `final`. The server runs the SAME function on
+the SAME entries at commit, so screen == server == receipt by construction rather than by agreement.
+
+**Before/after capture (the paisa shift, as the spec asks it be recorded, not discovered):**
+
+| cart | old (total-level rounding) | new (per-line) |
+|---|---|---|
+| 7 × Rs 9.99 @ 17% | Rs 81.82 | **Rs 81.83** |
+| 10 × Rs 12.50 + 2 × Rs 45, both @ 17%, 5% bill discount | Rs 238.98 | **Rs 239.02** |
+| same cart with a 5% LINE discount instead | Rs 238.98 | **Rs 238.94** |
+| spec's own 3-line cart (2 strips Augmentin, 1 Ventolin, 6 plain), 5% sale discount | — | **Rs 2,741.70** |
+
+Cause in one line: a unit at Rs 12.50 taxed 17% is Rs 14.625 — a half paisa that now rounds once and
+multiplies, where it used to be carried unrounded into a cart-level tax total. Shift is sub-paisa per unit,
+in the customer's direction as often as not.
+
+**Where the whole-sale discount lands.** It comes off `finalSubtotal` now, not the pre-tax base. For a
+PERCENTAGE this is arithmetically the same money — every grand total in the suites is unchanged — because a
+proportional cut scales the tax with it. For a FLAT amount it is not: "Rs 100 off" now takes exactly Rs 100
+off what is payable, which is what a cashier typing it means, instead of Rs 100 off the goods plus whatever
+tax that removed. Decision recorded here; nothing else about resolution moved.
+
+**The one thing this costs, stated rather than hidden.** 253 §3 guaranteed a BLENDED sale totals to the same
+paisa as the SPLIT one, and kept that promise by leaving the weighted-average unit price UNROUNDED. A
+printed rate that must multiply back and an average that must sum back are arithmetically incompatible; the
+owner's 326 §1 decision picks the printed rate. So a blended bill is `round2(avg) × qty` — on the 271
+fixture Rs 534.44 against the split's Rs 534.35, nine paisa, bounded by half a paisa per unit. SPLIT is the
+default and is exact; the goods and the concession still reconcile identically under either mode. Three
+assertions in `pricing-display-271.spec.ts` and one in `pricing-in-screens.spec.ts` were updated to state
+this bound, each with the reason written beside it.
+
+### §2–§4 — What the screens say
+
+- **Cart line, desktop** (`CartCalc`, `.cart__calc`): `Rs 432 − Rs 32 off + Rs 68 GST = Rs 468 × 2 = Rs 936`.
+  Six numbers from ONE `posLineCalc` over the line money the footer totalled, divided back by the printed
+  quantity — the sentence is true by construction. Discount part success, tax and operators muted, unit
+  final and line total bold.
+- **Cart line, mobile** (`MobileLineCalc`, `.mline__calc`): `Rs 468 × 2 = Rs 936` with the muted
+  `Rs 432 · 7.4% off · GST 17%` beneath, shown ONLY when the line carries an item discount or a tax that is
+  not the tenant default; otherwise it collapses to `unit × qty = total`.
+- **Search rows** (`ResultPrice` / `MobileResultPrice`): the FINAL unit price, with the same conditional
+  muted line. Search names no lot, so the ladder runs product → global there exactly as it always has; the
+  batch rung joins when the line reaches the cart, which can only make it cheaper.
+- **Badge moved** (§3, the owner moved it): the stock pill sits inside `.pos-res__nm > .pos-res__top`
+  beside the name; `.pos-res` is two columns now, and `is-out` dims the TEXT children rather than
+  `.pos-res__nm` itself (a child cannot escape an ancestor opacity group).
+- **Summary, both tiers:** Subtotal (Σ final line totals) · *Item discounts included* · *GST included* ·
+  Sale discount · Total. The two "included" rows are muted annotations of the subtotal and are never added
+  again; `Subtotal − Sale discount = Total` on a phone calculator. The discount box now reads "Applied to
+  <finalSubtotal>" and states the SALE discount alone, and the footer chip says "Sale discount", not the
+  sum of every concession on the bill.
+
+### §5 — The papers
+
+`ReceiptItem` gained `unitFinal` / `finalTotal` and `ThermalReceiptInput` gained
+`finalSubtotal` / `itemDiscount` / `saleDiscount`, all optional — a pre-326 model prints the old shape
+unchanged, so a reprint of an old sale is not rewritten. `saleView` computes each line's final figures from
+the SAME `computePosLine`, resolving the rate as the commit resolved it; `buildReceipt` recovers the
+summary from the stored sale with no new column: item discounts are the lines' own `discountAmount`, the
+rest of `sale.discount` is the sale concession, and `finalSubtotal = subtotal − itemDiscount + tax`. The
+frozen storage convention holds exactly — `taxableTotal + tax === grandTotal`, and the receipt's
+`tax = total − (subtotal − discount)` still recovers the same figure. A4 (`QuotationSheet`) prints the same
+four rows.
+
+**Known limit, by design:** a line's tax RATE is not a stored column (schema frozen), so a reprint taken
+after a rate edit prints today's reading of an old line. The SUMMARY stays exact either way because it is
+derived from the stored totals.
+
+### §6 — Footer strings (owner's words)
+
+`Proceed to payment` → **Proceed**; `Print quotation` → **Print Only**; the `F8` / `F10` / `Ctrl+Alt+P`
+keycaps are off the buttons. The shortcut catalogue in `pharmacy-shortcuts.ts` is untouched, so all three
+keys still fire and all three are still listed in the `?` overlay (284). Ten new keys under
+`pharmacyPos.v23`, EN + UR.
+
+### Files
+
+`packages/shared/src/pharmacy-pos.ts` (engine + `posLineCalc`), `packages/shared/src/pharmacy-payment.ts`
+(receipt model), `apps/api/src/pharmacy/pharmacy.service.ts` (`saleView`, `buildReceipt`, `SaleItemView`),
+`apps/web/app/(app)/pharmacy/pos/PosClient.tsx`, `ThermalReceipt.tsx`, `QuotationSheet.tsx`,
+`apps/web/app/globals.css`, `packages/i18n/src/messages/{en,ur}.json`, and four spec files.
+
+### Gates
+
+`pnpm lint` clean (one pre-existing unrelated warning in `doctor-portal.repositories.ts`).
+`pnpm typecheck` clean, 31/31. Suites run per package rather than through the forbidden aggregate script:
+api 2,753 passed / 208 suites · ui 3,754 / 148 · db 543 / 71 · escpos 75 · i18n 35 · offline 29 · import 37 ·
+consent 18 · notifications 44 · config 3. No failures.
