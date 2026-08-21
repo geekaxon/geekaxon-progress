@@ -20715,3 +20715,90 @@ keys still fire and all three are still listed in the `?` overlay (284). Ten new
 `pnpm typecheck` clean, 31/31. Suites run per package rather than through the forbidden aggregate script:
 api 2,753 passed / 208 suites · ui 3,754 / 148 · db 543 / 71 · escpos 75 · i18n 35 · offline 29 · import 37 ·
 consent 18 · notifications 44 · config 3. No failures.
+
+---
+
+## 327 — inventory-customer-pays — DONE (2026-08-21)
+
+**Branch:** `feature/327-inventory-customer-pays` (from the 326 head). **Spec:** `/specs/327-inventory-customer-pays.md`.
+**Schema:** none. **RLS:** unchanged. **No CODEREF** covers 327 (the companion files stop at 113–121).
+
+### §1 — the Pricing block's closing line
+
+The Item Detail drawer/sheet's Pricing card stated a cost and a sale price, and neither is the
+number anyone is ever asked for. It now closes with the mockup's own line — `Customer pays
+Rs 166.73` bold, with the muted `(after 5% off + GST 17%)` beside it — beneath a hairline,
+because that is a different KIND of statement from the pair above it: cost and sale are what the
+owner set; this is what the till will do with them.
+
+DISPLAY ONLY. Three calls, in the POS's order, none of them reimplemented:
+
+  * `resolveLinePricing(null, {salePrice, discountPct, costPrice}, {globalPct})` — the price and
+    the concession. The BATCH slot is deliberately empty: this line answers for the ITEM's
+    default price, and a lot that prices itself differently is FEFO's table two blocks down
+    (spec §1, explicit). The global rung is `inherited.globalDiscount`, already resolved FOR THIS
+    PRODUCT by the server (315 §2), which is why the 222 §2.2 opt-out is not re-checked here.
+  * `effectiveLineTaxRate(inherited, m.taxRate)` — product override, else tenant default.
+  * `computePosLine({qty: 1, …}).unitFinal` — the SAME function that rounds a cart line and the
+    same one the server rounds with at commit (326 §1). So the figure equals a real one-unit sale
+    to the paisa by construction, not by two implementations agreeing.
+
+Verified against the mockup's published figures: Rs 150.00 · 5% · 17% → **Rs 166.73**;
+Rs 12.00/tab · 5% · 17% → **Rs 13.34**; Rs 150.00 · no discount · exempt → **Rs 150.00**.
+
+**The suffix rule, and a reconciliation the spec left implicit.** The spec says the suffix shows
+"only when a discount applies or tax differs from the default" — the POS's own `detailed` test
+(326 §3), reused verbatim. But the mockup's second published state is captioned "no discount ·
+GST exempt" and shows a BARE `Rs 150.00` with no `<em>` at all, and exempt-vs-17% *is* a
+difference from the default. Both hold if the suffix names only the parts that actually MOVED
+the figure: a 0% concession is not named, a 0% rate is not named, and when neither is left there
+is no bracket to print. `detailed` still gates it, so an item at the shop's ordinary GST with
+nothing off stays plain. Decision recorded here rather than escalated; no spec change needed.
+
+**Null is a real answer, twice.** No resolvable sale price → no line (the counter could not sell
+it either, and an invented `Rs 0.00` is a promise the app cannot keep). No `inherited` block —
+a client held open across the 315 deploy — → no line, because the tenant default is genuinely
+unknown on that payload. The card simply ends after the pair, as it does today.
+
+**Untouched:** the margin badge and its `After discount` line (321 §3) — a different question,
+still markup on cost, still tax-free. Asserted, not assumed.
+
+### §2 — what does not change
+
+List view, card view and Low stock / Near expiry keep the BASE sale price (owner decision).
+Catalogue surfaces stay catalogue; the drawer answers "what will POS charge". `StockAlertsClient`
+prices nothing at all and imports none of the three resolvers — both asserted in the suite.
+
+### Files
+
+  * `packages/shared/src/pharmacy-settings.ts` — `effectiveLineTaxRate`'s FIRST PARAMETER widened
+    from `EffectivePharmacySettings` to `Pick<…, 'defaultTaxRate'>`. Body byte-identical; every
+    existing caller still passes the whole object. The drawer knows the tenant default (315 §2
+    sends it) but holds no settings object, and the alternative was a second `?? default` written
+    on that screen — exactly the restatement the function exists to prevent.
+  * `apps/web/app/(app)/pharmacy/inventory/PharmacyInventoryClient.tsx` — `customerPays()` (the
+    resolver-caller), `paysSuffix()` (the wording), a `pays` prop on `ItemStats`, and the
+    `.istats__pays` row inside the price card. `effectiveLineTaxRate` + `computePosLine` added to
+    the existing `@mp/shared` import.
+  * `apps/web/app/globals.css` — `.istats__pays` and its `.l` / `b` / `em`, ported from the
+    mockup under BOTH `.mp-inv2` and `.mp-inv2-sheet`. The sheet scope is not optional: the
+    phone's panel is portalled out of `.mp-inv2` (321 §2's lesson, which cost that step a
+    re-render of an unstyled batch table). No `margin-top` added — the card is already a column
+    flex with `gap:12px`, so the mockup's `padding-top:10px` sits on top of that, as it does in
+    the file. No state ink on money (325's locked rule): no success/danger/warning token in the
+    block, asserted.
+  * `packages/i18n/src/messages/{en,ur}.json` — `pinvCustomerPays`, `pinvPaysAfter` (`(after
+    {parts})`), `pinvPaysTax` (`GST {pct}%`). The discount part reuses the existing
+    `pinvBatchDisc` (`{pct}% off`) — same phrase, so no fourth key.
+  * `packages/ui/src/lib/inventory-customer-pays-327.spec.tsx` — NEW. The mockup's three
+    published figures through the engine; the "one resolver by grep" census (`resolveLinePricing`
+    appears exactly twice on the screen, `<ItemStats>` exactly once, `pinvCustomerPays` exactly
+    once); the caller writes no `* (1 +`, no `/ 100`, no `toFixed`, no `Math.round`; the suffix
+    rule including the exempt-and-plain state; the CSS under both scopes with no state ink; and
+    §2's two "unchanged" assertions.
+
+### Gates
+
+`pnpm lint` — clean (17/17, plus the five design-drift checks). `pnpm typecheck` — clean (31/31).
+`pnpm test:unit` and `pnpm build` are the controller's, per AGENT.md. UI design self-check done by
+inspection against `specs/mockups/pharmacy/inventory-{desktop,mobile}.html`. Vendor untouched.
