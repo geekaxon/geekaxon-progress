@@ -20276,3 +20276,180 @@ Per CLAUDE.md, `test:unit` / `test:e2e` / `build` NOT run here — the controlle
   figure asked twice and, the first time the two disagreed, a payment nobody could explain.
 - A refund is never split — one advance, one movement — refused server-side.
 - `PurchaseMeta.method` on a split purchase is the LARGEST tender leg. Display only; the money is in the rows.
+
+---
+
+## 324 — supplier-terms-and-ledger-colour — DONE (2026-08-21)
+
+**Branch:** `feature/324-supplier-terms-and-ledger-colour` · **Work type:** FEATURE (terms as an
+integer of days; a purchase's own due date) + FIX (desktop ledger colours, second attempt; the
+advance block; the phone card's Refund; the duplicate-phone warning).
+
+### §1 capture — HOW A FREE-TEXT TERMS BECAME A DUE DATE (recorded before changing the field)
+
+The spec asked for this verbatim, because a purchase visibly acquired a due date and nobody had
+specified how. It was `creditDaysFromTerms` in `packages/shared/src/pharmacy-purchase.ts`:
+
+```ts
+/** Default supplier credit window (days) when the terms carry no "Net N" number. */
+export const DEFAULT_CREDIT_DAYS = 0;
+
+/** The credit window a supplier's free-text `terms` implies — the first integer ("Net 30" → 30). */
+export function creditDaysFromTerms(terms: string | null | undefined): number {
+  if (!terms) return DEFAULT_CREDIT_DAYS;
+  const m = terms.match(/\d+/);
+  if (!m) return DEFAULT_CREDIT_DAYS;
+  const n = Number(m[0]);
+  return Number.isFinite(n) && n >= 0 ? n : DEFAULT_CREDIT_DAYS;
+}
+
+/** The implied due date (ISO) of a purchase — its date + the supplier's credit window. */
+export function purchaseDueAt(createdAtIso: string, creditDays: number): string {
+  const base = Date.parse(createdAtIso);
+  if (!Number.isFinite(base)) return createdAtIso;
+  return new Date(base + creditDays * 24 * 60 * 60 * 1000).toISOString();
+}
+```
+
+So: the FIRST run of digits anywhere in the string, at READ time, on every read, defaulting to 0.
+"Net 30" and "30 Days" both gave 30. "COD" and "Advance" both gave 0 — by falling through the
+default, not by meaning it. "Net 30 (2% 10)" gave 30; "2/10 Net 30" gave 2. Nothing was stored and
+nothing was auditable: editing a supplier's terms silently re-dated every invoice ever booked
+against them, and there were four call sites (two API, two web) each re-running the guess.
+
+### §2 evidence — WHY 319 §1'S LEDGER COLOURS DID NOT LAND
+
+Two separate causes; neither is "never merged" (319 is `f5b63a5`, on staging) and neither is a
+wrong selector.
+
+1. **SCOPE.** 319 §1 was a change to the LEDGER tab. It re-inked Pro's debit column into the
+   warning family and pinned the running balance to primary ink, and touched no other tab's
+   markup. Three of the drawer's four tabs therefore still drew money some other way: Purchases
+   inked the amount by SETTLEMENT STATE (`.amt--paid` grey / `.amt--open` amber / `.amt--late`
+   red — a state recolouring money, against the standing principle), and Returns drew a plain
+   `.amt` in primary ink with no direction at all. Opening the drawer tab by tab, the owner sees
+   grey, red and black amounts — "unchanged".
+2. **SPECIFICITY, in the closing rows.** `.mp-pur2 .dtbl.dtbl--fit tfoot td` sets
+   `color:var(--text-primary)` at (0,4,1). Every direction class in the file was written as
+   `.mp-pur2 .dtbl--fit .X` at (0,3,0), so inside a `tfoot` the primary-ink rule won and the
+   closing figures had been drawing uncoloured since 314 added them. 319 hit exactly this wall
+   for the balance column and stepped past it for that ONE class (`tfoot td.led-run`), leaving
+   the trap standing for `led-debit` / `led-credit` / `amt-debit` / `amt-credit`.
+
+**The fix:** one `directionClass(debit)` decides the amount cell on all four tabs (Purchases is
+always a debit, Returns always a credit, Ledger and Payments ask `signedReading`); Pro's closing
+cells take their own columns' tones; and every direction class is re-declared at `td.X` +
+`tfoot td.X` strength so a closing row can never disagree with the column above it. The balance
+column keeps `.led-run` — primary ink in every state, body and foot alike.
+
+### Decisions taken (no escalation; recorded here as the accountability)
+
+- **Terms is `Int?` on the SAME column**, not a new `terms_days` column. Renaming would have
+  churned ~40 call sites for no behavioural gain; an in-place `ALTER ... TYPE INTEGER USING`
+  keeps every `terms` reference valid by name and the migration is guarded on the column's own
+  type, so re-running is a no-op rather than needing a flag.
+- **Conversion rule, applied once:** digits anywhere → that number capped at 730; else COD /
+  cash-on-delivery / advance → 0; else NULL. Every changed supplier is `RAISE NOTICE`d BY NAME
+  with its old and new value BEFORE the ALTER, plus a converted/cleared count.
+- **A live write of a phrase is now a 400**, not a silent extraction. The parse is a migration
+  concern and an import concern; a form that has a numeric field has no business sending words.
+  `parseTermsDays` is still exported and is what the CSV importer uses, so the files a shop
+  already has ("Net 30", "COD") keep importing.
+- **The due date is a real nullable column on `purchase_orders`**, not another key in the meta
+  note. It is read by the ageing and the Due-this-week KPI; 251 already moved `invoiceNo` out of
+  that note for the same reason. NULL means "read it off the terms", which is what every purchase
+  booked before this step means — so `effectivePurchaseDueAt(stated, createdAt, terms)` is the
+  one reader and nothing pre-324 moves by a day.
+- **The due date is gated by NO permission** (owner decision, spec §1). It is planning
+  information: no posted figure, no balance and no settlement depends on it. Gating it would only
+  push a counter hand into faking the PURCHASE date to get the due date they actually agreed.
+- **The entry field is never blank.** It shows the resolved date (typed value, else purchase date
+  + terms) and clearing it hands the answer back to the terms rather than leaving a hole; the
+  submit sends what the field showed. A supplier with no terms falls due on the day the goods
+  arrived, which is what "no terms set" means.
+- **§3 — `.balhead--green` is retired.** 319 §2 gave the phone's advance block the success
+  family; §3's owner decision is that the phone adopts the DESK's colours, so the class has no
+  callers and its rules are deleted rather than left to be re-found. The two blocks are one
+  `AdvanceHead` component now: the phone's three-part wording (caption · figure · since when) in
+  `.balhead--advance`'s accent. The desk's "Overpaid — the difference sits with the supplier"
+  goes: it names a mistake where the fact is a position. `advanceSentence` is deleted with it.
+- **§4 — the phone card asks the STATE, not `canPay`.** `canPay` is shared with the purchase
+  cards and correctly means "something is owed", so it stays as it is; the card now renders its
+  action whenever the tone is not `settled` and takes the word from `payActionKey` — the same
+  derivation the drawer footer, the sheet footer and the desktop card have read since 319 §1.
+- **§5 — the duplicate phone warns and never blocks** (owner decision). Matched on the CANONICAL
+  number (274 §2's normaliser), so "0300 123 4567" and "+923001234567" are caught as one line;
+  the record being edited is excluded; the other supplier is named and no id is ever shown; the
+  submit guard is untouched. On both surfaces that create a supplier — the Suppliers desk form
+  and the entry screen's inline `NewSupplierPanel`.
+- **Demo seed:** `SupplierSpec.terms` is a number now (30 / 45 / 15 / 0) and `creditDaysOf` takes
+  days. Zafa and Ferozsons ("Advance / COD") were silently taking the demo's 30-day default and
+  now correctly take 0, so their seeded due dates move. `purchase-book.spec` updated to match.
+
+### Schema / RLS / flags / audit
+
+- `Supplier.terms` `String?` → `Int?` (same column). `PurchaseOrder.dueAt` `DateTime?` added,
+  nullable and additive. Migration
+  `20260821000000_supplier_terms_days_and_purchase_due_at`, idempotent, applied under the
+  inline-env sourcing rule. **RLS unchanged** — both are columns on tables that already carry
+  `tenant_id` and are read only through `runWithTenant`. **No new flag, no new permission.**
+  No new audit surface: the only state change is purchase creation, which already audits.
+  Money computation byte-identical — the due date feeds a reading, never an amount.
+
+### Endpoints / i18n
+
+- No new routes. `POST /pharmacy/purchase/suppliers` (+ its update) and `POST /purchase/suppliers`
+  take `terms` as an integer; `POST /pharmacy/purchase` takes an optional `dueAt`.
+- 11 new keys, EN + UR: `pdTermsDays`, `pdTermsDay`, `pdTermsCod`, `pdSupTermsHelp`,
+  `pdSupTermsPh`, `pdSupTermsUnit`, `pdSupDupPhone`, `pdFieldDueDate`, `pdDueDateHelp`,
+  `pdDueDateFromTerms`, `pdDueDateNoTerms`. `pdSupAdvanceNote` is left in both catalogues
+  unused — 310's suite pins its existence.
+
+### Files
+
+`packages/db/prisma/schema.prisma` · the migration · `packages/shared/src/pharmacy-purchase.ts`
+(`creditDaysFromTerms` retyped, `parseTermsDays` / `termsReading` / `MAX_TERMS_DAYS` /
+`effectivePurchaseDueAt` added) · `apps/api/src/pharmacy/{pharmacy.dto,pharmacy.service,
+pharmacy.repositories,purchase.importer,__fakes__}.ts` · `apps/api/src/purchase/{purchase.dto,
+purchase.service,purchase.repositories,supplier.importer}.ts` ·
+`apps/web/lib/supplier-terms.ts` (new — the one terms reading) ·
+`apps/web/app/(app)/pharmacy/suppliers/SuppliersClient.tsx` ·
+`apps/web/app/(app)/pharmacy/purchase/{PharmacyPurchaseClient.tsx,purchase-draft.ts,
+new/NewPurchaseClient.tsx}` · `apps/web/app/(app)/purchase/PurchaseClient.tsx` ·
+`apps/web/app/globals.css` · `packages/db/src/demo/{data,purchase-book}.ts` ·
+`packages/db/prisma/seed-demo.ts` · i18n EN/UR.
+
+**Tests written:** `packages/ui/src/lib/supplier-terms-and-ledger-colour-324.spec.tsx` (the parse,
+the field, the migration's report-before-write and idempotence, the four tabs' direction colours,
+the tfoot specificity cause, the one advance block, the card's Refund, the phone warning, EN/UR
+parity) and `apps/api/src/pharmacy/supplier-terms-and-due-date-324.spec.ts` (the wire refuses a
+phrase, 0 and blank are values, the stored due date, the terms fallback, no permission gate, and
+the money byte-identical either way). Existing suites updated where the type changed:
+`purchase-entry`, `purchases-r4`, `supplier-ledger`, `credit-allocation-317`,
+`purchases-suppliers-desktop-r3`, `void-purchase-261`, `void-payment-reversal-270`,
+`supplier-import`, `purchase-book`, and `supplier-ledger-to-mockup-319` (§3 supersedes 319 §2's
+success-family decision — the assertion is inverted and says so).
+
+**Gates run here:** `pnpm prisma generate`, `pnpm lint`, `pnpm typecheck` — clean (the single
+`@mp/api` warning is a pre-existing unused eslint-disable in `doctor-portal.repositories.ts`,
+untouched by this step). `pnpm test:unit` / `build` / `e2e` are the controller's, per AGENT.md §4A.
+
+### 324 — gate fix (2026-08-21): `pnpm test:unit` green again
+
+Four suites failed after 324 landed; all four were assertions, not behaviour — no source file changed.
+
+- `purchase/supplier-import.spec.ts` — terms is an integer of days now, so the stored value of a
+  file that says `Net 30` is `30`, and the export writes back `'30'` (which re-imports as itself).
+  Two expectations still read the old free text.
+- `pharmacy/void-purchase-261.spec.ts` — the A4 invoice payload carries `supplier.terms` as the
+  number; rendering the `Days`/`COD` suffix is the reader's job. Expected `'Net 15'`, got `15`.
+- `pharmacy/purchase-import-266.spec.ts` — the mapping suggestion was asserted to contain
+  `dueAt: null`, but the purchase importer has no due-date column and none was specified: its
+  apply passes `dueAt: null` so an imported purchase falls back to the supplier's terms, which is
+  what 324 §1 says a blank due date means. Expectation dropped rather than a column invented.
+- `pharmacy/supplier-terms-and-due-date-324.spec.ts` — the new §1 wire test called
+  `parseCreatePurchase` without `payStatus`, which the wire has always required, so it threw
+  before reaching the due date under test. The shared body now carries it.
+
+Gates: `pnpm lint` clean (one pre-existing unused-disable warning in doctor-portal, untouched),
+`pnpm typecheck` clean, the four suites pass (68 tests).
