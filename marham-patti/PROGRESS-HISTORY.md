@@ -20802,3 +20802,133 @@ prices nothing at all and imports none of the three resolvers — both asserted 
 `pnpm lint` — clean (17/17, plus the five design-drift checks). `pnpm typecheck` — clean (31/31).
 `pnpm test:unit` and `pnpm build` are the controller's, per AGENT.md. UI design self-check done by
 inspection against `specs/mockups/pharmacy/inventory-{desktop,mobile}.html`. Vendor untouched.
+
+## 328 — ledger-colour-close — DONE (2026-08-21)
+
+**Work type:** FIX. **Branch:** `fix/328-ledger-colour-close`. **Spec:** `/specs/328-ledger-colour-close.md`. No CODEREF for this range.
+**Schema:** none. **RLS:** unchanged. **Migrations:** none. **Vendor:** untouched.
+
+### §2 verification — what 324/325 had already fixed on the deployed page
+
+Verified surface by surface against the live source and, for every colour claim, through 283's
+cascade reader (`@mp/ui` `winningDeclaration`) rather than a substring — a substring on a rule
+that is in the sheet and losing is exactly the assertion that passed for 319 and for 320 while
+the screen was wrong.
+
+Already correct, no change needed:
+
+* **Desktop Simple** — amount signed and coloured via `directionClass(signedReading(e).debit)`;
+* **Desktop Simple's closing row** — amounts coloured, `+`/`−` printed (324 §2);
+* **Desktop Pro** — `led-credit` success / `led-debit` warning in body and in the closing cells;
+* **Desktop Payments** — the shared reading, and the reversed row's strike-through outranking the
+  direction it used to point in (`tr.is-reversed td.amt-*`, 324 §2);
+* **Advance block** — already ONE component (`AdvanceHead`) mounted by drawer and sheet (324 §3).
+
+### The 324-era item still broken — EVIDENCE ENTRY (third attempt on the balance column)
+
+319 §1 specified "the balance column is white in every state, body and closing row alike" and
+wrote two selectors for it. 324 §2 verified the FOOT and stopped. Run through the cascade reader,
+a `<td class="num led-run">` in the ledger `tbody` answered `var(--text-secondary)`:
+
+    .mp-pur2 .dtbl.dtbl--fit tbody td      (0,4,2)  ->  --text-secondary   WON
+    .mp-pur2 .dtbl--fit td.led-run         (0,3,1)  ->  --text-primary
+
+i.e. 324's own `tfoot` finding, one element along, standing under the single column 324 had
+declared already fixed. So the running balance had been drawing in the same quiet ink as the date
+beside it since 310, on every row of both views — which is why the closing figure looked whiter
+than the column above it. Fixed by adding `.mp-pur2 .dtbl.dtbl--fit tbody td.led-run` to the rule,
+written at the weight the rule it has to beat actually carries. Asserted with the winning selector
+NAMED, so a future regression cannot pass by having the right rule present and losing.
+
+### §1 — the three rules, stated once
+
+Written as a block at the foot of `globals.css` under `328 — THE LEDGER COLOUR RULES, STATED ONCE`:
+
+1. amounts are signed and coloured by direction (success in the shop's favour with its own `+`/`−`,
+   warning owed by the shop, quiet ink + danger strike-through when reversed);
+2. every balance is white — running, closing, tab totals, both views, both surfaces;
+3. advance blocks are success-toned — list, card, drawer, sheet, both surfaces.
+
+Rule 3's declarations were EDITED IN PLACE (`.bal--advance`, `.pcard__bal b.bal--advance`,
+`.pcard--advance`, `.balhead--advance`, `.scard--advance` figure/note/anchor) rather than
+overridden from the new block — 279's rule, that two rules for one selector is how a screen comes
+to depend on which of them a reader finds first. Owner decision: accent -> success family. Left
+alone deliberately: `.minv__end b.bal--advance` and `.icard__bal ... .bal--advance`, which are
+purchase-INVOICE overpay figures, not supplier advance blocks, and are outside §2's list.
+
+Rule 1's one gap closed: `directionClass` returned `amt-debit` / `amt-credit`, and the only ink
+rules for those were written for a `<td>` inside `.dtbl--fit`, so the phone kept a second pair of
+names (`led-debit` / `led-credit`) and a private ternary for the same rule. Added plain-element
+`.mp-pur2 .amt-debit` / `.amt-credit`, and routed the sheet's three money slots through
+`directionClass` — 10 call sites now, desk and phone. The desk's more specific `.dtbl--fit` and
+`tfoot` rules are untouched, and a reversed phone row's own
+`.mledrow.is-reversed .mledrow__ft .amt` still outranks the new rules, so rule 1's third clause
+holds without a second declaration of it (asserted).
+
+### §2 — the phone sheet
+
+* **Purchases tab** — `<span className={`amt ${directionClass(true)}`}>+ {money(p.grandTotal)}</span>`.
+  The settlement pill in the `.run` slot is unchanged: a state never recolours money.
+* **Returns tab** — the `Credited` badge removed (it stated the tab's own name once per row while
+  occupying the slot the eye goes to for a figure) and the AMOUNT rendered at its position, signed
+  and in the credit tone, on a new `.mledrow__ft--end` modifier (`justify-content:flex-end`).
+  `pdSupRetCredited` now has no caller; the key stays in both catalogues.
+* **Returns TOTAL** — was inheriting 325 §3's `.msum__row--grand` warning ink, which is right for
+  what an invoice CHARGES the shop and wrong for what came back off one. New modifier
+  `msum__row--credit`, stated after 325's rule at equal specificity, success ink, and the row now
+  prints `− Rs X`. Asserted through the cascade with the winning selector named, and the plain
+  `--grand` row asserted still warning so 325 is not quietly undone.
+
+### §3 — the circular advance leg (owner-found design error)
+
+`RecordSupplierPayment`'s *Payment made* offered `Advance held` as a source (318 §2), single and
+as a split leg. Money flowing TO the supplier cannot be funded from money the supplier is already
+holding; what that leg appeared to do — draw an advance down against what is owed — is 317's
+ALLOCATION AGAINST AN INVOICE, which belongs on New Purchase where there is an invoice to allocate
+it to. Here it was a top-up of the advance out of itself.
+
+* the `ADVANCE` option is gone from the Pay-from select; `payFrom` is now `'METHOD' | 'SPLIT'`;
+* the split board is asked for its legs with `emptySplitLegs(0)` and mounted with `advanceHeld={0}`
+  -> Cash · Card · Online, exactly what the owner asked for;
+* the hand-drawn "advance + rest" preview block is deleted with the leg it previewed (a dead branch
+  drawing a circular payment is what a later reader copies); `Wallet` and `advanceLegError` lost
+  their last callers in this file and are dropped from its imports;
+* `advanceUse` is `splitting ? splitAdvanceUse(splitLegs) : 0`, so it is structurally 0 here. The
+  wire contract is unchanged — `advanceAmount` still travels and the server still re-reads and
+  re-caps whatever it is handed.
+* **Refund received is untouched**: `refundCap`, `refundExceedsAdvance`, the `max` on the field,
+  the direction segments and the posted `direction` are all byte-identical. That is the direction
+  in which the advance is the SOURCE of the movement, and it is recorded as a refund.
+* Words: `pdPayFromHelp` re-written to say WHY the advance is not a source here rather than leaving
+  a hole where an option was; `pdPayFromSplitFull` no longer names the advance. Both catalogues.
+
+**DIRECTION AUDIT (§3's last bullet), recorded:**
+
+* **New Purchase** — advance leg KEPT. Money going out against a NAMED invoice may be met from an
+  advance already sitting with that supplier; that is what an advance is for, and it is 317's
+  allocation, not a payment into itself.
+* **POS** — not circular and out of scope. A customer's advance is held BY the shop, and the
+  movement there is money coming IN, drawn from the shop's own pot.
+* **`@mp/shared` / `<SplitLegs>`** — unchanged. The leg exists in the shared rule; this one surface
+  simply stops offering it, which is why nothing else that splits was touched.
+
+### Files
+
+* `apps/web/app/(app)/pharmacy/suppliers/SuppliersClient.tsx` — phone Purchases/Returns/ledger
+  amounts, Returns badge + total, `directionClass` doc.
+* `apps/web/app/globals.css` — advance tone edited in place (5 sites); `td.led-run` tbody fix; new
+  328 block (`.amt-debit`/`.amt-credit`, `.mledrow__ft--end`, `.msum__row--credit`).
+* `apps/web/components/pharmacy/RecordSupplierPayment.tsx` — §3.
+* `packages/i18n/src/messages/{en,ur}.json` — two strings re-worded, no new keys.
+* `packages/ui/src/lib/ledger-colour-close-328.spec.tsx` — NEW, 26 tests.
+* Re-pointed by this step's owner decisions (each with the reason in place, none deleted):
+  `ledger-truth-310`, `supplier-ledger-to-mockup-319`, `supplier-terms-and-ledger-colour-324`,
+  `purchases-suppliers-mobile-r2`.
+
+### Gates
+
+* `pnpm lint` — clean (design-drift, token-integrity, tenant-english-only, search-select, page-titles all pass).
+* `pnpm typecheck` — clean, 31/31.
+* `packages/ui` jest `src/lib` — 124 suites / 3596 tests green (328's own 26 included).
+* `packages/i18n` jest — 5 suites / 35 tests green, parity included.
+* `pnpm test:unit` / `pnpm build` not run by the agent per CLAUDE.md §6; the controller runs them.
