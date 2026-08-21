@@ -20453,3 +20453,164 @@ Four suites failed after 324 landed; all four were assertions, not behaviour —
 
 Gates: `pnpm lint` clean (one pre-existing unused-disable warning in doctor-portal, untouched),
 `pnpm typecheck` clean, the four suites pass (68 tests).
+
+---
+
+## 325 — purchase-colour-truth-and-polish — DONE (2026-08-21)
+
+**WORK TYPE:** FIX · branch `fix/325-purchase-colour-truth-and-polish` · spec `/specs/325-purchase-colour-truth-and-polish.md`
+**Schema:** none. **RLS:** unchanged. **Money computation:** byte-identical — not one arithmetic path was touched.
+
+### §1 The invoice summary must add up
+
+The owner's evidence: an invoice printed Grand Total Rs 394,822.44, Amount Paid Rs 194,822.44 and Balance
+Rs 198,916.9. 394,822.44 − 194,822.44 = 200,000. Every stored figure was correct — the balance had already
+subtracted a Rs 1,083.1 credit note — and the printed summary was the one surface that did not print the row
+explaining it. A summary that hides one of its own terms is wrong even when the figures behind it are right.
+
+**Fixed in `SheetClose`** (the A4 sheet's closing block, `PharmacyPurchaseClient.tsx`): 304 §3.3's
+`ReturnedTotalRow` and 317 §2's `AppliedCreditTotalRow` are MOUNTED between the grand total and Amount paid,
+on `rowClass="tpay tpay--back"`. Nothing new was drawn and nothing is computed — the same two components the
+drawer and the phone sheet already mount, reading `invoice.purchase.returns` / `.appliedCredits`, which
+`purchaseInvoice` has always resolved through `assemblePurchaseDetail`. Both rows are absent when nothing came
+back (`showsReturnedTotalsRow` / `showsAppliedCredit`), so an ordinary invoice prints exactly as before. They
+sit inside the branch that also draws Paid and Balance, so an opening count and a voided document — which
+state neither — print no subtraction either. The LINE ITEMS are untouched: an invoice's lines are what
+arrived, and a return is not an un-arrival.
+
+Paper CSS: `.mp-pur2 .docsheet .tpay--back b { color:#1b6f45 }` (the sheet's own settled green, from
+`.tstate--clear`) and the source tail quieted to `--ink-3`. The `−` in front of each figure is the
+component's, so a black-and-white print still reads the subtraction.
+
+**Paginator:** no constant changed. 288 §2's measuring loop reads each well's real slack (`capsFrom`), so two
+extra rows in the closing block are absorbed by measurement rather than by a hand-tuned row budget.
+
+**THE SUMMARY-SURFACE AUDIT** (every surface that renders or prints a document summary):
+| Surface | Has the row? |
+|---|---|
+| View Purchase drawer (`.vtot`) | yes, since 304 |
+| View Purchase phone sheet (`.msum`) | yes, since 304 |
+| **A4 printed invoice / print preview (`SheetClose`)** | **was MISSING — fixed here** |
+| New Purchase desk summary (`.entsum`) | n/a — an unsaved entry cannot have returns |
+| New Purchase phone total bar (`.mtotalbar`) | n/a — same |
+| Suppliers drawer Returns-tab total (`.msum--grand`) | n/a — a tab total, not a document's arithmetic |
+| Quotation print (`lib/print-document.ts`) | n/a — a quotation has no payment or balance |
+
+### §2 A state never recolours money
+
+The owner's own inspection: `.mp-pur2 .icard--returned .icard__bal em { color: var(--info) }` — a returned
+purchase's balance caption painted info-blue. The caption's words are `balanceTone`'s own ("12 days overdue",
+"Due on 3 Sep", "Settled"), so the card was stating a MONEY reading in a DOCUMENT STATE's ink: it said
+"informational" about an amount that was three weeks past due.
+
+**THE RULE, RECORDED:** money colours carry money meaning only — warning is due soon, danger is past due,
+muted is settled, accent is money held in advance. A document state (returned, voided, drafted) never
+overrides them. The badge carries the state.
+
+Fixed as a class, not an instance: `InvoiceCard` now hands the caption `bal--${tone}`, and the five state
+rules that coloured `em` (`--unpaid` danger, `--partial` warning, `--paid` success, `--returned` info,
+`--voided` danger) are gone. The caption takes the same four inks the figure takes, which also completes
+320 §2 — card and table now agree line for line, caption included. `invoiceCardState` replaces the pay status
+with `returned`, so a returned-but-owed card had also lost the 16px emphasis every other live payable has;
+it gets it back — size, never ink.
+
+**THE MODIFIER AUDIT** — every `--returned`/`--voided`-style modifier overriding colour on an amount:
+| Rule | Verdict |
+|---|---|
+| `.mp-pur2 .icard--returned .icard__bal em` → `--info` | **REMOVED** (the reported defect) |
+| `.mp-pur2 .icard--unpaid/--partial/--paid .icard__bal em` → danger/warning/success | **REMOVED** — same defect, other states |
+| `.mp-pur2 .icard--voided .icard__bal em` → danger | **REMOVED** — "Due on 3 Sep" in red on a document that owes nobody |
+| `.mp-pur2 .icard--voided .icard__bal b` → tertiary + line-through | **KEPT, deliberately.** A void does not restate a live balance in another colour — it WITHDRAWS the figure, and struck-through text is drawn in the ink of the thing struck out. The badge still says VOIDED in words. |
+| `.mp-rsales .amtcell--returned`, `.salecard.is-returned .salecard__amt b`, `.msale__row.is-returned .msale__end b`, `.msalecard.is-returned .msalecard__amt` → danger | **FOUND, NOT CHANGED.** Same class of defect — a sale TOTAL inked by return state — but on Recent Sales, which is #3 in the owner's own sequence and unreported. Recorded here so that step starts from the finding rather than rediscovering it. |
+| `.mp-rsales .slines__row.is-returned .slines__amt` → danger + line-through | **FOUND, NOT CHANGED.** This is the void case: a withdrawn LINE, struck out. |
+| `.mp-rsales tr.is-returned` / `.salecard.is-returned` backgrounds, `.mthpill--*` | not money colours — a row tint and a badge. |
+
+### §3 View Purchase totals colours — SECOND ATTEMPT, with the evidence first
+
+320 §1's rule was in the stylesheet the whole time. **Two causes, and 320 has one each.**
+
+**CAUSE 1 — SOURCE ORDER, on the phone.** 320 wrote one rule for both surfaces
+(`.mp-pur2 .vtot__row--back b, .mp-pur2 .msum__row--back b { color:var(--success) }`) and placed it beside the
+DESKTOP `.vtot` block at line ~14876. The phone's own `.msum` block is declared ~290 lines later, and its base
+rule `.mp-pur2 .msum__row b { … color:var(--text-primary) }` has EXACTLY the same specificity — (0,2,1)
+against (0,2,1). Equal weight, later in the file, so the base rule won and the phone's `Returned` and
+`Credit applied` rows have drawn in plain ink since 320 shipped.
+
+Proved, not guessed: run through this repo's own cascade reader (`@mp/ui` `winningDeclaration`, built by
+283 §1 for exactly this question) the desk's row answered `var(--success)` won by
+`.mp-pur2 .vtot__row--back b @ globals.css:14876`, and the phone's answered `var(--text-primary)` won by
+`.mp-pur2 .msum__row b @ globals.css:15165`, beating `var(--success)` from 14876. This is the same trap
+324 §2 found in the ledger `tfoot`, one block along in the same file.
+
+**CAUSE 2 — the desk's half was INVISIBLE.** On the desk 320's rule does win, but the only rows it colours
+are `Returned` and `Credit applied`, both absent from every invoice nothing has come off (304 §3.3). So on an
+ordinary purchase 320 changed nothing a reader could see — and "amounts owed in warning", the half that shows
+on EVERY invoice, was never built at all.
+
+**Fix:** one block at the end of `globals.css` under a `325` heading (324 §2's own pattern), stating the whole
+system once and above both base rules, for both surfaces:
+- the two subtractions (`--back`) in success, each with the component's `−`;
+- the AMOUNT OWED — the grand total, what this document charges the shop — in **warning**, which is 319's
+  tone for a debit everywhere else in the app and is what makes the ledger and the document agree;
+- `Amount paid` in success;
+- the BALANCE in primary ink at every state, which is 320's own decision and 319's before it.
+Weight and size untouched: the block sets ink and nothing else. Re-run through the cascade reader afterwards,
+the phone's `--back` row is won by `.mp-pur2 .msum .msum__row--back b` with `var(--success)`.
+
+### §4 Polish
+
+- **`.retsum`** — `margin-top:5px` (the owner's measurement) on the base rule, and the sheet's
+  `.sheet__hd--stack > .retsum` override moved from `-2px` to the same 5px. The line is shared, so its
+  rhythm is too.
+- **FEFO batches table** — 321 §2's measured sizes are KEPT exactly (12px body, 11.5px on the phone, 44px
+  grip, the nowrap set); the container moves `overflow:clip` → `overflow:auto`. `clip` meant anything the
+  measurement did not anticipate (longer unit names, a font-size step, 125% zoom) was silently CUT OFF at the
+  frame, and a batch table that has quietly lost its last column is worse than one a reader can push sideways.
+  A bar appears only on genuine excess, so the measured case is unchanged.
+- **New Purchase goes fully realtime** — 291 §1 had put only the CATALOGUE on the wire, leaving the screen
+  half live. Added, all on 305 §2.2's RE-READ-NEVER-PATCH pattern: `NewPurchaseClient` subscribes to the desk
+  scope and re-reads the supplier book and the tenant's margin policy; `usePurchaseDraft`'s
+  `owedBySupplier` — the advance the payment box OFFERS — becomes a `loadOwed` callback subscribed to
+  `PURCHASE_UPDATED` / `SUPPLIER_BALANCE_UPDATED`, so a payment taken next door moves it. No figure rides the
+  wire and nothing here guards anything: FEFO, the commit-time stock check and the server's own re-read of the
+  ledger (which caps the advance leg) remain the truth, so a stale figure can only ever UNDER-offer.
+  API: `updateSupplier` now publishes the desk envelope. 312 §1 announced a CREATED supplier and left an
+  EDITED one silent, so a rename — or, since 324 §1, a changed credit window that re-dates every standing
+  purchase's due date — never reached an open form. New `PurchaseChangeReason` member `'updated'`.
+- **Pull-to-refresh** — the owner's report was the chip drawing BEHIND the header: `.mp-ptr` was `z-index:25`
+  against a sticky header at 30 and a fixed tab bar at 45. Now **55** — above both, below the modal/scrim tier
+  at 60, so a spinner can never paint over an open dialog. Verified through the cascade reader.
+  The polished treatment with it: `pullDistance()` replaces `min(dy × 0.5, 110)` — linear-then-wall, which no
+  platform does — with the standard rubber band `MAX × (1 − e^(−dy·RESIST/MAX))`, MAX 120, RESIST 0.75:
+  progressive resistance that approaches the cap and never hits it, tuned so the TRIGGER POINT is where it has
+  always been (68px of pull ≈ 132px of finger, against 136px before). A finished refresh HOLDS a tick for
+  460ms (`settled`) before retracting, because a refresh that answers in 90ms otherwise shows nothing at all;
+  `busyRef` stays true through the settle so a second pull cannot start on a leaving chip. The chip follows
+  the finger with the transition OFF while a finger is down (`data-state="pulling"`) and springs back on the
+  same transform when it lifts. Reduced motion keeps all four states and drops the movement.
+
+### Files
+
+`apps/web/app/(app)/pharmacy/purchase/PharmacyPurchaseClient.tsx` (print summary rows; caption tone; live
+advance) · `apps/web/app/(app)/pharmacy/purchase/new/NewPurchaseClient.tsx` (desk subscription, margin policy
+loader) · `apps/web/app/globals.css` (paper `--back` row; card inks; the 325 block; retsum; FEFO overflow;
+`.mp-ptr` z-index and states) · `apps/web/lib/use-pull-to-refresh.ts` (rubber band, settle) ·
+`apps/web/components/shell/PullIndicator.tsx` (chip states, tick) ·
+`apps/api/src/pharmacy/pharmacy.service.ts` (`updateSupplier` publishes) ·
+`packages/shared/src/pharmacy-desk-live.ts` (`'updated'` reason) ·
+`packages/ui/src/lib/purchase-colour-truth-and-polish-325.spec.tsx` (new, 30 tests).
+
+### Gates
+
+`pnpm lint` clean (one pre-existing unused-disable warning in `doctor-portal.repositories.ts`, untouched).
+`pnpm typecheck` clean. New suite 30/30. At-risk suites re-run and green: UI 19 suites / 773 tests (320, 322,
+r4, 304, 296, 275, 283, 288, 319, 324, 261, 279, 310, 311, 260, 264, inventory-mobile) and API 11 suites /
+142 tests (supplier*, 304, 305, 312). Vendor untouched. No i18n keys added — the two printed rows reuse
+`docRetTotalsRow` and `docCreditTotalsRow`.
+
+### Decision recorded
+
+§3's "amounts owed in warning" is read as the GRAND TOTAL — what the document charges the shop — because
+that is the only amount-owed figure in the block that is not the balance, and 320 §1 and 319 both put the
+balance in primary ink. It makes the document and the supplier ledger state a purchase in the same colour: a
+debit is warning wherever this app states one.
