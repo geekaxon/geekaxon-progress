@@ -20122,3 +20122,157 @@ two separate facts about one movement, which is the join 317 §4 deliberately ke
 `pnpm lint` clean; `pnpm typecheck` clean. The step's own suite and the seven existing suites that
 touch these files or this CSS were confirmed green before the checkpoint (306 tests). No schema, no
 migration, no vendor change; the full gates are the controller's.
+
+---
+
+## 322 — app-polish — DONE (2026-08-20)
+
+**Branch:** `fix/322-app-polish` (WORK TYPE: FIX). Spec: `specs/322-app-polish.md`. No CODEREF for this range.
+**Schema:** none. **RLS:** unchanged. **Money logic: byte-identical** — not one file under `packages/shared/src/pharmacy-*`, `document-*`, `payments` or `apps/api/src/pharmacy` was touched; the whole diff is web-side presentation, one client-side preference read, and one new registry.
+
+### §1 — Pull-to-refresh on every list and dashboard
+
+**The decision, and why it is not five more copies of 52 §2.** 52 wired `usePullToRefresh` into four screens by hand (platform, rider, phlebotomist, and nothing else); §1 asks for the gesture on every list and dashboard. This block's own §5 records the lesson that forbids repeating that: a fix scoped to the reported instance leaves the class untouched. So the gesture is mounted ONCE — `apps/web/components/shell/PullToRefreshHost.tsx`, inside `AppShell`, which is the only thing mounted on every tenant screen — and the screens contribute only the half the shell cannot know: how to re-read.
+
+**New: `apps/web/lib/screen-refresh.ts`.** The mirror image of `leave-guard.ts`: a screen registers `useScreenRefresh(load)` and the shell asks `refreshScreen()`. A SET rather than a slot (the leave guard's one-at-a-time rule is right for unsaved work and wrong here — a dashboard is several islands, and a refresh that reached only the last to mount would leave half the screen stale). The registered callback is read through a ref, so a loader closing over the current filter/range is always the one that runs without re-registering per render. A loader that throws or rejects is swallowed at the registry: one broken island must not leave the spinner turning over the ones that answered.
+
+**Registered (10 screens, each with the loader it already had — no second read path invented):** Dashboard `load`, Inventory `loadList`, Stock alerts `load`, Purchases `loadList` + `loadOwed` (the same pair its desk-event listener re-reads, because the Pay button quotes `owedBySupplier` and a gesture must not leave a stale figure behind money), Suppliers `refresh` (registered without its optional toast argument — a gesture has nothing to announce), Recent sales `load`, Returns `load`, Reports `load`, Customers `search` (re-runs the query on screen, does not clear it), Accounts-lite `refresh`.
+
+**Deliberately NOT registered: Day-close.** It is a cash-count sheet, not a list; its loader calls `seed(view)`, which would overwrite denominations the counter has typed. §1's own rule ("never while a form holds unsaved input") applies to the screen, so it falls back to `router.refresh()` like any other unregistered surface. Recorded here rather than silently skipped.
+
+**The three refusals, each through the app's existing single answer rather than a new one:**
+- an open sheet/dialogue → `openLayerCount() === 0` from `@mp/ui`'s layer stack (the same stack the device back button has consulted since 195 §3 and a sheet's drag since 216 §2; Radix `Dialog` registers there too — `dialog.tsx:58`);
+- unsaved input → `hasLeaveGuard()` from 296 §1's standing declaration;
+- offline → `navigator.onLine !== false`, because a spinner over an unreachable server changes nothing.
+
+**Hook changes (`use-pull-to-refresh.ts`), backward-compatible — the three existing call sites pass no options:**
+- a `canPull` predicate, asked at touch-down AND again at release (a dialog can open, or a field be typed into, during a pull a thumb easily holds for a second);
+- `ancestorsAtTop()` — the pull now also requires every scrollable ancestor of the touched element to be at its own top. Mounting shell-wide broke 52's assumption that `window.scrollY <= 0` means "the top": an open sheet locks the body, so a drag anywhere inside one reads scrollY 0, and several page chromes hand the scroll to `.mp-shell-main`. This is the platform's own rule and it makes a scrolled sheet body refuse for free.
+
+**Re-read, not remount (218 §2).** The host runs the registered loaders — one more fetch into already-mounted state — and only falls back to `router.refresh()` when nothing is registered, which re-runs the server render into the SAME React tree. `location.reload` appears nowhere; the suite asserts its absence. Realtime subscriptions survive by construction.
+
+**Native gesture suppression:** already in place and unchanged (`overscroll-behavior-y: contain` on html/body, `.mp-shell-main`, `.mp-mobile .sheet__body`, `.mp-pos2 .mpick__list`, plus the standalone-display-mode rule). `.mp-ptr` CSS from 52 is reused as-is; the indicator is `aria-hidden`, so no new i18n keys exist in this step at all.
+
+### §2 — The preferences prove themselves; the capture is the READ
+
+**The audit.** Traced both halves. **The write is sound and was never the missing half:** `writeUserPref` updates memory + mirror and fires `PUT /me/preferences/ui`; `parseSetUiPreference` validates against the SHARED allowlist; `PrismaPreferencesRepo.setUiPreference` find-then-writes under `runWithTenant`, keyed (tenant, user, screen, pref); `GET /me/preferences/ui` re-validates on the way out. A second browser has always shown the right thing — which is exactly why 316's acceptance passed unit-green.
+
+**The defect, on the surface §2 names (log out, log in again).** 316 built the localStorage mirror as a fallback consulted whenever the server map has no entry — and "no entry" is the same answer for *the server has not replied yet* and for *this user has never chosen*. A shop counter is one browser four people sign into: the cashier sets Purchases to cards, logs out (`clearUserPrefsCache()` dropped the MEMORY and left `mp.pref.*` on disk), the owner signs in, the server correctly answers "this user has chosen nothing", the read falls through to the mirror, and the owner meets the cashier's cards — permanently, because that fall-through recurs on every render and every reload. **Nothing the server said, including saying nothing, could displace a literal already in this device's storage.**
+
+**Fix — two complements, both in `apps/web/lib/user-prefs.ts`:**
+1. **A loaded map is the whole truth.** Once the server has answered, its silence means "never chosen" and the mirror is not consulted. Gated on a new `answered` flag rather than on `loaded`, because `loaded` is deliberately set on FAILURE too (so one dead endpoint is not re-asked once per screen) and an offline load must still paint this device's remembered choices instead of resetting every list to its default.
+2. **A logout wipes the mirror.** `clearMirror()` removes every `mp.pref.*` key — collected first, removed after, since removing while enumerating re-indexes `localStorage` and would skip every other key. Reached from `clearSessionCache()`, which is called on staff login, patient login, logout, PIN gate and impersonation exit — so both directions are covered and the correct thing is on screen from the FIRST paint rather than from whenever the fetch lands.
+
+Defaults unchanged (card mobile, list desktop). The control is still the setting — no settings page was added for either choice; the suite asserts both.
+
+### §3 — Sweep: the last `Full Name (Role)` middots
+
+The grep for a name joined to a role by `·` returned five live sites outside the shared formatter, none of them a pharmacy screen, which is why 317's and 321's audits missed them:
+- **Settings → My profile** — the header line was `Ayesha Rehman · TENANT_OWNER`: 317 §4's retired middot over the enum token `roleWords` exists to translate. Now `personCredit(...)`. The role in its own two slots (the profile-head `<small>` and the read-only role note) also went through `roleWords`.
+- **Settings list chrome** — `${appName} · ${me.name ?? me.role}` printed a bare enum for a nameless account. Now `personCredit(...)` when there is a name; a nameless account keeps the sidebar card's own fallback (its role, in words) rather than 307's "Unknown user", because the person reading that line is the person it names.
+- **Vendor console → tenant → impersonation** (×3: active sessions, recent sessions, the target picker) — `owner@ganatra-clinic.mp · TENANT_OWNER`, breaking three rules in one line (307 §2's address where a person is credited, 317 §4's middot, 311's untranslated enum), three times. All three now call `personCredit`.
+
+`AppShell`'s user card was inspected and deliberately left: it joins ROLE and BRANCH with `·`, which is two facts, and the name sits on its own line above — correct use of the separator. It cannot reach `actorDisplayName`'s login fallback anyway: `SessionContext` carries no email.
+
+### Tests
+
+`packages/ui/src/lib/app-polish-322.spec.tsx` — 8 real behavioural tests of the refresh registry (mount/unmount registration, every island runs, the CURRENT loader runs after a re-render, a thrower and a rejecter both settle, `active: false` deregisters, asking with nothing registered resolves) plus source-census assertions for the wiring claims (which function the shell asks for each refusal, both policy checkpoints, the ancestor rule, no `location.reload`, all 10 registrations against the loader each screen already had), the §2 read/write/clear invariants, and the §3 sweep including a regex that fails if any swept file still joins a name to a role with `·`. `personCredit` is exercised directly for all three shapes.
+
+### Gates
+
+`pnpm typecheck` — clean (31/31). `pnpm lint` — clean; the single remaining warning is a pre-existing unused eslint-disable in `apps/api/src/doctor-portal/doctor-portal.repositories.ts`, untouched by this step. Design self-check by inspection: no new tokens, no new strings, no i18n keys, indicator reuses 52's `.mp-ptr` CSS and stays `aria-hidden`, white-label untouched, vendor package untouched.
+
+### Block close
+
+322 is the last authored step of this group. PROGRESS.md `Next` is set to `none — awaiting next spec block [HUMAN_REQUIRED]` per the spec's own STOP INSTRUCTION, and the step ends `[HUMAN_REQUIRED]` for the one valid reason in AGENT.md §2: there is no spec 323 to read. Next round, agreed with the owner (from §5): the returns retest, the settlement waterfalls, the sale-only return window.
+
+## 323 — split-everywhere-and-payment-ux — DONE (2026-08-21)
+
+**Branch:** `feature/323-split-everywhere-and-payment-ux` (FEATURE). Spec: `specs/323-split-everywhere-and-payment-ux.md`.
+**Schema:** none — 318's per-leg storage (one `SupplierPayment` row per leg) carries it, as the spec predicted. **RLS:** unchanged.
+
+### §1 — one split rule, all legs, all surfaces
+- `packages/shared/src/payment-accounts.ts` gains the rule itself: `SplitLegSource`, `SPLIT_TENDER_SOURCES`,
+  `splitLegSources(advanceHeld)`, `SplitLeg`, `activeSplitLegs`, `splitLegsTotal`, `splitAdvanceUse`, `splitLegsError`.
+  Wherever Split is offered: Cash · Card · Online, plus ADVANCE only when one is held (> the 0.005 epsilon).
+  Free amounts per leg; two refusals only — the advance cap (`advanceLegError`) and the per-leg account
+  (`paymentLegsError`, which the rule feeds only the non-advance legs).
+- NEW `apps/web/components/pharmacy/SplitLegs.tsx` — the one board, mounted by the supplier desk and by New
+  Purchase (both tiers). Exports `SplitLegDraft`, `emptySplitLegs`, `legAmount`, `splitLegsPayload`.
+- `RecordSupplierPayment.tsx`: 318's "advance + one fixed leg" board replaced by `<SplitLegs>`. Split is now
+  offered on EVERY payment (it was gated on an advance existing); ADVANCE stays gated on one being held.
+  In split mode the Amount box, the single Account select and the payment-wide Reference all stand down —
+  the legs are the amount, and each leg carries its own account/slip. Help text `pdPayFromSplitHelp` →
+  `pdPayFromSplitFull`. Label is "Pay from" on every payment now, "Method" only on a refund.
+- `PharmacyPurchaseClient.tsx`: NEW `PurchasePayFrom` (one component, both tiers — `mobile` prop selects the
+  sheet presentation) replaces the bare Method select and the direct `PurchasePayAccount` mounts. Draft state
+  gains `payFrom` / `legs` / `owedBySupplier` (read from `/pharmacy/purchase/suppliers/summary`, turned into the
+  held advance by `refundCap`). `splitBoard()` re-derives the leg set when the supplier changes WITHOUT
+  discarding typed amounts. In a split the Amount-paid box is read-only and reads the board's total back, so
+  `paid`, `derivePayStatus` and the rows written are one number. `method` posted is the largest tender leg
+  (display only, `PurchaseMeta.method`).
+- API: `SupplierPaymentLegInput` + `parseSplitLegs()` in `pharmacy.dto.ts`, used by BOTH `parseSupplierPayment`
+  and `parseCreatePurchase` (one wire contract). Unknown source → 400; zero-amount leg dropped; ADVANCE leg's
+  account/reference stripped in the parser. `recordSupplierPayment` re-adds the legs (never trusts the posted
+  total), refuses `legs` + `direction=REFUND`, caps the advance leg against the ledger it re-reads, and writes
+  one row per tender leg through the same `assertPaymentAccount` a single tender is refused by.
+  `createPurchase` does the same; `purchasePaidAmount` makes a split purchase's `paid` its legs (clamped to the
+  grand total). A body with no `legs` parses and records byte-identically — proven in the suite.
+
+### §2 — split legs styled as the single tabs
+- `.payacct` in `globals.css` is now UNSCOPED (was `.paymod .payacct, .mp-mobile .payacct`), so the POS single
+  tender, the POS split legs, the supplier desk's legs and New Purchase's all read one component. The 44px
+  control scale stays scoped to `.paymod` / `.mp-mobile` — a property of those columns, not of the block.
+- `.paymix__acct` carries the owner's own numbers: `margin-inline-start:0; margin-bottom:10px`. The 34px/13px
+  control overrides (`.paymix__leg .paymix__acct .input` / `.pos-sel__trigger`) are DELETED — they were the
+  divergence. The POS split wrapper is `className="payacct paymix__acct"`.
+- The 4px between the Account and Reference labels moved off an inline `style` in `PaymentPanel.tsx` into
+  `.payacct .paylabel ~ .paylabel`.
+
+### §3 — Record Refund, tidied
+- Tabs: `segctl segctl--full` (full width).
+- Header badge REMOVED: the `.advchip` / `pdPayAdvanceAvailable` block is gone from `subtitleNode`.
+- NEW `.paydirn` (+ `.paydirn--in`) alert box between the tabs and Amount, `margin-top:10px`, warning tone for
+  money going out and success tone for money coming back; strings `pdPayDirNoteOut` / `pdPayDirNoteRefund`.
+- Amount autofill: one typed string PER DIRECTION (`amounts: Record<PaymentDirection, string>`). REFUND opens
+  on the exact advance held, PAYMENT on the outstanding (which over an advance is nothing → reads as cleared),
+  and switching either way preserves whatever was typed on the other tab.
+
+### §4 — mobile shows no shortcut keys
+- The method tiles' `Shift+n` label is now `layout === 'page' ? null : …` in `PaymentPanel.tsx`.
+- Tier-wide backstop in `globals.css`: `.mp-mobile .btn__kbd, .mp-mobile .paydlg__esc { display:none; }`.
+- AUDIT (recorded in the CSS comment): `.btn__kbd` is drawn by the POS cart footer (F8 / F10 / quotation key)
+  and the payment panel's Confirm (⏎) — all `.mp-pos2`, desktop-only, Confirm already gated on `layout`.
+  `.paydlg__esc` is the desktop dialog header only. Settings → Keyboard shortcuts draws `.kbd` / `.kbdcap` and
+  is deliberately NOT swept: that screen is ABOUT the keys.
+
+### Strings
+en + ur: `pdSplitTotal`, `pdSplitCashNote`, `pdSplitLegAsksAccount`, `pdSplitAdvanceCap`, `pdPayFromSplitFull`,
+`pdPayDirNoteRefund`, `pdPayDirNoteOut`, `pdPurchasePayFrom`, `pdPurchaseSplitHelp`, `pdPurchaseAdvanceHelp`.
+
+### Tests
+- NEW `packages/ui/src/lib/split-everywhere-323.spec.tsx` — 46 tests. The rule runs for real (leg set, totals,
+  advance cap, per-leg account, refusal order); the rest is a wiring census over the four files, the CSS and
+  both catalogues.
+- NEW `apps/api/src/pharmacy/split-everywhere-323.spec.ts` — 12 tests over `FakePharmacyRepo`: the wire
+  contract, one row per leg with its OWN account, a Card leg with no account refused, a deactivated account
+  refused, the advance draw-down as a negative CREDIT row naming no account, the cap refused BY NAME, a split
+  refund refused, and the frozen single-tender path byte-identical.
+- RE-ANCHORED `packages/ui/src/lib/purchases-mobile-260.spec.tsx` (2 assertions): the method picker moved into
+  `PurchasePayFrom` (`mobile` prop still selects the sheet), and `paid` now reads
+  `Math.min(splitting ? splitTotal : num(amountPaid), totals.grandTotal)` on BOTH tiers — same expression on
+  both halves, same frozen `derivePayStatus`, which is what that test has always been about.
+
+### Gates
+`pnpm lint` clean (one pre-existing `@mp/api` warning in `doctor-portal.repositories.ts`, untouched).
+`pnpm typecheck` clean (31/31). Targeted jest: 323's two new suites green; 318, 313, 314, 319, 320, 321, 322,
+260, 270, 300, 301, 303, 310 and the POS/supplier/purchase suites re-run green (≈900 tests).
+Per CLAUDE.md, `test:unit` / `test:e2e` / `build` NOT run here — the controller runs the full gates.
+
+### Decisions recorded
+- Split is offered on every supplier payment, not only over an advance: 318 gated it because a split WAS the
+  advance plus one leg; a cash+card split needs no advance to be a real thing a shopkeeper does.
+- A split has NO amount box on any surface. Its legs are the amount; a second box to type the total into is one
+  figure asked twice and, the first time the two disagreed, a payment nobody could explain.
+- A refund is never split — one advance, one movement — refused server-side.
+- `PurchaseMeta.method` on a split purchase is the LARGEST tender leg. Display only; the money is in the rows.
