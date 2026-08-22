@@ -20932,3 +20932,220 @@ it to. Here it was a top-up of the advance out of itself.
 * `packages/ui` jest `src/lib` — 124 suites / 3596 tests green (328's own 26 included).
 * `packages/i18n` jest — 5 suites / 35 tests green, parity included.
 * `pnpm test:unit` / `pnpm build` not run by the agent per CLAUDE.md §6; the controller runs them.
+
+---
+
+## 329 — new-purchase-payment — DONE (2026-08-21)
+
+**Branch:** `fix/329-new-purchase-payment` (WORK TYPE: FIX). **Spec:** `/specs/329-new-purchase-payment.md`.
+**Schema:** none. **RLS:** unchanged. **Money computation:** byte-identical — 323 §1's payload, cap and
+refusal are re-asserted in the new suite rather than re-implemented.
+
+### §1 — the payment section to the mockups
+
+`specs/mockups/pharmacy/new-purchase-desktop.html` / `new-purchase-mobile.html`.
+
+* Payment LEFT the invoice header group on both tiers. The desk draws a `.paycard` inside a new
+  `.npbottom` two-track band (`minmax(0,1fr) 392px`) opposite the existing `.entsum`; the phone
+  draws the same block chrome-free (`.paycard--m`) as its own `.mlabel`-headed section beneath the
+  line list, where the mockup's phone puts it.
+* The method question is a row of pills (`.pmrow` / `.pmbtn`, 38px, pill radius, accent-soft when
+  active) on the desk and the phone's existing bounded sheet on mobile — `mobileKind: 'short'`, the
+  one presentation difference between the tiers. Both read one `chosen` value and call one handler.
+* Cash · Card · Online · Advance · Split, from `PAY_METHOD_PILLS`. The advance pill is filtered on
+  `advance > 0` (318 §2's rule, re-spelt from a spread into a filter) and carries what is held as a
+  `.tag`; the card header carries the `.advchip` "Advance available Rs X".
+* `PurchasePayAccount` stopped drawing `.field`/`.field__label` clothing and now mounts the new
+  exported `<PayAcctFields>` — the `.payacct` block itself, extracted from `SplitLegs.tsx` so the POS,
+  the supplier desk, the split legs and this card are literally one component. `.paycard__body` puts
+  it on 313 §2's 44px control scale.
+* Cash and the advance state in place that they ask for nothing (`.pleg__cap` with `Info` / `Lock`),
+  carrying the same sentences 323 §1 wrote.
+* `<SplitLegs>` gained `variant="stacked" | "row"` plus `mobile`. `row` renders `SplitLegRows` —
+  `.pleg` / `.pleg--m` / `.pleg--capped`, a per-leg clear that empties amount + account + reference
+  together, `.pleg__none` notes, and a `.plegsum` foot whose refusal REPLACES the reassurance
+  (`.plegsum--warn`). Not one rule lives in the skin: the leg set is `splitLegSources`, the ceiling
+  the caller's `advanceHeld`, the refusal `splitLegsError`, the fields `<PayAcctFields>`.
+* The stacked dialog board (supplier desk Record payment) is untouched.
+
+**Deliberate deviations, recorded:**
+1. The mockup's `.nfield` rupee shell is NOT reintroduced — the app's one money field (`MoneyInput`
+   → `.mp-money`) is dressed to the mockup's sizes instead (264 §5).
+2. `.npbottom` stacks on `@media (max-width:1180px)`, the same breakpoint `.entryhead` already
+   reflows at, not the mockup's `@container` — an element cannot query its own container, and
+   establishing one on `.entrystack` would be a change outside this step's section.
+3. The amount-paid box stays in `.entsum` where it was deployed (§2 protects the summary), so the
+   card carries no second "Paying now" field. The advance clamp remains `Math.min(paid, advance)`.
+
+### §2 — nothing else moved
+
+New classes only (`.npbottom`, `.paycard*`, `.paysel`, `.pmrow`, `.pmbtn`, `.plegs`, `.pleg*`,
+`.plegsum`); the 329 CSS block names no `.entsum` / `.entryhead` / `.lineitems` / `.mfacts` /
+`.plinecard` / `.mtotalbar` selector, and the suite asserts that. The summary's rows, order and money
+box are asserted unchanged; the header group is asserted to no longer contain `<PurchasePayFrom>`.
+
+### §3 — the live mark is a pulse (owner decision)
+
+`box-shadow: inset 3px 0 0 0 var(--accent)` on `.row-open.is-live-marked` (305 §2.2) is gone, with
+its mirrored RTL block — a wash has no direction. One rule over every card/row class the old selector
+reached: `@keyframes row-live-pulse`, accent-soft → transparent, `2s … forwards`. Cancelled by
+`:hover` / `:active` with `animation:none` alone, so the row keeps its own hover surface; cleared by a
+re-sort, which drops the class. `prefers-reduced-motion: reduce` swaps the timing function to
+`steps(1, end)` — the message holds, the fade goes. Marking behaviour and the `rowLiveMarked`
+accessible name are unchanged.
+
+### Words
+
+`pdPayment`, `pdSplitClearLeg`, `pdSplitLegsMatch`, `pdSplitAdvanceNoAccount` — en + ur.
+
+### Tests
+
+New: `packages/ui/src/lib/new-purchase-payment-329.spec.tsx` (42 assertions — placement, the pill row,
+what each answer asks for, the leg row, the measurements, §2's containment, §3's pulse, the words).
+
+Three earlier specs re-anchored on the new spelling of an UNCHANGED rule, each with a comment saying
+so: `purchase-view-to-mockup-320.spec.tsx` §4 (the marker rule is now the pulse),
+`split-everywhere-323.spec.tsx` and `ledger-colour-close-328.spec.tsx` (the advance is offered by a
+filter rather than a spread).
+
+### Gates
+
+`pnpm lint` clean (only apps/api's pre-existing unused-disable warning, untouched here).
+`pnpm typecheck` clean. `packages/ui` jest: **3851 passed, 151 suites, 0 failed**. Prettier was NOT
+run on these files — the repo's `format` script excludes CSS and its TS/TSX are not prettier-clean at
+HEAD, so a formatting pass would have rewritten thousands of unrelated lines (caught and reverted).
+
+### Files
+
+* `apps/web/app/(app)/pharmacy/purchase/PharmacyPurchaseClient.tsx` — `PurchasePayAccount`,
+  `PurchasePayFrom`, `PAY_METHOD_PILLS`, `PAY_FROM_KEY`, both call sites moved.
+* `apps/web/components/pharmacy/SplitLegs.tsx` — `PayAcctFields` extracted and exported;
+  `variant` / `mobile` / `okText`; `SplitLegRows`.
+* `apps/web/app/globals.css` — the 329 §1 block; the 305 §2.2 marker rewritten as §3's pulse.
+* `packages/i18n/src/messages/{en,ur}.json`; four spec files under `packages/ui/src/lib/`.
+
+**Block end.** Phase 34 closes. No step 330 is authored; PROGRESS.md `Next` is
+`none — awaiting next spec block [HUMAN_REQUIRED]`.
+
+---
+
+## 330 — ledger-colour-source — DONE (2026-08-22)
+
+**Branch:** `fix/330-ledger-colour-source` (cut from the 329 head). **Work type:** FIX. **Schema:** none. **RLS:** unchanged.
+
+Fourth attempt at one ask (319 §1 → 324 §2 → 328 §2 → this). The spec forbade writing any fix
+before the source was understood, so §1's four records come first.
+
+### §1.1 — THE COMPONENT
+
+`apps/web/app/(app)/pharmacy/suppliers/SuppliersClient.tsx`, function `LedgerDrawer` (~L3452).
+Found by reading the render tree, not by grep: `SuppliersClient` mounts `<LedgerDrawer>` on the
+desk branch (~L1988) into a Radix `<DrawerContent className="mp-inv2 mp-pur2 mp-pur2-drawer
+mp-pur2-drawer--700 p-0 gap-0">`. Inside it the three cells the spec names are:
+
+- **Ledger amount cell.** Simple: `<td className={`num ${directionClass(signedReading(e).debit)}`}>`
+  (~L4333). Pro: `<td className={`num${e.debit > 0 ? ' led-debit' : ' muted'}`}>` and its credit
+  twin (~L4338/L4341).
+- **Closing row.** `<td className="num led-debit">{money(closing.debit)}</td>`, its credit twin,
+  and the balance `<td className="num led-run">{moneySigned(outstanding)}</td>` (~L4363–L4381).
+- **Payments tab amount cell.** `<td className={`num ${directionClass(signedReading(e).debit)}`}>`
+  (~L3999), on a `<tr className={reversed ? 'is-reversed' : undefined}>`.
+
+All three sit at this depth: `div.dtbl.dtbl--fit.dtbl--ledgers.has-act` › `div.dtbl__scroll` ›
+`table` › `tbody`/`tfoot` › `tr` › `td`. **That depth is the whole answer.**
+
+### §1.2 — THE COMPUTED STYLE, AND WHAT I COULD ACTUALLY MEASURE
+
+I have no browser and no access to the deployed host, so DevTools computed styles and attached
+screenshots are **not** something this session can produce — recorded plainly rather than claimed.
+What I did instead is the mechanism a computed style reports: the repo's own cascade reader
+(`packages/ui/src/lib/css-cascade.ts`, built by 283 §1 for exactly this question) run over the real
+`globals.css` against the real DOM chain above. Verdicts BEFORE the fix:
+
+| cell | winning rule | resolved |
+|---|---|---|
+| Simple amount, positive (`td.num.amt-debit`) | `.mp-pur2 .dtbl.dtbl--fit tbody td` (0,3,2) | `var(--text-secondary)` |
+| Simple amount, negative (`td.num.amt-credit`) | same | `var(--text-secondary)` |
+| Pro debit / Pro credit (`td.num.led-debit` / `.led-credit`) | same | `var(--text-secondary)` |
+| Balance (`td.num.led-run`) | `.mp-pur2 .dtbl.dtbl--fit tbody td.led-run` (0,4,2) | `var(--text-primary)` |
+| Payments amount (`td.num.amt-credit`) | `.mp-pur2 .dtbl.dtbl--fit tbody td` (0,3,2) | `var(--text-secondary)` |
+| Payments reversed | `.mp-pur2 .dtbl--fit tr.is-reversed td.amt-debit` (0,4,2) | `var(--text-secondary)`, **no strike** |
+| Closing debit / credit (`tfoot`) | `.mp-pur2 .dtbl.dtbl--fit tfoot td.led-*` (0,4,2) | warning / success |
+
+Source file for every one of them: `apps/web/app/globals.css`. This reproduces the owner's
+screenshot exactly — a monochrome book with a coloured closing row and a white balance.
+
+### §1.3 — WHAT 319 / 324 / 328 CHANGED, AND WHICH MISS EACH ONE IS
+
+Not a wrong component, not mobile-only classes, not a class the desk table does not carry.
+**A specificity loss, in the `tbody`, missed three times by the same arithmetic slip.**
+
+- **319** wrote the direction classes as `.mp-pur2 .dtbl--fit .amt-debit` (0,3,0) and pinned the
+  balance with `tfoot td.led-run`. Everything in the body lost.
+- **324 §2** correctly diagnosed the `tfoot` and raised the four direction classes to
+  `.mp-pur2 .dtbl.dtbl--fit tfoot td.X` (0,4,2) — **and only wrote (0,3,1) for the general case**
+  (`.mp-pur2 .dtbl--fit td.amt-debit`). So the closing row went coloured; the body did not.
+- **328 §2** found the same trap for the balance column and raised `.led-run` to
+  `tbody td.led-run` (0,4,2). So the balance went white; the four direction classes were left
+  standing at (0,3,1), one class short of the body rule.
+- **The arithmetic.** Both 324's and 328's own comments record the base rule as (0,4,1) / (0,4,2).
+  It is (0,3,2): `.dtbl.dtbl--fit` is two classes on ONE element. Counted as (0,4,x), (0,3,1)
+  looked like a near-miss worth one extra element; counted correctly it is a guaranteed loss.
+- **Why the tests kept passing.** 328's fixture flattened the chain (`.dtbl.dtbl--fit` on the
+  `<table>`) and its one body-cell cascade assertion measured `num amt amt-debit` — the Purchases
+  tab's shape, which carries an extra `.amt` and wins at (0,4,1). The Ledger and Payments cells
+  carry `num amt-debit` with no `.amt`, and were asserted as **source substrings** only. 328's own
+  header warns against exactly that, and it is what happened.
+
+### §1.4 — THE MOBILE DIFFERENCE
+
+The phone draws its money as `<span className={`amt ${directionClass(...)}`}>` inside
+`.mledrow__ft` — no table, so nothing at (0,3,2) matches it and 328's plain-element rules
+`.mp-pur2 .amt-debit` / `.amt-credit` (0,2,0) win uncontested. The two surfaces have shared ONE
+derivation (`directionClass` / `signedReading` / `signedMoney`) since 328 §1.1; they never
+disagreed about which tone a movement takes. Only one of them was allowed to paint it.
+
+### §2 — THE FIX
+
+One block at the end of `apps/web/app/globals.css` (`330 — WHERE THE LEDGER'S COLOUR ACTUALLY
+COMES FROM`), carrying the finding above and then every money cell of the desk book — `tbody` and
+`tfoot` together, at the weight the body rule actually carries:
+
+- `td.amt-debit` / `td.led-debit` → `--warning`; `td.amt-credit` / `td.led-credit` → `--success`.
+- `td.led-run` → `--text-primary`, body and closing row alike.
+- `td.muted` → `--text-tertiary`. Pro's `—` placeholder had lost to the same body rule, so an
+  empty column read in the same ink as a filled one.
+- A reversed payment row: `--text-secondary`, `line-through`, `text-decoration-color:var(--danger)`.
+  324 muted that row and stopped; the desk cell carries no `.amt`, so `.dtbl--fit tr.is-reversed
+  .amt`'s strike never reached it and a void row read as a live one.
+
+Nothing was deleted: 319's, 324's and 328's rules stay where they are, with their evidence.
+
+**§2's shared amount-cell component — NOT done, and why.** The pair already shares its whole
+derivation: one function decides the class and one decides the signed string, on both surfaces,
+since 328. A component wrapping them would put a `<td>`/`<span>` switch behind a prop without
+removing any divergence that exists — the divergence was in the cascade, and that is now one
+block. Against that it would rewrite the markup shape at nine call sites and break the source
+substring assertions in the 319, 324 and 328 suites, which are this step's own evidence trail.
+Disproportionate, per §2's own escape clause.
+
+### §3 — VERIFICATION
+
+Cascade verdicts AFTER the fix, same reader, same chain — every cell now won by the 330 rule:
+Simple `+` `var(--warning)` / `−` `var(--success)`; Pro debit `var(--warning)`, credit
+`var(--success)`; balance `var(--text-primary)` in body and closing row; Payments amount by
+direction, reversed `var(--text-secondary)` + `line-through` + `var(--danger)`; closing debit/credit
+coloured. Phone verdicts unchanged and still won by `.mp-pur2 .amt-*` and
+`.mp-pur2 .mledrow.is-reversed .mledrow__ft .amt` — no rule added here can match a `<span>`.
+
+New suite `packages/ui/src/lib/ledger-colour-source-330.spec.tsx` (21 tests) makes every one of
+those a cascade assertion in the drawer's real chain, including a sweep of five tab variants ×
+five money classes × body and foot. Ran green together with the 304, 310, 314, 319, 324 and 328
+suites (149 tests). `pnpm lint` clean (design-drift, token-integrity and the three tenant checks
+all pass); `pnpm typecheck` clean. Figures untouched — presentation only; vendor untouched.
+
+**OUTSTANDING FOR THE CONTROLLER:** the deployed-page screenshots §3 asks for. The fix is verified
+against the shipped stylesheet and the shipped markup, but a browser confirmation after deploy is
+the one acceptance item this session physically could not perform.
+
+**WORK TYPE: FIX (branch fix/330-ledger-colour-source)**
