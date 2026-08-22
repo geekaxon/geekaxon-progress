@@ -21290,3 +21290,207 @@ untouched. Superseded assertions in the 328 and 331 specs were corrected in plac
 `pnpm lint` clean (one pre-existing unrelated @mp/api warning). `pnpm typecheck` clean. Ran the affected suites
 directly to verify the money change rather than describe it: `@mp/api` pharmacy 78 suites / 1300 tests green,
 `@mp/ui` 154 suites / 4033 tests green. Vendor untouched; no secrets; no schema.
+
+---
+
+## 333 — customers-core — DONE (2026-08-22)
+
+**WORK TYPE:** FEATURE — branch `feature/333-customers-core`. Spec: `/specs/333-customers-core.md`.
+Mockups: `specs/mockups/pharmacy/customer-desktop.html` (parts A, C, E, F) and `customer-mobile.html`
+(Customer register; Add/edit; I · Deactivate; J · A limit below what they owe). No CODEREF exists for
+this range; the live files were re-read.
+
+### §4's REQUIRED PRE-MIGRATION RECORD — what already existed, and what was extended
+
+The spec's first acceptance line asks for the customer entity to be recorded BEFORE the first
+migration, and for no duplicate to be created. It was found in one place and extended there:
+
+* **`customers`** (Prisma `model Customer`, created by `20260721000000_pharmacy_data_models`,
+  spec 98 §2) — `id`, `tenant_id`, `name`, `phone`, `address`, `credit_limit`, `opening_balance`,
+  `notes`, `allow_credit` (107 §2.4), `active`, `created_at`, `updated_at`; indexes
+  `(tenant_id, name)` and `(tenant_id, phone)` plus `20260808030000_picker_search_indexes`.
+* **`customer_payments`** beside it (`20260722020000_customer_credit_ledger`) — the credit side of
+  the receivable, with `account_id` added by 313 §2.
+* Both tables are tenant-scoped under **FORCE ROW LEVEL SECURITY**, fail-closed, from the migrations
+  above; every read goes through `runWithTenant`.
+* The POS already attached customers for udhaar: `sales.customer_id` + `sales.credit_amount`
+  (distinct from the clinic `patient_id`), and the chooser was already the paged
+  `GET /pharmacy/customers/picker` from 228 §1.
+* Screens that already existed: `apps/web/app/(app)/pharmacy/customers` (the 107 register, extended
+  by 204/208/209/210/227/254) and the POS's own picker + capture dialog.
+
+**Conclusion recorded before writing the migration: EXTEND, do not create.** The only schema change
+this step makes is one additive, nullable column on the existing table.
+
+### Schema + migration
+
+`20260822000000_customer_deactivated_at` — `ALTER TABLE "customers" ADD COLUMN IF NOT EXISTS
+"deactivated_at" TIMESTAMP(3)`.
+
+* **Why a column at all:** `active` says true/false and nothing more. §2 requires the register to say
+  "hidden from the counter since 18 Aug 2026", to sort by that date and to offer Reactivate. A
+  boolean cannot carry any of it.
+* **RLS:** the column lands on a table that is already force-RLS'd and tenant-scoped, so it inherits
+  the fail-closed policy unchanged. No new table, no new policy, no new grant, nothing to widen.
+* **No backfill, deliberately.** A row already switched off has no recorded date, and inventing one
+  (`created_at`? `updated_at`? today?) would state a fact nobody can reconcile. NULL reads as
+  "switched off, date not recorded" and the screen says exactly that.
+* **Not a soft delete and not money.** Nothing reads this column to decide an amount.
+
+### Shared rules (`packages/shared/src/pharmacy-customers.ts`) — pure, tested
+
+The screen adds READINGS, never arithmetic. Each is one function so the table cell, the desk card,
+the phone card, the record and the form cannot reach different verdicts about one customer:
+
+* `customerStanding()` → `inactive | over | atLimit | advance | owing | noCredit | settled`.
+  Ordered by severity, first true wins. **Two judgement calls, both recorded:** (a) `inactive`
+  outranks every money reading, because "Over limit" on an account that cannot be sold to is not
+  the fact a desk needs — the balance is still stated beside the pill, in full; (b) `noCredit`
+  ("Cash only") is checked AFTER the balance readings, so a customer whose credit was switched off
+  while they still owed never reads as a clean account. With a zero ceiling and anything owed,
+  107's existing `isOverCreditLimit` already returns `over`, which is the correct reading and is
+  left exactly as it was.
+* `customerHeadroom()` → the "Can still take" cell's figure AND its reading
+  (`na | none | zero | full | some`). The figure is `creditHeadroom` (227 §2.3, limit + advance −
+  due) and nothing else. `na` renders "—", never "Rs 0": no udhaar account and no room left are
+  different facts and only one of them is about money.
+* `creditUsedPercent()` → the gauge fill, against the CEILING (limit + advance), clamped 0..100.
+  The hatched `.credgauge__over` past the tick carries the excess, so "over" reads without relying
+  on colour.
+* `limitBelowBalance()` → mockup F's warning, returning the three figures its sentence needs.
+* `customerSummary()` gains `creditSaleCount` (the charges already in hand — no second read).
+* `customerListStats()` gains `advancesHeld`, `advanceCount`, `owingCount`. **Money decision:** the
+  advance total is a SECOND figure and is never netted against baqaya — Rs 60,000 owed plus
+  Rs 60,000 held ahead is not a book with nothing in it. Both halves come from the shared
+  `customerBalanceParts` split, so no surface can read the sign its own way.
+
+### Realtime — the insert half 312 found missing everywhere
+
+New desk-scope event `customer.updated` (`packages/shared/src/pharmacy-desk-live.ts`) with reason
+`created | updated | deactivated | reactivated`. 210 §6's `customer.balance.updated` already carried
+the MONEY; nothing carried the RECORD, so a register left open never saw a customer registered at the
+counter, a corrected phone, a new limit or an account switched off — exactly 312 §1's finding on
+suppliers, given the same ending rather than a second one. Published from `createCustomer` and
+`updateCustomer`; the envelope carries identity, a reason and **no figure at all**, because the
+screen re-reads the endpoint it first rendered from. It rides the existing per-tenant spec-112 bus
+(no new transport, no new gate) and is generic in `RealtimeBus.publishDesk`, so the SSE endpoint
+needed no change. `deskEvents` stays `@Optional()`, so every positionally-constructed fixture still
+publishes nowhere.
+
+The register subscribes to BOTH scopes: `useDeskLive` for `customer.updated`, and `useLiveStream`
+for `customer.balance.updated` (which the desk filter cannot carry), coalesced at 400 ms into ONE
+re-read. **Change of behaviour, recorded:** the screen no longer patches a row from the balance
+event — it re-reads. That is strictly stronger than 210 §6's "restate, never adjust by a delta":
+there is no second arithmetic path left. The POS still patches, because a picker cannot re-read per
+keystroke, and its patch was already a full restatement.
+
+### API
+
+* `CustomerRow` / `CustomerView` carry `deactivatedAt`; `CustomerListRowView` carries
+  `creditSaleCount`; `CUSTOMER_SELECT` / `toCustomer` / the fakes follow.
+* `updateCustomer` (repo) stamps `deactivated_at` **on the transition only** — an edit that
+  resubmits the same switch state must not re-date "hidden since", or a record would look freshly
+  closed every time somebody corrected its phone number. Reactivating clears it.
+* `updateCustomer` (service) reads the row first so the published reason can name the transition.
+  **The ledger is untouched by the switch** — no balance is written, cleared or netted; a customer
+  switched off while owing keeps every rupee, stays in Owing, in the reports and in the total
+  baqaya, and payments can still be recorded against them. Proved by a byte-identical
+  `customerLedger` either side of the switch.
+* `pageCustomers` / `countCustomers` gain `includeInactive` (default **false**) and
+  `PickerQuery.includeInactive` parses only an explicit `true`/`'1'`/`'true'` — the picker fails
+  CLOSED onto active customers. `GET /pharmacy/customers/picker` therefore excludes switched-off
+  accounts at the WHERE, not at the render.
+* Endpoints, permissions and flags are UNCHANGED: `pharmacy.pos` flag → `pharmacy.sell` permission
+  → RLS, writes `@Audited` as before. No new endpoint was added; deactivation is an edit
+  (`POST /pharmacy/customers/:id` with `active`), not its own route.
+* `listCustomerSummaries` still returns EVERY customer, inactive included — the exclusion is the
+  counter's, not the book's.
+
+### Web
+
+`CustomersClient.tsx` rebuilt to the two mockups on the shared 212/`mp-pur2` kit: four KPIs that read
+"—" on an empty book (never a fabricated zero), the seven-chip row whose counts fold the SAME
+predicate the filter does, search across every visible column, sortable heads, rows-per-page,
+column show/hide, the list/card switch on 316's per-user preference (card on mobile, list on
+desktop), 305's one row handler with its accessible name and live-marked pin, 303's filter-switch
+skeleton, the desk card grid with the credit gauge, the phone's `.mccard` and `.minv` views with
+infinite scroll, empty / no-match / loading states, and pull-to-refresh.
+
+* **Add/Edit** — a centred dialog on the desk, the shared sheet on the phone. Name, phone, **Udhaar
+  limit** (316's word), address, Allow udhaar, opening balance, notes, Active.
+* **Duplicate phone WARNS, never blocks** — the supplier rule (324 §5) applied identically: matched
+  on the canonical number (`normalizePkPhone`, so `0300…` and `+92300…` meet), the record being
+  edited excluded, `role="status"` not `alert`, the other customer named and **no id ever shown**.
+  Save is untouched.
+* **A limit below the balance** (mockup F) — stated in the customer's own numbers under the field
+  that caused it, the field tinted, Save never blocked. Tightening credit on a customer who has
+  stopped paying is a legitimate decision; the form's job is to stop it happening by accident.
+* **Opening balance locks** once the ledger has moved, and a locked field is **not sent** — the edit
+  DTO writes every field it is given, so a control the user could not set must not post a value.
+  A correction is a payment or an adjustment.
+* **Deactivate** lives on the customer view as a row in the record's last block (`.msactions`), not
+  a button in the footer — the footer keeps the two things a cashier reaches for. The confirmation
+  states the baqaya first, then what SURVIVES (ledger, N udhaar sales, reports) and what STOPS
+  (new counter sales), and its destructive confirm is the focused control. **There is no Delete
+  anywhere in the file.** Reactivate is offered from the record, the inactive row's action slot and
+  the phone card's foot.
+* An inactive row/card recedes but keeps its balance legible; the record opens with a dashed
+  `.inactbar` naming the date, or saying the date was not recorded.
+
+`PosClient.tsx` — the chooser now excludes switched-off accounts (server-side). The duplicate-phone
+lookup asks for them explicitly (`includeInactive=1`), because a number that already belongs to
+somebody still belongs to them when their account is off, and creating a second row for it is the
+split ledger 226 §3 exists to prevent. **Judgement call:** a deactivated duplicate is NAMED but not
+attachable — the offer says why, and reactivating is a decision made in the customer book.
+**Nothing about how a sale commits was touched**: no commit-time refusal was added, no money path
+was edited, and `splitPaymentSummary` / `checkCreditLimit` / the credit tender rules are untouched.
+
+### CSS (`globals.css`)
+
+Only the components the mockups mark NEW and the kit did not own: `.credgauge` (+ `--due/--at/
+--over/--adv/--none/--sm`), `.cantake`, `.nocredit`, `.udhfacts`, `.fieldwarn`, the inactive
+readings for table row / card / list row, `.inactbar`, `.mccard` family, `.msactions`/`.msact`,
+`.mfslabel`, `.mfs__note`, `.btn--quietdanger`. All scoped under `.mp-inv2`, all on tokens, no hex
+literal, light and dark both by construction. Radius-only clipping uses `overflow: clip` per
+264 §1. **Deliberately NOT ported:** the mockup's `.rsaffix` / `.input--rs`. A money field that
+reads `Rs` as a leading affix is exactly what the kit's `<MoneyInput>` already is (249 §2 / 256 §4);
+a second control with the same job is the drift the guard exists to stop. The mockup's intent is
+met, its class names are not duplicated.
+
+### i18n
+
+122 new keys, **EN + UR at parity** (verified). One nested POS key `pharmacyPos.v333.dupInactive`.
+The register is tenant-English at runtime like every other tenant screen; the Urdu catalogue is
+complete so the parity gate holds and a future locale switch has nothing missing.
+
+### Tests written
+
+* `apps/api/src/pharmacy/customers-core-333.spec.ts` — 27 cases: the seven standings and the two
+  precedence calls; the five headroom readings incl. the advance ceiling and the na-vs-zero
+  distinction; the gauge clamp; the KPI split and the never-netted case; mockup F's warning; the
+  list projection and its tenant scope; the create/update/deactivate/reactivate events and their
+  figure-free envelope; deactivation keeping the record, stamping once, leaving the ledger
+  byte-identical, staying in the totals and still accepting a payment; and the picker excluding
+  inactive rows while the explicit lookup finds them.
+* Existing source guards in `packages/ui` that pinned the OLD register's markup were re-pointed at
+  the rule rather than the string, each with the reason inline: 227's advance surfaces, 204's three
+  figures, 210 §1's "credit is core" (now the stronger assertion that no `credit` flag exists at
+  all), 208's "never send a field the form did not offer" (now the opening-balance lock), 299 §3's
+  one-subscription rule, 254 §4's import/export pair (now `<ImportExportActions>`), and 226 §3's
+  server-side duplicate check (now with the inactive flag).
+
+### Gates
+
+`pnpm prisma generate`, `pnpm lint` and `pnpm typecheck` clean (one pre-existing unrelated warning
+in `doctor-portal.repositories.ts`). The API suite was run to confirm nothing moved: 210 suites,
+2787 tests, all passing, including the 79 pharmacy suites. Design self-check by inspection: kit
+components throughout, no raw controls (drift guard green), light/dark via tokens, skeletons and
+empty states present, RTL-safe logical properties, 44px touch targets on the phone, "—" wherever
+there is no data.
+
+### Not done here, on purpose
+
+The record's ledger is 107's, read and lightly restyled — its rebuild (tabs, statement, Purchases /
+Payments) is **334**. Merge two customers (mockup D/H) and the A4 statement (G/K) are later steps in
+the group. Vendor surfaces untouched.
+
