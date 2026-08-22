@@ -21799,3 +21799,78 @@ Full `pnpm test:unit` is the controller's gate. §5 asks for a real device; the 
 against silent regression, not the acceptance.
 
 WORK TYPE: FIX (branch fix/337-returns-mobile-ux)
+
+## 338 — returns-scope-and-copy — DONE (2026-08-22)
+
+**Branch:** `fix/338-returns-scope-and-copy` (WORK TYPE: FIX). Spec: `/specs/338-returns-scope-and-copy.md`. No CODEREF in range. Schema and RLS untouched.
+
+### §1 The window is a sale rule
+The N-day return window left the purchase flow entirely, on the owner's locked decision: it asks
+whether a CUSTOMER is still inside the shop's policy, and a supplier credit note is not that
+question. Removed: the quiet line under the purchase search (`rtnMWindowNote` + `windowDays`
+state + the remembered-window read), and the delivery AGE beside the received date on both
+purchase surfaces — 302 §2 put the age there "so the window is visible when it matters", which
+stops being a reason once the window does not apply. API: `ReturnablePurchaseRowView.windowDays`
+is gone and `returnablePurchases()` no longer resolves the tenant settings at all (that resolve
+existed for the one field), so the purchase search is one read lighter. The SALE flow is
+unchanged — it keeps 309 §4.3's line naming the days and `rtnLateWindow`, which warns and never
+blocks (`canConfirm` has never consulted the window and still does not).
+Settings → Returns now reads **Sale return window** / **Sale returns allowed within (days)**, the
+hint says purchase returns are not governed by it, and the section subtitle says "{days}-day sale
+window". Display only — `returnsWindowDays` is the same stored field written through the same
+endpoint.
+
+### §2 Expired wording follows the setting
+`rtnMReasonEffectExpired` ("never straight back on a shelf") and `rtnCardExpiredNote` ("not
+returned to sellable shelf") were fixed sentences under a three-valued setting, and both are
+plain untruths under BACK_TO_BATCH. Retired from the app and both catalogs. The phone's reason
+sheet now takes the "Expired" option's consequence from `expiredNoteKey(view.policy.expiredPolicy)`
+— the same resolver the line note already used on both surfaces — and `reasonEffectKey` no longer
+has an EXPIRED branch at all. The returns LIST resolves the same three values through short
+strings of its own (`rtnCardExpiredWriteOff` / `...Quarantine` / `...BackToBatch`), because
+`.rcard__ft small` is a single ellipsed line and the phone's is a pill: the flow's full sentence
+would have arrived there cut off mid-clause. `data.policy.expiredPolicy` is threaded to both
+cards, defaulting to WRITE_OFF. The third option keeps its safety warning — `rtnExpiredBackToBatch`
+now ends "It can be sold to a patient again", matching the pane's own `setgRetExpiredWarning`.
+
+### §3 Reasons, wired and right
+Verified on all four surfaces: each flow calls `useReturnReasons` once with its own kind, the
+desktop `SearchSelect` and the phone `SheetOptionList` both render that list, `reasonOf` falls
+back to the list's FIRST row, and `postFor` derives the frozen enum from the chosen option. The
+API's `GET /pharmacy/settings/return-reasons?kind=…&active=1` already serves one list per kind.
+What was wrong was the FALLBACK: both flows carried a `REASON_LABEL` map of the frozen
+five-value enum's English, which is how a sale reason could be printed on a purchase return.
+Both maps are deleted; an unresolved draft now reads the new `rtnReasonUnset` ("Choose a reason")
+and the blank draft's placeholder enum is `OTHER` on both flows instead of `CUSTOMER_CHANGED_MIND`
+(sale) and `DAMAGED` (purchase).
+
+### §4 Confirm, both surfaces
+The desktop footers read `rtnMConfirm` ("Confirm") on both flows; `rtnConfirmReturn` and
+`rtnConfirmPurchaseReturn` are gone from the app and from both catalogs, so the pair cannot come
+back by re-use. All four footers (2 flows × 2 surfaces) now say the one word.
+
+### Tests
+New `packages/ui/src/lib/returns-scope-and-copy-338.spec.ts` — 22 source/copy assertions across
+the four sections, plus an en/ur key-parity check. Two earlier suites were superseded in part and
+updated with the reason in place: `returns-flows-and-correctness-302.spec.ts` (the purchase
+document's age line, and `rtnReceivedAgo` dropped from its key list) and
+`returns-mobile-and-copy-309.spec.ts` (the window line is asserted on the sale flow alone; the
+"Confirm purchase return survives on the desk" test is replaced by one asserting both longer
+strings are gone).
+
+### Files
+- `apps/web/app/(app)/pharmacy/returns/new-purchase-return/NewPurchaseReturnClient.tsx`
+- `apps/web/app/(app)/pharmacy/returns/new-sale-return/NewSaleReturnClient.tsx`
+- `apps/web/app/(app)/pharmacy/returns/ReturnsClient.tsx`
+- `apps/web/app/(app)/settings/sections/ReturnsSection.tsx`
+- `apps/api/src/pharmacy/pharmacy.service.ts`
+- `packages/i18n/src/messages/{en,ur}.json` (4 keys retired, 4 added, 6 reworded; catalogs in step)
+- `packages/ui/src/lib/returns-scope-and-copy-338.spec.ts` (new), 302 + 309 suites updated
+
+### Gates
+`pnpm lint` — clean (the one remaining warning is a pre-existing unused eslint-disable in
+`doctor-portal.repositories.ts`, untouched here). `pnpm typecheck` — 31/31 green. Per CLAUDE.md
+the unit and e2e suites are the controller's to run. Design self-check by inspection: the
+purchase step-1 chrome falls back to its 117px variant with the note gone, so no blank band is
+reserved; the received-on tile is now caption+value like the three beside it; the list card's
+expired line stays inside one ellipsed row and one pill.

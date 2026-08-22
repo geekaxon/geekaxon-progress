@@ -7,9 +7,9 @@
 ## Current Status
 - **Project:** Marham Patti — multi-tenant white-label healthcare platform.
 - **Phase:** **PHASE 36** — Customers and the returns close.
-- **Last completed:** **337 — returns-mobile-ux**.
-- **Next:** specs/338-returns-scope-and-copy.md
-- **Group order:** 338 → 339. **338 is scope and copy** — how the money splits is settled.
+- **Last completed:** **338 — returns-scope-and-copy**.
+- **Next:** specs/339-customers-and-returns-close.md
+- **Group order:** 339 closes the phase.
 - **PRINCIPLE:** one net balance — udhaar or advance, never both; colours by computed style. The customer is extended, never duplicated.
 - **BRANCH RULE:** switch to the spec's own branch BEFORE any commit. Numbering is continuous.
 - **After this:** Recent Sales → Settings → Day-close → Accounting → Prints → Dashboard → audits. Held: A4 invoice, receipt.
@@ -17,8 +17,8 @@
 - **Before production:** VAPID keys; blank VENDOR_BOOTSTRAP_*; fresh secrets; MFA_STAGING_RELAX=false; SEED_DEMO and SCREENSHOT_TOKEN unset.
 
 ### Recent steps
+- **338 — returns-scope-and-copy** — DONE (2026-08-22) — the window is a sale rule, and every footer says Confirm.
 - **337 — returns-mobile-ux** — DONE (2026-08-22) — back walks the steps, and the phone has one picker.
 - **336 — sale-return-waterfall** — DONE (2026-08-22) — a refund clears the udhaar first, the cashier settles the rest.
-- **335 — customers-merge-and-statement** — DONE (2026-08-22) — duplicates join into one, and the account prints.
 
 > Older steps in PROGRESS-HISTORY.md
