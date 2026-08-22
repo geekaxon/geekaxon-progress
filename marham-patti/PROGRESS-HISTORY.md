@@ -21494,3 +21494,167 @@ The record's ledger is 107's, read and lightly restyled — its rebuild (tabs, s
 Payments) is **334**. Merge two customers (mockup D/H) and the A4 statement (G/K) are later steps in
 the group. Vendor surfaces untouched.
 
+
+---
+
+## 334 — customers-ledger — DONE (2026-08-22)
+
+**Branch:** `feature/334-customers-ledger` (WORK TYPE: FEATURE). Spec: `specs/334-customers-ledger.md`.
+No CODEREF covers 334 (the set stops at 113–121).
+
+### Schema — checked first, as the spec asks; NOTHING ADDED
+
+`customers` (98) and `customer_payments` (98 §2) already exist and are both force-RLS'd
+(20260721 / 20260722); 333 added `customers.deactivated_at`. The customer ledger already existed
+in full — `buildCustomerLedger` / `customerSummary` in `@mp/shared`, `assembleCustomerLedger` in
+the service. **So this step adds no table, no column and no migration, and therefore opens no new
+RLS surface.** The refund (§2) is written as a NEGATIVE `customer_payments` row, which is the
+shape 314 §5 settled for the supplier half and needs neither a column nor a second table.
+
+### §1 — the drawer, out of the existing components
+
+`CustomerRecord` in `CustomersClient.tsx` is rebuilt (333 left 107's flat `<li>` list in place and
+said 334 owned it). The spec forbids parallel components by name, so:
+
+* **Simple/Pro** — `useLedgerModePref(LIST_KEY, 'simple')`, 316's per-user `mp.datalist.*` store,
+  and the control is `<LedgerModeSwitch>`.
+* **Amount cell** — 330's classes through `<LedgerAmountCell>` / `<LedgerAmountText>`.
+* **Row handler** — 305's `rowOpenProps` on the ledger table, the phone ledger list and the Sales
+  tab; a row with no record (`OPENING`, `PAYMENT`, `REFUND`) is `disabled`, not a dead target.
+* **Realtime** — unchanged and already both scopes (`customer.updated` + `customer.balance.updated`).
+
+New shared file `apps/web/components/pharmacy/LedgerKit.tsx`. It holds `ledgerDirectionClass`,
+`ledgerColumnClass`, `ledgerSignedReading`, `LedgerAmountCell`, `LedgerAmountText` and
+`LedgerModeSwitch`. **`SuppliersClient` keeps `directionClass`, `signedReading` and
+`LedgerViewSwitch` under their existing names and signatures and delegates to the kit** — the
+314/319/324/328/330 suites grep those literals and all of them still pass unchanged.
+
+Header: `.balhead` + `.udhfacts` + `.credgauge` reused from 333. An advance is success-toned and
+reads `Paid ahead <date>`; a baqaya names `Oldest unpaid`, resolved SERVER-side as the first row
+with `debit > 0 && balance > 0`, so the header and the first unpaid row cannot name two days.
+
+Tabs: **Ledger · Sales · Payments**, counts in the labels folded from the same arrays the panels
+render. The spec says "Sales"; the mockups head the same tab "Purchases" (the customer's side of
+the counter) — the spec's word is used and the mockup's content is drawn. Newest first on all
+three; `buildCustomerLedger` still folds oldest-first (the running balance depends on it) and the
+display reverses a COPY.
+
+### §1 — the colour mapping, recorded
+
+`debit` (`amt-debit` / `led-debit`) → `--warning`; `credit` (`amt-credit` / `led-credit`) →
+`--success`; balance (`led-run`) → `--text-primary`, white in body and closing row alike.
+`customer-desktop.html` declares those three values verbatim, and `.mp-pur2` — the scope 330's
+block is written against — has been on this page since 333. **So this screen needed no colour
+block of its own: 330's IS the mockup's.** Acceptance is computed styles through the real chain
+(`.mp-pur2` › `.pdrawer__body` › `.dtbl.dtbl--fit` › `.dtbl__scroll` › table › tbody › td) using
+283's cascade reader, per 330's finding that a `toContain` on a losing rule is what passed for
+three failed attempts.
+
+Four CSS additions only: `.ledtag--return` (accent — the customer book has a third movement the
+supplier book never had), `.paychips` inside a dialog/sheet (the class existed twice, under
+`.paymod` and `.mp-mobile`, and Receive payment is neither), `.field__help.is-danger`, and the
+column budgets for the two new tabs.
+
+### §2 — money in and out
+
+`<RecordCustomerPayment>` replaces the four bare fields the drawer inlined. It mounts 329's
+`<PayAcctFields>` (`.payacct` — Account required, Reference optional) and the kit's
+`<QuickAmounts>`; the pills offer the balance and the round notes below it, never more than is
+owed. Attribution is `personCredit` → `Full Name (Role)` (317 §4).
+
+**Refund.** Offered only when an advance is held (`customerCanRefund`, the 319 §1 state rule),
+capped at it by `customerRefundError` — the same shared predicate the server refuses on, so Save
+is disabled exactly when a POST would 400. **No advance leg and no split**: money to the customer
+cannot be funded from the advance it is paying back (328 §3's rule, this side). Stored as a
+negative `CustomerPayment`; `buildCustomerLedger` reads it back as kind `REFUND` with
+`debit = -amount`. `balance + debit − credit` makes that byte-identical to the old
+`credit = -amount` — only the word changes.
+
+**One net balance.** `netCustomerBalance` + `violatesOneNetBalance` in `@mp/shared`; the posting
+path nets and then ASSERTS on the result. It can only fire if a future money stream folds the two
+sides separately, which is the mistake worth failing loudly on. The guard test proves Rs 5,000
+against Rs 3,000 owed leaves ONE balance of −2,000 and never "3,000 due AND 5,000 advance".
+
+### §1 — the API
+
+`CustomerLedgerRowView` gains `id`, `invoiceNo`, `itemCount`, `method`, `accountName`,
+`reference`, `byName`, `byRole`. **The old `label` was `reference ?? kind` — i.e. the SALE'S
+CUID** on every charge row, which standing rule 7 and 270 §2 both forbid. It is now the invoice
+number (`formatSaleNumber`) or the plain word, and the cuid moves to `id`, which is what the row
+OPENS with (`/pharmacy/recent-sales?sale=<id>`). A stored payment reference is passed through
+`isInternalReference` as the second net.
+
+`CustomerLedgerView` gains `sales` (every sale on the tab — cash ones included; a book showing
+only the unpaid half disagrees with the receipt in the customer's hand), `payments` (a FILTER of
+`entries`, never a second read), `oldestUnpaidAt` and `lifetimeSales`.
+
+New repo method `listCustomerSales` — one `findMany` plus one grouped `saleItem.groupBy` for the
+line counts, rather than N reads for N sales (228 §1's payload rule, one table down). Fake repo
+mirrors it; the fake's `listCustomerPayments` now also carries `accountId`, which it had been
+dropping.
+
+### §3 — the limit warns, never blocks
+
+Both places already existed and are verified rather than rebuilt: the POS `credblk` fires
+`over` / `overnow` on the composed credit amount and states limit, outstanding, headroom and what
+is going on the tab (four figures, not an adjective), and `checkCreditLimit`'s own contract says
+it never blocks; the edit form's `limitBelowBalance` (333) states both numbers under the field and
+Save is gated on name and phone only.
+
+### Decisions recorded
+
+1. **No range control on the drawer.** The mockup draws "Last 90 days"; §1 does not ask for it and
+   the search covers what the rows draw. Left for a later polish rather than half-built.
+2. **`SUPPLIER_TAB_PAGE_SIZE` reused** rather than a `CUSTOMER_TAB_PAGE_SIZE` added — "how tall is
+   a drawer tab" is one fact, and two constants for it drift.
+3. **Sale returns are not a ledger kind yet.** The mockup shows `RET-S-1176` as a credit row; sale
+   returns do not currently post to the customer ledger and making them do so is a MONEY change —
+   336 (sale-return-waterfall) owns it. Nothing was invented here.
+4. The Balance column prints `− Rs 2,000.00` for an advance rather than the word "Advance": the
+   column is one signed number and two grammars in one column is worse than a sign.
+
+### i18n
+
+39 keys added to `en.json` and `ur.json` (`pcusTab*`, `pcusLed*`, `pcusReceive*`, `pcusRefund*`,
+`pcusDir*`, the two new Sales columns). Both files stayed key-for-key identical.
+
+### Gates
+
+* `pnpm lint` — clean (eslint + design-drift + token-integrity + tenant checks all green).
+* `pnpm typecheck` — clean across all 31 tasks.
+* `apps/api/src/pharmacy/customers-ledger-334.spec.ts` — 17 tests, green.
+* `packages/ui/src/lib/customers-ledger-334.spec.tsx` — 24 tests, green (7 of them computed-style
+  colour verdicts through the real cascade).
+* `pnpm test:unit` / `pnpm build` not run per the standing rule; the controller runs the full gates.
+
+### Files
+
+`packages/shared/src/pharmacy-customers.ts`, `apps/api/src/pharmacy/{pharmacy.service.ts,
+pharmacy.dto.ts, pharmacy.repositories.ts, __fakes__.ts, customers-ledger-334.spec.ts}`,
+`apps/web/app/(app)/pharmacy/customers/CustomersClient.tsx`,
+`apps/web/app/(app)/pharmacy/suppliers/SuppliersClient.tsx`,
+`apps/web/components/pharmacy/{LedgerKit.tsx, RecordCustomerPayment.tsx}`,
+`apps/web/app/globals.css`, `packages/i18n/src/messages/{en,ur}.json`,
+`packages/ui/src/lib/customers-ledger-334.spec.tsx`, `PROGRESS.md`, `PROGRESS-HISTORY.md`.
+
+#### 334 — amendments made during the step (recorded, not hidden)
+
+1. **Decision 4 above is REVERSED.** The Balance column first printed `− Rs 2,000.00` on the
+   supplier ledger's `moneySigned` pattern. 227 §2.2 had already settled the opposite for the
+   CUSTOMER book — list, header, facts row and the running balance all name an advance rather
+   than signing it — and its suite says so explicitly. A minus in front of a customer's balance
+   reads as a debt to the person standing at the counter, which is the confusion the word exists
+   to prevent. The column now prints `Advance Rs 2,000` through one `balanceText(lang, n)` rule.
+   The CELL is unchanged (`led-run`, white in every state), so no colour verdict moved.
+2. **Five older suites were updated where the rule they measure MOVED, never where it changed.**
+   319 §1, 324 §2, 328 §1.1 and 330 §1.4/§3 asserted on the *bodies* of `directionClass` and
+   `signedReading` inside `SuppliersClient`; those bodies are now the shared `<LedgerKit>`'s and
+   the functions delegate. Each assertion now checks the delegation AND the one implementation
+   where it lives, which is what "one function decides" was always claiming. 227's
+   `customer-advance-balance` suite was updated in three places: the payment preview moved into
+   `<RecordCustomerPayment>` (same arithmetic, `round2` being `Math.round(x*100)/100`), the
+   balance ternary became `balanceText`, and `CustomerLedgerKind` gained `REFUND` — which does not
+   break 227's "no new movement type" rule, because a refund is the negative half of the payment
+   stream that was already there, not a fourth stream. No assertion was deleted or weakened.
+3. **Verification run:** `packages/ui` — 155 suites / 4057 tests; `apps/api/src/pharmacy` — full
+   module. Both green after the amendments. `pnpm lint` and `pnpm typecheck` clean.
