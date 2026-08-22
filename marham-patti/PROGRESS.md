@@ -7,8 +7,8 @@
 ## Current Status
 - **Project:** Marham Patti — multi-tenant white-label healthcare platform.
 - **Phase:** **PHASE 36** — Customers and the returns close.
-- **Last completed:** **334 — customers-ledger**.
-- **Next:** specs/335-customers-merge-and-statement.md
+- **Last completed:** **335 — customers-merge-and-statement**.
+- **Next:** specs/336-sale-return-waterfall.md
 - **Group order:** 334 → 335 → 336 → 337 → 338 → 339. The customer entity is extended, never duplicated.
 - **336 moves money** — one-net-balance guard every case; re-read the supplier desk's advance draw-down.
 - **PRINCIPLE:** one net balance — udhaar or advance, never both. Colours by computed style.
@@ -18,8 +18,8 @@
 - **Before production:** VAPID keys; blank VENDOR_BOOTSTRAP_*; fresh secrets; MFA_STAGING_RELAX=false; SEED_DEMO and SCREENSHOT_TOKEN unset.
 
 ### Recent steps
+- **335 — customers-merge-and-statement** — DONE (2026-08-22) — duplicates join into one, and the account prints.
 - **334 — customers-ledger** — DONE (2026-08-22) — the customer's book, and an advance can be handed back.
 - **333 — customers-core** — DONE (2026-08-22) — the register, and an account is switched off, never deleted.
-- **332 — new-purchase-payment-behaviour** — DONE (2026-08-22) — the payment box fills and caps itself.
 
 > Older steps in PROGRESS-HISTORY.md

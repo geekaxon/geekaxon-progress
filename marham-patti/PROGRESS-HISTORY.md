@@ -21658,3 +21658,38 @@ pharmacy.dto.ts, pharmacy.repositories.ts, __fakes__.ts, customers-ledger-334.sp
    stream that was already there, not a fourth stream. No assertion was deleted or weakened.
 3. **Verification run:** `packages/ui` — 155 suites / 4057 tests; `apps/api/src/pharmacy` — full
    module. Both green after the amendments. `pnpm lint` and `pnpm typecheck` clean.
+
+## 335 — customers-merge-and-statement — DONE (2026-08-22)
+
+**Branch:** `feature/335-customers-merge-and-statement` (from the 334 head). **Spec:** `/specs/335-customers-merge-and-statement.md`.
+**Schema:** none — the spec said "none expected, check first" and the check held: a merge repoints references and the tombstone is written into the existing `notes` column. No migration, RLS unchanged.
+
+### §1 Merge
+- **Shared math (`packages/shared/src/pharmacy-customers.ts`):** `customerMergePreview` (netted balance, what moves, the surviving limit, which of the four details differ, "both carry a balance"), `customerMergedNote` / `customerAbsorbedNote` / `readCustomerMergedInto` (the tombstone and its one reader), `customerMergeRefusal` (`self` | `merged`). The netting is `netCustomerBalance` — the very function a payment posts through — so a merge cannot produce a customer who owes and is owed at once; `violatesOneNetBalance` is asserted on the result in the service.
+- **API:** `PharmacyService.mergeCustomers(tenantId, keepId, closeId)` re-reads BOTH books server-side, refuses self-merge and an already-merged record by name, nets, then calls the new repo `mergeCustomers` — ONE transaction that `updateMany`s `sale`, `heldSale`, `customerPayment` and `saleReturn` onto the survivor, adds the closed record's `openingBalance` to the survivor's and zeroes it, and closes the absorbed record (`active:false`, `deactivatedAt`, tombstone note). New endpoint `POST /pharmacy/customers/:id/merge` (`@Audited pharmacy.customer.merge`, `pharmacy.sell`), DTO `parseMergeCustomer`. Realtime: `customer.updated` for both rows + `customer.balance.updated` for the survivor, so an open POS picker loses the closed record without a refresh.
+- **Decision — the opening balance is the one thing that cannot repoint.** It is a column on the customer row, not a movement, so the two seeds are summed onto the survivor and the closed one is zeroed. That is what makes the survivor's ledger close at exactly the sum of the two books (guard-tested).
+- **Decision — no `altPhone` column.** The mockup's "kept as a second number" is honoured without schema: the closed record keeps its phone and stays searchable (`includeInactive`), and the survivor's notes gain `Merged in <name> (<phone>)`. The confirm step states this in those words rather than promising picker search by the old number.
+- **Web:** new `components/pharmacy/MergeCustomers.tsx` — three steps (candidate list, never a typed name → side-by-side comparison with the radio in the column head → the consequence in sentences over an acknowledgement that arms a destructive button) + a done state. Opened from a new row in the drawer's "More" block. A merged-away record shows a `Merged` pill in the register (one shared `standingWord`) and a tombstone bar in its drawer, and is not offered the merge row again.
+- **Decision — the phone uses the shared sheet, not the mockup's `.mfs` full-screen flow.** The sheet already brings grip, drag-to-close, device-back and one dismissal; a second surface family for one action is what the standing rule forbids. The step rail rides at the top of the sheet body (the sheet has no `headExtra` slot); the comparison collapses to stacked cards under 720px.
+
+### §2 Statement
+- **Shared:** `customerStatementRange` (this month / last 3 months / all time, whole UTC days) and `buildCustomerStatement`, generic over the row so the drawer's already-resolved paperwork survives the window. Opening = the running balance stamped on the last row BEFORE the range; closing = the one on the last row inside it. Nothing is re-added, so `opening + Σ(debit − credit) === closing` holds by construction.
+- **Thermal:** `@mp/escpos` gains `CustomerStatementDoc` + `renderCustomerStatement` + its labels; `print-document.ts` gains a `statement` branch on the ONE `PrintableDocument` union (no screen imports a renderer).
+- **Web:** new `components/pharmacy/CustomerStatement.tsx` — the shared modal shell (320 §3), the range chips above the paper, the A4 sheet from the shared print kit over `useBrand()` (letterhead, footer, `Powered by <appName>` only where the tenant keeps the mark), Print A4 via the browser dialog on `.mp-print-surface`, Print slip via `usePrintDocument`, and Save PDF as a real download through `renderSheetsToPdf`/`downloadPdf` (279 §3 — never a Save button that opens the print dialog). The dialogue writes nothing: no POST, no `apiFetch`, so a failed print leaves everything untouched.
+
+### §3 Attribution
+`Full Name (Role)` was already the ledger and payments rendering (`personCredit`); the new surfaces carry no person string of their own, and the 335 suite greps the customer surfaces for a `·` attribution join and for an email and finds neither.
+
+### Other
+- `CustomerSummary` gains `paymentCount` and `CustomerView` gains `createdAt` — two COUNTS/FACTS, no money — so the merge comparison reads off the register the screen already holds instead of a preview round-trip.
+- i18n: 77 keys added to en + ur (parity kept; no "outstanding", no "credit limit" — 316 §3).
+- CSS: `.mgsteps/.mgstep`, `.mgchosen`, `.mgcands/.custopt`, `.mgcmp/.mgdiff`, `.mgsum`, `.mgack`, `.mgdone`, `.prevbar/.prevdesk` appended to `globals.css`, all scoped under `.mp-pur2` so the desk dialog and the phone sheet are dressed by one rule. The radio and the checkbox are the kit's `<Radio>`/`<Checkbox>`.
+
+### Tests
+- `apps/api/src/pharmacy/customers-merge-335.spec.ts` — the calculator test applied to a merge (survivor closes at the sum of both), the opening-balance carry, an advance netting against udhaar, held carts and returns repointing, the tombstone (off, dated, named, no raw id, still present), absent from the picker but present with `includeInactive`, the two refusals, the preview's figures, and the statement's window arithmetic over four ranges + `byte-identical` folds.
+- `packages/ui/src/lib/customers-merge-and-statement-335.spec.tsx` — the sharing/behaviour greps: three steps, list-not-typed, ack arms the button, one audited endpoint, four `updateMany`s in one transaction, no `customer.delete`, the print kit + the one print entry point, Save-PDF-is-a-download, no writes in the statement, attribution, every drawn class present in `globals.css`, every key in both catalogues.
+
+### Gates
+`pnpm lint` clean (one pre-existing unused-eslint-disable warning in `doctor-portal.repositories.ts`, untouched). `pnpm typecheck` clean across all 31 tasks. Per the standing rules, `test:unit`/`e2e`/`build` were left to the controller.
+
+**WORK TYPE: FEATURE (branch feature/335-customers-merge-and-statement)**
