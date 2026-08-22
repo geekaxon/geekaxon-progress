@@ -21693,3 +21693,42 @@ pharmacy.dto.ts, pharmacy.repositories.ts, __fakes__.ts, customers-ledger-334.sp
 `pnpm lint` clean (one pre-existing unused-eslint-disable warning in `doctor-portal.repositories.ts`, untouched). `pnpm typecheck` clean across all 31 tasks. Per the standing rules, `test:unit`/`e2e`/`build` were left to the controller.
 
 **WORK TYPE: FEATURE (branch feature/335-customers-merge-and-statement)**
+
+## 336 — sale-return-waterfall — DONE (2026-08-22)
+
+**Branch:** `feature/336-sale-return-waterfall` (FEATURE). **Spec:** `specs/336-sale-return-waterfall.md`. No CODEREF exists for this range. **Schema:** none — checked `SaleReturn` first, and 334's ledger carries the postings exactly as the spec predicted. **RLS:** unchanged.
+
+### The decision the step turns on
+The owner's waterfall is *not* a fifth refund method. Udhaar adjusts FIRST and AUTOMATICALLY, capped at what is owed, and the only thing the cashier decides is where the REMAINDER goes: Cash · Card · Online · Add to advance. That is modelled as a new vocabulary in `@mp/shared` — `RefundSettlementLit` — which is deliberately a different type from 290's `RefundMethodLit`: `CREDIT` ("adjust against udhaar") is no longer an answer to any question the screen asks, and `ADVANCE` is a new one.
+
+`saleRefundWaterfall(refundDue, outstanding, settlement)` is the single fold. It returns `udhaarBefore / udhaarAdjusted / remaining / settlement / ledgerCredit / paidOut / balanceAfter / needsAccount`. Two conservation properties hold on every input and are asserted as such: `udhaarAdjusted + remaining === refundDue` and `ledgerCredit + paidOut === refundDue`.
+
+### Why no schema column was needed
+The split is not stored, it is RE-DERIVED at release from the customer's live balance. That is the correct behaviour, not a shortcut: a return raised at 4pm in a tenant that requires approval and released at 6pm must settle against what the customer owes at 6pm. The durable record is 334's ledger posting (`reference = return:<id>`) plus the header's frozen `refundMethod` / `refundAccountId` / `refundReference`, which together say where the remainder went. `refundSettlementToApi` collapses the four settlements onto 108's frozen three (ADVANCE → CREDIT, ONLINE → CARD, and anything with nothing remaining → CREDIT, so a Rs 0 cash refund never lands on a day-close); `refundSettlementFromApi` reads it back, mapping a stray ONLINE to CARD rather than to ADVANCE, because reading an unrecognised value as "the ledger took it" would credit a customer for money that left through a bank.
+
+### Service (`releaseSaleReturn`)
+- Reads the customer and their live `customerOutstanding`, folds the waterfall, and asserts 334 §2's one-net-balance on `netCustomerBalance` BEFORE writing anything (it cannot fire on this arithmetic; it is the guard against the day a second money stream is added here).
+- ONE ledger posting of `water.ledgerCredit` — the udhaar leg, plus the remainder when the leg is ADVANCE. A CREDIT refund of the whole total is byte-identical to what 108 always wrote, so the pre-existing "credit-note ages the ledger" behaviour is unchanged to the paisa.
+- **Money defect fixed in passing:** the day-close now accrues `water.paidOut`, not `header.refundTotal`. Previously a Rs 2,100 cash refund to a customer owing Rs 1,300 accrued the whole Rs 2,100 while only Rs 800 left the drawer — the counter would have been short by exactly the udhaar at every close.
+- 108's return logic (lines, caps, restock, expiry policy, sale status, idempotency) is untouched.
+
+### Screens
+`NewSaleReturnClient.tsx`: state is now `settlement` (four/three from `refundSettlementsFor`), and `method: RefundMethodLit` is DERIVED from it plus `water.remaining` — kept because the POST body, `methodConsequenceKey` and the day-close all read it, and because 293/302/310's frozen source assertions pin those exact lines. Step 3 draws `Refund due → Udhaar adjusted (automatic) → Remaining` from one `<WaterfallRows>` component used at all three call sites (phone totals, desk form card, desk summary). When udhaar swallows the refund whole the select is replaced by a `.fixedval` — there is no question to ask. Card/Online legs now render an Account select (required, pre-selected via `defaultAccountFor`) and an optional Reference, and Confirm is disabled on `accountMissing` — the same predicate the server 400s on. **This closed a live bug: the screen had never sent `refundAccountId`, so any CARD refund was rejected by 313's `assertPaymentAccount`.** The consequence preview is derived by `consequenceLine` + `ledgerLine` from the same fold, so the strings before Confirm are the entries after it.
+
+`NewPurchaseReturnClient.tsx` (§2): verified there is no dropdown and the fixed `Credit note` wording is present. Added the mockup's own `Step 3 · Credit note` card with a read-only `.fixedval` Settlement field — read-only, no behaviour change, and it puts the fixed text where the acceptance criterion looks for it.
+
+CSS: `.totals__row--auto` + `.autotag`, `.totals--inline` and `.fixedval` lifted from the corrected mockup into `globals.css` under `.mp-ret`.
+
+### Judgement call recorded: the restocking fee
+The corrected mockups drop the restocking-fee row from Step 3. The spec's §1 is "locked" and does not list removing it, §3's acceptance never mentions it, and 293's frozen suite asserts `restockingFee: feeAmount` and `restockingFeeFromPct(` in the sale client by source text. Removing it would therefore have broken a frozen Phase-12 suite to satisfy an aside rather than a requirement. **Decision: the fee mechanics stay** (the input, the row — which already renders only when the fee is non-zero — the DTO field and the column), and the waterfall rows were added below it. The default fee percentage is 0, so the mockup's Step 3 is what a default tenant sees. If the owner wants the fee gone, that is its own step and it should also remove the Settings → Returns control.
+
+### Tests
+- `packages/ui/src/lib/sale-return-waterfall-math-336.spec.ts` — the fold: udhaar > refund, udhaar < refund, udhaar == refund, no udhaar, already-in-advance, walk-in, Rs 0 refund, paisa rounding; the one-net-balance guard run over all thirteen case combinations; both conservation properties; the settlement lists and both API mappings incl. round-trip.
+- `apps/api/src/pharmacy/sale-return-waterfall-336.spec.ts` — the postings: the four §1 cases end-to-end over the repo fake, asserting the ledger row, the day-close accrual and `violatesOneNetBalance` on each; `Add to advance` leaving one posting and a negative balance; a CARD leg recording its account and reference; the walk-in refusal of CREDIT; the bank-leg-without-account refusal; and a held return proving the balance is re-read at APPROVAL, not at entry.
+- `packages/ui/src/lib/sale-return-waterfall-336.spec.ts` — source + i18n: the screens read the fold rather than re-deriving it, the service's three postings/accrual/guard lines, the automatic marker, the walk-in alert verbatim (and asserted against the mockup file itself so the two cannot drift), the account/reference wiring, the consequence helpers, the purchase side's fixed text, 108's unchanged POST body, and all 22 new keys in BOTH catalogs.
+
+### i18n
+22 new keys in `en.json` and `ur.json`. `rtnMethodHelp` and `rtnMethodHelpWalkIn` were re-worded to the mockup's own strings ("Cash · Card · Online · Add to advance" / "Cash · Online · Card"); no frozen suite asserts their values.
+
+### Gates
+`pnpm lint` — clean (17/17, includes the web design-drift check). `pnpm typecheck` — clean (31/31). `pnpm test:unit`, `pnpm test:e2e` and `pnpm build` deliberately not run per the standing rules; the controller runs them. Vendor untouched; no secrets; staging only.
