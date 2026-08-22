@@ -21149,3 +21149,144 @@ against the shipped stylesheet and the shipped markup, but a browser confirmatio
 the one acceptance item this session physically could not perform.
 
 **WORK TYPE: FIX (branch fix/330-ledger-colour-source)**
+
+---
+
+## 331 — polish-and-new-purchase-payment (DONE 2026-08-22)
+
+**Branch:** `fix/331-polish-and-new-purchase-payment` (WORK TYPE: FIX). **Spec:** `/specs/331-polish-and-new-purchase-payment.md`.
+**Schema:** none. **RLS/auth/permissions/flags:** unchanged. **Endpoints:** none added or changed. **Presentation only — no money computation moved.**
+
+### §1 The cart calc, trimmed (owner decision)
+`CartCalc` (desk) and `MobileLineCalc` (phone) in `PosClient.tsx` drop the `× qty = total` tail: a detailed line now reads
+`Rs 432 − Rs 32 off + Rs 68 GST = Rs 468` on the desk and `Rs 468` over 326's muted breakdown on the phone. 326's collapse rule now
+takes the WHOLE block — a plain line returns `null` on both surfaces rather than restating a price the unit control already shows.
+**Judgement recorded:** the phone loses its per-line `Rs 936` because the spec's sentence ("ends at the unit figure … both surfaces")
+and its acceptance ("a plain line shows no calc") are surface-agnostic; the row still states its unit price on the unit selector, its
+quantity on the stepper, and the sale's money on `.mtotal`. `posLineCalc`, `lineMoneyOf`, `lineIsDetailed` and `priceBreakdown` are
+untouched, so screen == server == receipt still holds by construction.
+
+### §2 Two margins (owner measurements)
+`.retsum` desk `margin-top:10px`, phone `0`. Declared on the rules that WIN where they apply (330's lesson): the base rule carries
+10px, and both `.mp-pur2 .retsum--m` (0,2,0, later) and `.mp-pur2 .sheet__hd--stack > .retsum` (0,3,0) carry 0 — so neither surface's
+number can be decided by the other's. Asserted through the cascade reader, not by substring.
+
+### §3 The Returns tab row, mobile
+The credit-note amount moves out of `.mledrow__ft` and onto the description line, in front of it
+(`.mledrow__desc--amt`: the figure `flex:none`, the description wrapping). One line saved per row; 328's sign and credit tone
+unchanged; `.mledrow__ft--end` retired with its only user.
+
+### §4 View Ledger opens instantly (the trigger 312 §4 missed)
+The phone's `SupplierSheet` was mounted by `ledger`, so a tap did nothing for the whole round trip. It is mounted by `pending` now —
+the drawer's own 250 §1 / 259 §6 pattern — taking `row: SupplierRow` plus `ledger: LedgerView | null`; identity, terms and balance
+read `ledger?.x ?? row.x`, the tabs fold `allEntries` (`ledger?.entries ?? []`), and the tab panel draws the kit's
+`<Loading><ShimmerRows/></Loading>` instead of an empty state while in flight. The kit owns the 180ms threshold and the stand-down on
+failure; a failed fetch closes the sheet and the screen's error toast stands. Edit is disabled until the book lands.
+
+### §5 New Purchase payment, to the recommitted mockups
+`new-purchase-desktop.html`/`new-purchase-mobile.html` were recommitted with a redesigned payment + summary section. 329's
+`.npbottom` band, `.paycard`, `.pmrow`/`.pmbtn` and the entry's `.entsum` summary are RETIRED (removed, not left beside their
+replacements) in favour of one `.paypanel`: header (cap · advance chip · chosen method), then a grid of `.paypanel__pay`
+(a full-width `.pmseg` segmented control, then the fields that method asks for) and `.paypanel__sum` (`.paysum` — Subtotal ·
+Item discounts · Taxable · Purchase tax · Grand total · Paid · Balance, plus a `.paysum__proof` calculator sentence).
+The panel is its own container, so the two-track grid stacks on the CARD's width (`@container 820px`) and the segments pair below
+470px — no page breakpoint decides this block. The phone gets the same panel at 44px scale (`.paypanel--m`) and its bounded method
+sheet (`.paysel`) is gone; the pinned `.mtotalbar--pay` now READS the paid figure back instead of holding a second money box.
+Shared components by grep: `PayAcctFields` (`.payacct`, 313 §2/323 §2) for Card and Online, `SplitLegs variant="row"` for a split.
+
+**Judgement calls recorded:**
+- The advance's single-tender box is NOT clamped client-side. The mockup's chip says "typing more clamps it back", but a UI max would
+  change what `amountPaid` posts, and the spec's binding constraint is "money computation byte-identical". The chip states the cap and
+  what is left after this payment as a READING; the server's `Math.min(paid, supplierAdvance)` stays the only cap.
+- `.paylabel` and `.payhint` are the POS component's names, declared there only under `.paymod` / `.mp-mobile`. On this panel the desk
+  had no label rule at all and the phone would have inherited the modal's centred sentence, so both are re-declared at `.paypanel`
+  weight, later in the file — the 330 cascade lesson applied before the defect rather than after it.
+- The mockup dresses `.nfield > .input`; the app draws `<MoneyInput>`, so the 44px rule targets `.mp-money__in`, which is the element
+  that actually renders (329's `.pleg .mp-money .input` rules match nothing — noted, left alone as outside this step's target).
+
+### Tests
+New: `packages/ui/src/lib/polish-and-new-purchase-payment-331.spec.tsx` (45 tests) — cascade-read margins and tones, the trimmed cart
+calc, the returns row, the instant sheet, the panel's structure/measurements/shared components, and the byte-identical payload.
+Updated where 331 supersedes an earlier assertion, each named in place: 260 (method control, pinned bar), 264 (money box moved,
+`.entsum` diff entries), 273 (the panel carries the clipped radius), 310/319/324 (`allEntries`), 328 (the amount's new slot),
+329 (panel/segments replace card/pills), r4 suppliers drawer (six busy flags), suppliers-mobile-r2 (`allEntries`).
+
+### i18n
+14 new keys, EN + UR parity: `pdPaymentAndTotals`, `pdPayTotalsLabel`, `pdPayMethodLabel`, `pdPayingNow`, `pdPayApplyingAdvance`,
+`pdPayAdvanceCapped`, `pdPayAdvanceLeft`, `pdPaid`, `pdPaidViaSplit`, `pdPurchaseTax`, `pdEntryItemDiscounts`, `pdEntryTaxable`,
+`pdEntryBalanceDue`, `pdEntryProof`.
+
+### Gates
+`pnpm lint` clean (the one remaining warning is a pre-existing unused eslint-disable in `apps/api`, untouched here) and
+`pnpm typecheck` clean, both run once at the end. `@mp/ui` suite: 153 files / 3917 tests green.
+
+## 332 — new-purchase-payment-behaviour — DONE (2026-08-22)
+
+**Branch:** `feature/332-new-purchase-payment-behaviour` · **WORK TYPE:** FEATURE (+ FIX for §2 and for a
+purchase-path advance bug found while building it) · **Spec:** /specs/332-new-purchase-payment-behaviour.md
+**Schema:** none. **Migrations:** none. **RLS / auth / permissions / flags:** unchanged. **Endpoints:** none added;
+`POST /pharmacy/purchase` takes the same body it already took (`advanceAmount`, `legs`).
+
+### The problem
+New Purchase's payment block made the operator do arithmetic the screen already knew: a supplier holding an
+advance had to be subtracted by hand, a figure over the grand total was silently clamped away, and a figure
+under it left a balance stated only in another column. Three ways for the box to be right and the reader wrong.
+
+### What was built (§1)
+* **`packages/shared/src/purchase-pay-box.ts` (new)** — `purchasePayBox()` is the whole arithmetic of the box,
+  pure and shared by both tiers: applied advance, what the method is then asked for, the autofill, the cap, the
+  clamped `paid`, the surplus and the baqaya. It guarantees `advance + tender + baqaya − extra === grandTotal`
+  for every input, which is the calculator test written as an identity rather than described. Plus
+  `purchaseQuickAmounts()` — the round notes above the exact figure (ladder 1k/2k/5k/10k/25k/50k/100k, first
+  three distinct), deliberately not fixed denominations: Rs 500 beside a Rs 56,636 total is a pill nobody presses.
+* **`packages/ui/src/components/quick-amounts.tsx` (new)** — `<QuickAmounts>`, the POS Take Payment quick-tender
+  row extracted so New Purchase MOUNTS it rather than rebuilding it (the spec's "grep proves it"). The POS's DOM
+  is unchanged: the component's default container is `.paychips` and its buttons are the same plain buttons.
+  It decides no amounts — that is the caller's arithmetic, on the caller's bill.
+* **`PharmacyPurchaseClient.tsx`** — `.advline` (advance applied, with `×` / `Use it`), `.paypills`, `.payrecon`
+  (Grand total → advance → paying now → the one outcome row) and `.payout` (the plain sentence). One
+  `purchasePayment()` now produces the reading AND the payload for both tiers; the desk and the phone each had
+  their own copy of those six lines before, which is two chances to disagree about money.
+* **`payTouched`** — an untouched box shows its own autofill and follows the total while lines are still being
+  typed; a box somebody CLEARED is a deliberate Rs 0. Collapsing the two would re-fill a figure under the
+  operator's cursor. It resets only where the QUESTION changes (a different pot, or the advance coming off).
+* **CSS** measured off the recommitted mockups; **i18n** 26 new keys, EN + UR, placeholders matched.
+
+### The judgement calls (recorded, not escalated)
+1. **An overpayment posts as 323 §1 legs; an applied advance posts as 318 §2's `advanceAmount`.** No new wire
+   field. `purchasePaidAmount` clamps the DOCUMENT's paid to the grand total — an invoice never claims to have
+   taken more than it cost — so the single-tender payload has nowhere to carry a surplus and would drop it in
+   silence, which is exactly the defect §1.4 names. The legs branch writes each leg at its full amount, so the
+   extra lands on the supplier's ledger as a negative balance, which is what an advance IS (317/310).
+2. **A DEFECT FOUND AND FIXED: spending a supplier's advance at purchase entry had never worked.** 318 §2 read
+   the advance cap in the payment block, which runs after the purchase order exists — so the ledger it measured
+   already carried this invoice's charge, the advance had been netted away by it, the cap came back Rs 0 and
+   every attempt was refused with *"…is not holding an advance"*. Nothing in the suite exercised the path end to
+   end. The cap is now read BEFORE the charge is written (`advanceHeldBefore`, top of `createPurchase`).
+3. **And the draw-down ROW is gone with it, on the purchase path only.** An advance in this system is the ledger
+   run negative, so the moment a Rs 10,000 charge lands on a book standing at −500 the advance has been applied
+   by arithmetic; a `CREDIT` row on top of that is the same 500 counted twice and would leave a settled invoice
+   beside a supplier balance still showing it owing. `paidByTender` already carries only the remainder, so the
+   money that actually moved is recorded in full and the two books agree to the paisa — PROGRESS.md's one-net-
+   balance principle. **`recordSupplierPayment` is deliberately UNTOUCHED**: that surface settles invoices already
+   on the book, 323's suite pins its row, and 336's waterfall is where its arithmetic is reviewed. Flagged in
+   PROGRESS.md so 336 re-reads it.
+
+### §2 — the Returns tab's phone row
+331 §3 put the amount in FRONT of the description, which aligned every figure under the return NUMBER (a word),
+so the column had no edge to read down. Owner clarification: description left, amount right, under the date.
+`justify-content:space-between` on `.mledrow__desc--amt`; still one line per row; 328's sign and credit tone
+untouched. Superseded assertions in the 328 and 331 specs were corrected in place rather than left to fail.
+
+### Tests
+* `packages/ui/src/lib/new-purchase-payment-behaviour-332.spec.tsx` — the identity across 12 named states, the
+  three fill-and-cap behaviours, the quick ladder, reuse-by-grep, the outcome inks by CASCADE (330's rule), §2's
+  row order and edges, EN/UR parity + placeholder parity for all 26 keys.
+* `apps/api/src/pharmacy/new-purchase-payment-behaviour-332.spec.ts` — over/under/advance posted end to end and
+  checked against the SUPPLIER LEDGER, plus the cap-before-the-charge guard and the frozen single-tender path.
+* Superseded assertions updated: 260, 296, 323, 328, 329, 331, pos-credit-auto-only.
+
+### Gates
+`pnpm lint` clean (one pre-existing unrelated @mp/api warning). `pnpm typecheck` clean. Ran the affected suites
+directly to verify the money change rather than describe it: `@mp/api` pharmacy 78 suites / 1300 tests green,
+`@mp/ui` 154 suites / 4033 tests green. Vendor untouched; no secrets; no schema.
