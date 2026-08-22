@@ -21732,3 +21732,70 @@ The corrected mockups drop the restocking-fee row from Step 3. The spec's §1 is
 
 ### Gates
 `pnpm lint` — clean (17/17, includes the web design-drift check). `pnpm typecheck` — clean (31/31). `pnpm test:unit`, `pnpm test:e2e` and `pnpm build` deliberately not run per the standing rules; the controller runs them. Vendor untouched; no secrets; staging only.
+
+## 337 — returns-mobile-ux — DONE (2026-08-22)
+
+**Branch:** `fix/337-returns-mobile-ux`. Spec: `/specs/337-returns-mobile-ux.md`. No CODEREF in range.
+**Schema:** none. **RLS:** unchanged. **API:** unchanged — presentation and navigation only; 336's
+settlement, its waterfall and both POST bodies are untouched (293 §5 and 336's suites still green).
+
+### §1 — the device back button walks the steps
+The flow rendered ONE `StepBackLayer` keyed on the step number, so every advance DESTROYED a
+history entry and MINTED another: the unmount queued `history.back()` (async) and the mount pushed
+a fresh entry before that back had run. It happened to come out right and it was a race — 312 §3's
+lesson in reverse. Replaced with `ReturnStepLayers` (`apps/web/components/pharmacy/MobileReturnFlow.tsx`),
+which STACKS one fixed-key layer per step walked past (`key="step-2"`, `key="step-3"`): advancing
+only ever adds, a popstate pops exactly the top one, and unmounting a layer the pop already took is
+a no-op in `closeLayer`. Step 1 mounts none.
+
+**And the walk no longer costs the operator their decisions.** `stepBack` (2 → 1) drops the sale,
+which is right — but it also wiped `drafts`. Both flows now hold them in a `keptLines` ref and
+`pick` seeds from `restore ?? keptLines.current`; keyed by `saleItemId`/`purchaseItemId`, so
+re-entering a DIFFERENT document matches nothing and starts blank. `discardDraft` clears the ref.
+Adjacent defect fixed while here: `loadReturnDraft` never read `reasonId` back (added at 316), so a
+restored draft silently reverted every line to the first option in the shop's list.
+
+### §2 — the collapsed line card
+Collapsed state showed either "Sold 4 strips · Rs 310.00 each" or "Sold 4 · 1 already returned" —
+never the figure the selection is actually made on. Both flows now state the three, always:
+`rtnMSoldBackLeft` / `rtnMReceivedBackLeft` ("Sold {sold} · {back} returned · {left} available"),
+EN + UR. `rtnMSoldEach`, `rtnMSoldAlready`, `rtnMBoughtEach` deleted from both catalogues (nothing
+else referenced them). The tick stays in the same header. The toggle patch still writes only
+`on` + a re-clamped `qty`, so a quantity/reason/note entered survives collapsing — pinned by test.
+
+### §3 — step 3 lists the items
+Both flows drew the selected-lines list BELOW the settlement, so the last thing read before Confirm
+was a figure whose lines had scrolled away. Moved above the totals block on both — "Going back to
+stock" / "Leaving stock", `<MobileReturnLine>` per chosen line, as the desk keeps its lines table on
+screen beside the refund card.
+
+### §4 — the reason sheet is the unit sheet
+The returns reason picker was a second implementation of the POS unit sheet: its own `.mfeed`/`.mrow`
+rows and a `Cancel`/`Apply` footer the owner had to press after the tap that had already chosen.
+Extracted the POS sheet's own list into the kit as `SheetOptionList` + `SheetOption`
+(`packages/ui/src/components/sheet-options.tsx`, `.sheet__body munits` / `.munitopt`, listbox +
+options, tick on the selection). POS now renders it; both reason pickers render it; the tap commits
+AND closes; no footer anywhere. `munitopt` no longer appears in any app screen — grep proves it.
+**Decision:** the note an option demands moved OUT of the sheet and ONTO the card, under the reason
+it belongs to — a field inside a list whose every row closes the sheet is unreachable. It keeps its
+required mark and still drives `invalid` → `noteMissing`, so Confirm is blocked exactly as before.
+
+### Files
+- `apps/web/components/pharmacy/MobileReturnFlow.tsx` — `ReturnStepLayers`; stale `key={step}` note removed.
+- `apps/web/app/(app)/pharmacy/returns/new-sale-return/NewSaleReturnClient.tsx` — all four sections.
+- `apps/web/app/(app)/pharmacy/returns/new-purchase-return/NewPurchaseReturnClient.tsx` — all four.
+- `apps/web/app/(app)/pharmacy/returns/return-draft.ts` — `reasonId` read back.
+- `apps/web/app/(app)/pharmacy/pos/PosClient.tsx` — unit sheet renders the kit's option list.
+- `packages/ui/src/components/sheet-options.tsx` (new), `packages/ui/src/index.ts`.
+- `packages/i18n/src/messages/{en,ur}.json` — 2 keys added, 3 removed; parity held.
+- `packages/ui/src/lib/returns-mobile-ux-337.spec.tsx` (new) — 19 tests, incl. a rendered
+  layer-stack walk (advance pushes and consumes nothing; each popstate pops exactly one).
+
+### Gates
+`pnpm lint` clean (one pre-existing warning in `apps/api/src/doctor-portal/doctor-portal.repositories.ts`,
+untouched). `pnpm typecheck` clean, 31/31. Targeted jest on the affected suites: 337 (19), plus
+293/302/304/308/309/336 and the POS/mobile-picker/identity/realtime families — 861 tests, all green.
+Full `pnpm test:unit` is the controller's gate. §5 asks for a real device; the suite is the guard
+against silent regression, not the acceptance.
+
+WORK TYPE: FIX (branch fix/337-returns-mobile-ux)
