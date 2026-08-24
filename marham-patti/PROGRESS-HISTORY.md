@@ -21874,3 +21874,128 @@ the unit and e2e suites are the controller's to run. Design self-check by inspec
 purchase step-1 chrome falls back to its 117px variant with the note gone, so no blank band is
 reserved; the received-on tile is now caption+value like the three beside it; the list card's
 expired line stays inside one ellipsed row and one pill.
+
+---
+
+## 339 — customers-and-returns-close — DONE (2026-08-22)
+
+**Branch:** `fix/339-customers-and-returns-close` (from the 338 head). **Work type:** FIX. **Schema:** none. **RLS:** unchanged. **Checkpoint:** block-final.
+
+### What the acceptance pass found, and what it cost to fix
+
+The spec framed §1 as three scenarios to *exercise*. Two of them (the sale return against a deactivated
+customer's invoice; the merge tombstone answering from the survivor) were already true by construction and
+are now guarded by tests. The first one was not, and it was a money defect:
+
+**A resumed hold lost its customer.** `resumeHeld` set `customerId` from the hold payload, but the counter's
+customer list is a CACHE of the rows it has met (228 §1) and the picker's pages deliberately exclude
+switched-off accounts (333 §3). So a hold parked at the next till, or one whose customer had since been
+deactivated, resumed with `selectedCustomer === null`: the cart read "Walk-in", the payment surface refused
+the tab, and an udhaar sale committed against nobody. Fixed with `loadHoldCustomer` — an `includeInactive=1`
+picker lookup by the hold's own phone/name, folded into the cache before anything renders. A failed lookup
+(offline till) changes nothing; the hold still resumes exactly as before.
+
+The **duplicate-phone offer** carried the same defect through the other door — `useDuplicateCustomer` set an
+id for a customer this till had never met — and now folds the row in first.
+
+### Decisions recorded
+
+1. **The verdict, not a boolean.** `customerOnSaleVerdict({active, resumed})` → `ok | resumed | blocked` in
+   `@mp/shared`. A resumed hold WARNS and completes (the sale was theirs; refusing would only push the
+   cashier into ringing it up as a walk-in); a fresh cart is BLOCKED. Two refusals read differently on
+   screen, and a caller that re-derives which sentence to show eventually shows the wrong one.
+2. **The server is the guard, not the chooser.** 333 §3 made deactivation *visible* by dropping the row from
+   the picker. `commitPosSale` now refuses a fresh cart naming a switched-off customer, in their own name,
+   exempting any cart that carries a `heldSaleId`. The row is reused when the credit path already read it,
+   so this costs a lookup only on a cash sale to a registered customer that is not finishing a hold.
+3. **One attach gate.** `attachCustomer(id)` — desktop chooser, phone picker, `Alt+Shift+C`, duplicate offer.
+   The phone's picker used to `setCustomerId` raw. It does not take the desktop's 294 §6 hand-off to the
+   sale date; that stays a desktop flow.
+4. **`customer.updated` is consumed at the counter now.** 333 §2's own comment claimed a POS with an open
+   picker learns of a deactivation; the event was arriving and being discarded. The cached row is FLAGGED,
+   never dropped — a resumed hold standing on that customer still has to name them. The page-fold comparison
+   gained `active` too, so a missed reactivation event heals on the next picker page.
+5. **A persistent strip, not only a toast.** `.custoff` under the customer field (desktop) and the customer
+   row (phone), warning tone, `role="status"`, disables nothing. A cart can stand at a counter for ten
+   minutes; the toast that named them is long gone.
+6. **§2 verified, not rebuilt.** `limitBelowBalance` in the edit form (334 §3) and the payment panel's
+   `--over` / `--overnow` credit block both ship and neither disables a control. Asserted, untouched.
+7. **284 §3's direct-save block left alone.** `directSaveBlock` refuses an over-limit cart on `F4`/`F6`.
+   That is a shortcut that skips the dialog entirely — it has no warning to show — and the decision is
+   locked from 284. §2's "warns at payment, never blocks" is about the payment surface, which warns.
+
+### The §3 sweep
+
+`Baqaya`, `Udhaar limit` and `Full Name (Role)` grepped across Customers, Merge, Statement, Record-payment,
+Returns and New-sale-return: **zero strays.** Every appearance resolves to the shared catalogue key
+(`pcusColBaqaya`, `pcusCreditLimit`) or the shared formatter (`personCredit` / `<PersonName>`); no `·`
+attribution join, no email on any surface. The standing rules are on Customers surface by surface —
+`useListViewPref` / `usePageSizePref` / `useHiddenColumnsPref` / `useLedgerModePref` from the shared store
+(no bare `localStorage.setItem`), `useDeskLive` + `useLiveStream`, `CustomersSkeleton` on first paint, and
+`rowOpenProps` on all six row shapes. All of it is now a test rather than a claim.
+
+**Deployed-page copy check:** the block has no deploy access from the build session, so "verified on the
+deployed page" was run as a SOURCE + CATALOGUE check instead: every `pcus*` / `rtn*` key the six surfaces
+quote exists in both `en.json` and `ur.json`, and no added string reintroduces "outstanding" or
+"credit limit". No drift found. Recorded here rather than silently narrowed.
+
+### Files
+
+- `packages/shared/src/pharmacy-customers.ts` — `customerOnSaleVerdict`, `canAttachCustomerToSale`.
+- `apps/api/src/pharmacy/pharmacy.service.ts` — the fresh-sale guard in `commitPosSale`.
+- `apps/web/app/(app)/pharmacy/pos/PosClient.tsx` — `customersRef`, `attachCustomer`, `loadHoldCustomer`,
+  the resume warning, `inactiveCustomerNote`, the `CUSTOMER_UPDATED` handler, `offerableCustomers`, the
+  duplicate-offer fold, `active` in the page-fold comparison.
+- `apps/web/app/globals.css` — `.custoff`.
+- `packages/i18n/src/messages/{en,ur}.json` — `pharmacyPos.v339.{resumedInactive,onSaleInactive,cannotAttach}`.
+- `apps/api/src/pharmacy/customers-and-returns-close-339.spec.ts` — 7 tests (the three §1 scenarios end to
+  end, the §2 pair, the verdict, the no-regression case).
+- `packages/ui/src/lib/customers-and-returns-close-339.spec.tsx` — 26 tests (the counter's side, the sweep,
+  the catalogues, the strip's CSS).
+
+### Gates
+
+`pnpm lint` clean (one pre-existing unused-disable warning in `doctor-portal.repositories.ts`, untouched).
+`pnpm typecheck` clean. The two new suites pass (7 + 26); `customers-core-333`, `customer-ledger`,
+`customers-merge-335`, `sale-return-waterfall-336`, `customer-credit-visibility`, `customers-ledger-334`,
+`customers-merge-and-statement-335` and the whole `@mp/i18n` suite re-run green. Vendor untouched.
+
+**PHASE 36 IS CLOSED.** Customers is built and Returns is closed. Next per the standing sequence: Recent
+Sales testing (mounting 304's badge, summary, totals row and returns block on sales) · Settings testing ·
+Day-close (design → build; 313/318's per-account data feeds it) · Accounting · Prints · Dashboard · the
+Pharmacy audit · the whole-app consistency audit. Parked: purchase reasons' trade wording; wired-printing
+helper; thermal logos/QR beyond the receipt bitmap; per-page menu visibility by permission; line-level
+discount at POS. Held for build with mockups committed: the A4 sale invoice and the thermal receipt.
+
+## 340 — new-purchase-payment-polish — DONE (2026-08-24)
+
+**Branch:** `fix/340-new-purchase-payment-polish` (WORK TYPE: FIX). Spec: `/specs/340-new-purchase-payment-polish.md`. No schema, no migration, no RLS change, no API change. Money computation byte-identical — `purchasePayBox` untouched apart from the pill ladder that lives beside it, and the payload's fields (`amountPaid`, `advanceAmount`, `legs`, `payStatus`) are the same on both tiers.
+
+### §1 The pills (`packages/shared/src/purchase-pay-box.ts`, `PharmacyPurchaseClient.tsx`)
+- `Nothing now` → **`Udhaar`** (key renamed `pdPayQuickNothing` → `pdPayQuickUdhaar`, EN "Udhaar" / UR "ادھار"); `= Exact [amount]` → **`Exact`** — the `Equal` icon and the repeated figure are dropped (the figure is in the box directly above the row); the figure survives for a screen reader as the chip's `aria-label`. Order is now `Udhaar` · `Exact` · the amounts.
+- `purchaseQuickAmounts(grandTotal, exact?, count = 3)` REPLACES 332's ladder of round notes above the exact figure. It returns the delivery's own quarter, half and three-quarter, each rounded on **its own size**:
+  under Rs 1,000 → nearest 100 · under Rs 10,000 → nearest 500 · under Rs 100,000 → nearest 1,000 · above → nearest 5,000.
+  Verified: 10,000 → 2,500 · 5,000 · 7,500 · 11,500 → 3,000 · 6,000 · 8,500 (never 2,875, never 2,600) · 850 → 200 · 400 · 600 · 396,797.55 → 99,000 · 200,000 · 300,000. Rs 100 yields NO pills, which is the "maximum, not a quota" rule working: a fraction that rounds onto zero, onto another pill, onto `exact` or onto the total is dropped.
+- DECISION: per-fraction stepping rather than one step off the grand total — a single step keyed to the total turns Rs 10,000's clean quarters into 3,000 · 5,000 · 8,000, which the owner named as the wrong answer.
+
+### §2 Layout (`apps/web/app/globals.css`)
+- `.payacct` is now `display:grid; grid-auto-flow:column; grid-template-rows:auto auto; grid-auto-columns:minmax(0,1fr)` — the flat children (label, control, label, control) land as two half-width columns with the labels sharing a row. Because the layout is the BLOCK's, every surface moves at once: Card, Online, each Split leg, desk and phone, POS and supplier desk. `.payacct .paylabel ~ .paylabel { margin-top:4px }` retired; `.paymix__acct` reduced to spacing only (it re-declared `flex-direction:column` and would have re-opened 323 §2's divergence from the other end).
+- Mobile method rail ported from the mockups: `.paypanel--m .pmseg` is a bled, snapped, masked horizontal scroller with `.pmseg__b` at natural width — the same treatment `.paypills` already had. The 470px two-up pairing is now scoped `.paypanel:not(.paypanel--m)`, so the desk's narrow pane keeps it and the phone cannot out-specify it by accident.
+- The advance chip (`.advchip`) renders on the DESK only — the phone's applied-advance line states the same money, what is being done with it, and offers the `×`.
+- `.paysum__r--bal` margins `8px -13px 0` → `8px 0 0` (owner's fix): the pull-out aligned the FIGURE and mis-aligned the BOX, which is the object the eye compares.
+
+### §3 Three behaviours
+- **Supplier udhaar at purchase:** new `PurchaseUdhaarLine` (`.advline.advline--due`, warning ink, no control) above the method chooser on both tiers, fed by `partyBalanceParts(owed).due` — 310 §1's split of the same signed balance that `refundCap` reads for the advance. Display only: it is not passed to `purchasePayBox`, reaches no payload, and this purchase does not settle old baqaya (that is the supplier desk's Pay).
+- **Clearing the supplier clears the due date:** one `chooseSupplier(id)` per tier behind the picker's pick/clear/Delete-key and the phone's `onChange`. The FIELD's value is cleared, not just the derivation — once the offered date has been confirmed, `dueDate` holds it and nothing can tell an agreed date from an inherited one.
+- **One-unit product:** `soleUnit` (chain of one AND the line already on it) renders `.unitfix` — the unit STATED at the control's own box height (28px desk, 44px phone) — instead of a select whose only option is its current value. A real chain, and any row whose unit no longer resolves, keeps the select. The auto-selection itself (the base-unit effect) is unchanged.
+
+### §4 Mobile Save PDF + the print-surface audit
+- New `apps/web/components/pharmacy/PrintDocActions.tsx`: Save PDF + Print, in one order, mounted by BOTH branches of `InvoiceDialog` — the desk's `.printdlg__hd` and the phone's `.sheet__foot`. The phone had Print alone since 279 §3 built the downloader. Adding a button to the second branch would have reproduced the arrangement that caused it; the component makes the pair indivisible.
+- AUDIT of every print surface: **A4 purchase invoice** — was the divergence, fixed. **Customer statement (335)** — one `<Panel>` for both tiers with Save PDF in `.prevbar` inside it; no branch to be missing from. **POS quotation** and **day-close Z** — single-component surfaces with Print (and thermal) and no Save PDF on EITHER tier: not a divergence, a decision to make about those documents; noted, not changed under this spec. **POS thermal receipt / thermal Z** — thermal slips; the PDF writer measures A4 `.docsheet`/`.invoice` nodes, so Save PDF does not apply.
+
+### Tests
+- New `packages/ui/src/lib/new-purchase-payment-polish-340.spec.tsx` — the rounding table against the owner's four totals, the duplicate rule, pill order and wording, the `.payacct` grid (rule + cascade fixtures for a phone leg and a desk tab), the mobile rail, the badge, the balance-box margins, the udhaar line (both tiers, tone, no control, not in the arithmetic), `chooseSupplier`, `soleUnit`, the shared print actions, the audit, and money-untouched guards.
+- Updated for the owner's decisions: `split-everywhere-323.spec.tsx` (payacct layout, `paymix__acct` spacing-only, the retired label margin), `new-purchase-payment-329.spec.tsx` (scoped pairing + the rail), `new-purchase-payment-behaviour-332.spec.tsx` (pill shape + the renamed key), `purchase-invoice-272`, `purchases-desktop-r2-264`, `purchases-void-261`, `drawer-tables-invoice-and-css-279` (all four: the print actions moved into the shared component).
+
+### Gates
+`pnpm typecheck` — 31/31 tasks pass. `pnpm lint` — 17/17 pass, including the web design-drift, token-integrity, tenant-english-only, search-select and page-title checks. `pnpm test:unit` / `pnpm build` not run here by standing rule (the controller runs the full gates). Vendor untouched.
