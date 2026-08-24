@@ -21999,3 +21999,89 @@ discount at POS. Held for build with mockups committed: the A4 sale invoice and 
 
 ### Gates
 `pnpm typecheck` — 31/31 tasks pass. `pnpm lint` — 17/17 pass, including the web design-drift, token-integrity, tenant-english-only, search-select and page-title checks. `pnpm test:unit` / `pnpm build` not run here by standing rule (the controller runs the full gates). Vendor untouched.
+
+---
+
+## 341 — returns-page-to-mockup — DONE (2026-08-24)
+
+**Branch:** `fix/341-returns-page-to-mockup` (FIX + FEATURE). **Spec:** `/specs/341-returns-page-to-mockup.md`. No CODEREF covers 341 (the last is 113-121). **Schema: none** — as the spec predicted, the approval permission already existed in the role model (`pharmacy.return.approve`, 289 §6), so §4 needed no migration file, only a data script.
+
+### §1 — the page matches Purchases
+
+Everything here was a private second copy of something Purchases already owned; the fix is to mount the original and let a grep keep it that way.
+
+- **Month filter.** `ReturnsClient` now takes `useMonthWindowPref` + `recentMonthsWindow` + `inMonthWindow` from `@mp/shared`, publishes its label through `<TopbarPublish tag onTag tagExpanded>` and hangs the SAME `<MonthRangePicker>` off `tagAnchor` — the desk exactly as 259 §4 built it for Purchases, and the phone's `.mfiltrow` + `.mrangebtn` sheet exactly as 273 §4/277 §2 built it. The window narrows the feed ONCE (`rows = allRows.filter(inMonthWindow)`); the chips, the table, the pager and §2's cards all read that one set. `monthWin.from|to` joins the `useLiveOrder` reset key SPELLED OUT — `${monthWin}` would interpolate to `[object Object]`, the defect 305 §2.2 records on Purchases. The `?ret=` deep link deliberately searches `allRows`, so a link answers its question whatever range the reader left the screen on.
+- **Import / export.** The screen's hand-rolled `.iconbtn` pair is gone; it mounts `<ImportExportActions>` (the `.iconbtn--44` component Purchases, Suppliers and Customers draw). Its Import had pointed at `/pharmacy/inventory/import` — a different document entirely. There is no returns importer, so per 254 §5 the icon is ABSENT rather than disabled.
+- **Initials.** `PartyCell` takes `medallion` (default true). The desktop table passes `false`; the desktop card, the phone card and the drawer keep theirs. A walk-in still gets the neutral glyph either way.
+- **Source document.** `ReturnListRowView` gains `sourceId`; a PURCHASE row's `sourceRef` is now resolved from `originalPurchaseId` (302 §1.2) against a single `listPurchases` read, so it prints `from PI-00012` where 289 printed nothing. New `<SourceLine>` renders it as an `AppLink` to the sale or the invoice, with `stopPropagation` so following it does not also open the drawer (305 §1). A return that names no invoice — every pre-302 row — still prints nothing rather than a guess.
+- **Reason column.** `ReturnListRowView` gains `reasons: ReturnLineReason[]` — every line's `(reason, note)` pair, deduplicated server-side on what was RECORDED so the count cannot depend on the locale. New shared `distinctReturnReasons(lines, label)` folds it; one distinct reason prints in full, more prints `Mixed (3 reasons)` with the full list in the drawer (the owner's decision) and in the `title`.
+- **Print.** The A4 debit note called bare `window.print()`, which printed the REGISTER on the sheet a supplier receives; no debit-note surface existed anywhere. Two new components: `components/pharmacy/PrintDocShell.tsx` — the dialogue frame extracted verbatim from the purchase invoice's (kit modal + `bare` card on the desk, `MobileSheet` on the phone, `PrintDocActions` = Save PDF + Print on BOTH, the tab-title effect, `renderSheetsToPdf` + `downloadPdf` with no `window.print()` fallback) — and `components/pharmacy/DebitNoteDocument.tsx`, the document itself on the SAME `.docsheet` A4 kit (masthead lockup, `.parties`, `.facts`, `.tbl`, `.totals`, `.sigs.pushdown`, `.pfoot`). `InvoiceDialog` was rewritten to mount the shell, which is what makes "the same shared dialogue" true by grep rather than by eye. The returns dialogue mounts under `scope="mp-inv2 mp-pur2"` on purpose: that is where 275's paper anatomy is written, and a second copy of it under a returns class would be a second definition of an A4 sheet. `PurchaseDebitNoteView` gains the invoice's identity block (`platformName`, `lockup`, `docLogo`, `brandRule`) resolved by the same resolver at the same document variant. Pagination is a STATED cap of 16 lines per sheet, not a measuring loop — a debit note is a short six-column document; the cap is logged in the component's own docblock rather than truncating silently. A held or rejected note is stamped PENDING / REJECTED across the paper.
+
+### §2 — the KPI cards compute (the capture the spec asked for, recorded before the fix)
+
+Three of four cards drew `—` above subtitles carrying counts. Two independent faults, both now in `packages/shared/src/pharmacy-returns.ts`:
+
+1. **`supplierCredit` summed `status === 'CREDITED'` only.** A purchase return reaches CREDITED only when `confirmPurchaseReturnCredit` is called, and 304 §1 says in as many words that *"nothing in the product calls this endpoint"*. So every released credit note sat at PENDING, the figure summed zero, and the subtitle counted all 11 of them. The correct rule was already in the codebase twice — `supplierCreditNotes` and `returnedValueByPurchase` both post by `status !== CANCELLED && !pendingApproval` — so it is now named once, as `returnIsReleased`, and `returnListStats` reads it.
+2. **`refundedToCustomers` summed EVERY sale return in the month**, including ones awaiting approval (which have refunded nothing) and ones a manager REJECTED (which never will).
+3. **And the tiles drew a dash over a real zero**, which claims "unknown" about a figure the screen is holding the rows for.
+
+`ReturnStatRow` gains `pendingApproval` (a purchase return's status stays PENDING until the SUPPLIER acknowledges, long after the goods have gone — the trap that caused fault 1); when a caller omits it the predicate falls back to the status, so no pre-341 caller changes behaviour. New shared `returnKpis(rows)` folds the four figures over whatever window is passed, and the client calls it with the month-window rows — Purchases' own arrangement (259 §4), so a tile cannot state July over a list showing three months. Every card value is now `String(...)` or `moneyRound(...)`; `empty` still tints a nothing-to-report tile. The subtitles read `kpis.sale` / `kpis.purchase`, so the photographed disagreement cannot recur. Both tiers. The phone's chrome subtitle was also reading the server's whole-book totals and now reads the window. **Checked on Purchases and Suppliers as the spec required: both already fold the released rule, which is exactly why neither showed the defect; they are untouched.**
+
+### §3 — the View Return drawer
+
+- **Header badges** reordered to state-then-kind, per the mockup.
+- **Top info block** (`.drawfacts`, new CSS): items returned, refund method or credit-note number, return date, and by whom as `Full Name (Role)` through `personCredit` — 311 §3's one shape. The phone's `.mfacts` gains the same two extra facts.
+- **The money consequence.** `SaleReturnView` gains `ledgerCredit` / `paidOut` / `settlement`, read back off the `CustomerPayment` the release actually posted under `return:<id>` — NOT a re-run of 336's waterfall, because that waterfall settled against the balance as it stood at release and re-running it against today's would state a different past. `<UdhaarLines>` states the adjustment as its own line with the figure and what actually left the till beside it; a CREDIT settlement says "Added to the customer's account" in one line rather than splitting a movement that was never split; a held return says it in the future tense. Before this, a Rs 2,100 return against a Rs 1,300 tab read as "Rs 2,100 · Cash from till" — Rs 1,300 more cash than ever left the drawer.
+- **`PurchaseReturnView` gains `creditNo` + `allocations[]` + `unapplied`**, netted from 317's allocation book for that one supplier. `<CreditNoteLines>` prints "Applied to PI-00012 − Rs X" per placement and "Standing as supplier credit" for the remainder, because *raised but not yet placed* is a real position and showing only the note would imply the money had already come off a bill. Nothing is stated for a held or rejected note: nothing was raised.
+- Both components mount on BOTH tiers (asserted by count in the suite).
+
+### §4 — approval becomes a permission
+
+**Decision recorded (no approval gate exists; the owner's ruling was in the spec):** the tenant-wide *"Require manager approval"* toggle could only answer *"does everybody wait?"* — it queued the manager's own return behind the manager, and a shop that turned it off had no way to make one cashier's returns wait. `pharmacy.return.approve` already existed (289 §6, Owner + Manager by default, flag-gated on `pharmacy.pos`), so §4 is a change of WHO READS IT.
+
+- New `PharmacyService.returnIsHeld(actorCanApprove, settings)`: a user without the key records a return that waits, a user with it records one that releases. Both create paths call it; neither reads the toggle directly any more. **When the caller states no permission it falls back to the toggle**, which is what keeps every pre-341 code path and every existing test behaving exactly as it did — and is the last honest use of a retired switch.
+- `createSaleReturn` / `createPurchaseReturn` take an optional `actorCanApprove`; the controller resolves it from the PRINCIPAL (never the body) through one private `canApprove(p)` that the list endpoint now shares.
+- `ReturnsSection` drops the `SwitchRow` (and the `SwitchRow` import) and states what replaced it, pointing at the roles screen rather than restating a permission in a second place. The pane's one-line summary is now the window; the stored column still round-trips untouched, because the migration reads it.
+- **Migration:** `packages/db/scripts/grant-return-approval-341.ts`, dry-run by default, `--apply` to write, reported per tenant by name. Toggle ON → nothing written (the platform default already is "the counter waits, a manager releases"). Toggle OFF → every role that can RECORD a return (read from its actual granted `pharmacy.stock.adjust`, not a list written down here) is granted the key. **Per tenant is only possible via 223 §3's ADOPTION**: a system role is a shared `tenant_id IS NULL` row, so granting on it would grant to every tenant on the platform; the script instead creates the tenant's own adopted copy carrying the platform keys plus this one. A tenant-owned role (custom, or an existing adoption) gets a plain `RolePermission` row. Idempotent — a role already holding the key is skipped and reported as such. A branch override that required approval is read as "this tenant required approval", the branch that writes nothing.
+
+### Files
+
+`packages/shared/src/pharmacy-returns.ts` (returnIsReleased, ReturnKpiRow/ReturnKpis/returnKpis, ReturnLineReason/distinctReturnReasons, ReturnStatRow.pendingApproval, corrected returnListStats) · `apps/api/src/pharmacy/pharmacy.service.ts` (list rows: sourceId/sourceRef/reasons; stats; returnIsHeld; saleReturnView + returnLedgerCredit; purchaseReturnView + creditNotePlacement; PurchaseDebitNoteView identity block) · `apps/api/src/pharmacy/pharmacy.controller.ts` · `apps/web/app/(app)/pharmacy/returns/ReturnsClient.tsx` · `apps/web/app/(app)/pharmacy/purchase/PharmacyPurchaseClient.tsx` (InvoiceDialog → PrintDocShell) · `apps/web/app/(app)/settings/sections/ReturnsSection.tsx` · `apps/web/components/pharmacy/PrintDocShell.tsx` (new) · `apps/web/components/pharmacy/DebitNoteDocument.tsx` (new) · `apps/web/app/globals.css` (`.srcline a`, `.supcell--plain`, `.drawmeta`, `.drawfacts`/`.drawfact`, `.drawreasons`, udhaar line tint) · `packages/db/scripts/grant-return-approval-341.ts` (new) · `packages/i18n/src/messages/{en,ur}.json` (+36 keys each, en/ur key sets identical, placeholders matched) · tests: `packages/ui/src/lib/returns-page-to-mockup-341.spec.ts` (new) and `apps/api/src/pharmacy/returns-page-to-mockup-341.spec.ts` (new).
+
+### Gates
+
+`pnpm lint` — clean (one pre-existing unrelated warning in `doctor-portal.repositories.ts`; design-drift, token-integrity, tenant-english-only, tenant-search-select and tenant-page-titles all pass). `pnpm typecheck` — clean, 31/31. The migration script was typechecked standalone (`packages/db/tsconfig.json` includes `src` only). Per AGENT.md the agent does not run `test:unit` / `test:e2e` / `build`; the controller runs the full gates. Existing suites were reasoned through rather than run: `returns.spec.ts`'s pure stats case and `returns-desktop-289.spec.ts`'s two stats cases are unaffected because the corrected predicate agrees with the old one on their data, and every existing `create*Return` call omits the new optional argument and therefore still reads the toggle.
+
+### Money computation
+
+Untouched except where §2 required it, and that change is to a DISPLAY aggregate (`returnListStats` / the new `returnKpis`), never to a refund, a credit total, a restock or a ledger posting. `saleRefundTotal`, `returnItemsSubtotal`, `saleRefundWaterfall` and every posting path are byte-identical. §3's new fields are READS of postings that already existed.
+
+### Acceptance not yet performed
+
+§5 asks for verification on the deployed page and a real device — the deploy is the controller's. What can be proved in code is proved in the two suites; the per-tenant migration report is produced by running the script's dry run against staging.
+
+### Gate fix — 341 unit test (2026-08-24)
+`pnpm test:unit` failed on `pharmacy/returns-page-to-mockup-341.spec.ts` §2 ("a released credit note counts even though its status is still PENDING"): `stats.supplierCredit` was 0, expected 150.
+Cause: `FakePharmacyRepo.createSaleReturn`/`createPurchaseReturn` ignored the caller clock and stamped `createdAt` with `tick()` (a fixed 2026-07-06 base), while the Prisma repo writes `createdAt: now`. The 341 suite runs a 2026-08-18 clock, so the released credit note fell outside `returnListStats`' calendar-month window and summed nothing.
+Fix: both fakes now stamp `stampFrom(now)`, the same helper sales already use — the fake matches the real repo. No service or shared-fold change.
+Gates: 8 lint/typecheck packages clean; the 17 return-touching pharmacy suites (331 tests) pass locally.
+
+### 341 — gate fix: the print-dialogue guards follow the shell they now guard
+
+`pnpm test:unit` failed 16 tests across 10 @mp/ui suites after 341 §1 moved the print dialogue's
+frame out of `PharmacyPurchaseClient`'s `InvoiceDialog` and into the shared
+`apps/web/components/pharmacy/PrintDocShell.tsx`. Every failure was a source-grep guard reading
+the old location: 261/264/272/275/279/283/312/320/340 asserted the kit `<Dialog>`, the `.printdlg`
+card, the `<DialogClose>` ✕, the `<PrintDocActions>` pair, the `renderSheetsToPdf` handler and the
+tab-title effect inside the `InvoiceDialog` slice. Each now reads the shell for what the shell
+owns and the screen for what the screen still owns (the document, the file name, the scope), so
+the claims are unchanged and are checked where the code lives. Two knock-ons: 340's "both tiers
+mount it" is now the stronger form — the pair is built ONCE above the branches and rendered by
+both, so there is no branch an action could be added to alone; and 341's own
+"never `window.print()`" grep tripped on the comment that EXPLAINS what the screen stopped doing,
+so it strips comments first, as 283's handler check already did. The two recorded decisions 279 §3
+pins — client-side and off the sheets already on screen, and the one shaping limit — were dropped
+in the move and are restored to the shell's own comment, where the choice now lives.
+
+Gates: `pnpm lint` ✓, `pnpm typecheck` ✓, and the 60 @mp/ui suites touching the print surfaces
+(2136 tests) pass.
