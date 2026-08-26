@@ -22085,3 +22085,214 @@ in the move and are restored to the shell's own comment, where the choice now li
 
 Gates: `pnpm lint` ✓, `pnpm typecheck` ✓, and the 60 @mp/ui suites touching the print surfaces
 (2136 tests) pass.
+
+## 342 — batch-pricing-and-expiry-choice — DONE (2026-08-24)
+
+**Branch:** `feature/342-batch-pricing-and-expiry-choice` (FEATURE). Spec: `/specs/342-batch-pricing-and-expiry-choice.md`. No CODEREF for this range.
+
+### §1 — the conflation the owner's question separated
+
+The owner asked what happens for pharmacies that do not run on batch pricing. The answer splits two rules that had been one since the pricing model was built: **which batch physically leaves is always FEFO** (expiry safety, never a setting, untouched here) and **what the customer is charged**, which is now `Settings → Sales & tax → Pricing → Batch pricing`.
+
+- **PER_BATCH** (default, every existing tenant) — 252/253 unchanged: each lot at its own resolved price, a spanning pick splits.
+- **SINGLE_PRICE** — the ITEM supplies both the sale price and the concession for all stock; nothing splits.
+
+**ONE RESOLVER, ONE BRANCH.** The whole decision is a single line in `packages/shared/src/pharmacy-pricing.ts`:
+`const pricingBatch = batchPricing === 'SINGLE_PRICE' ? null : batch;` inside `resolveLinePricing`. It nulls the lot for the two LADDERS only — `resolveEffectiveCost` is still handed the real lot, so **profit stays per batch**. `priceAllocatedLine` / `resolvedPriceRange` carry the mode and never test it; every consumer (POS cart preview, POS unit-price band, the commit path at both call sites in `pharmacy.service.ts`, the FEFO table's Sells-at) passes it through. There is deliberately NO "do not split" flag: under one price every draw shares a split key, so the existing collapse in `groupPricedAllocations` produces one line by construction.
+
+**Merged-line cost fixed while here.** A grouped slice took `...head`'s `effectiveUnitCost`, so a line merging two lots reported the first lot's cost for the whole quantity. Under SINGLE_PRICE that becomes the norm, so a new `sliceCost()` weights the lots' costs by quantity (unrounded, like `blendedCost`). Byte-identical for a single-lot slice and for equal-cost lots.
+
+`fefoPriceMode` (SPLIT/BLENDED) is a different question and untouched; the control goes inert under Single price because there is nothing to split.
+
+### §2 — the expired choice, and quarantine's view
+
+- New `expiredPolicyChosen` distinguishes a tenant who CHOSE Write off from one who inherited it. The first expired sale return (an expired line actually being returned, not merely an invoice being opened) puts the question in a dialog with the three answers in Settings' own words; the answer posts to `POST /pharmacy/returns/expired-policy` (`pharmacy.stock.adjust`, `@Audited`) and is honoured by that very return. Saving the Settings → Returns card also counts as an answer.
+- **Quarantined stock view** added to the Inventory drawer: quantity, batch, expiry, held-since, and the two actions that end a quarantine — `POST /pharmacy/medicines/:id/quarantine/:batchId` with `WRITE_OFF` (stock delta down + EXPIRE movement carrying the loss, so Accounting inherits an entry rather than a gap) or `BACK_TO_BATCH` (two TRANSFER movements between the holding lot and its sellable twin; the premises figure does not move, so `stock.qty == Σ batch.qty` holds through both writes).
+- **Quarantined quantity is excluded from sellable everywhere it is displayed** — `medicineDetail.qty` is now `stock.qty − quarantined`, with `quarantinedQty` and a separate `quarantined[]` beside it; `inventoryList` rows subtract it and drop holding lots from `batchCount`. `stockValue` deliberately unchanged (it values everything on the premises and reconciles with the expiry report). Batch reads now carry `quarantined`, and the re-order/reset views filter holding lots out of the dispensing order.
+
+### Decisions recorded
+
+- The choice endpoint is NARROW rather than a settings PUT: a person at the counter answering one question must not post a settings document they never loaded.
+- A release is always the whole held quantity — a partial move is a stock adjustment, which already exists.
+- The quarantine view renders whenever stock is held, not only while the policy is QUARANTINE, so a tenant who switches away can still clear what they hold.
+
+### Files
+
+Schema/migration: `packages/db/prisma/schema.prisma` (+`BatchPricingMode` enum, `batch_pricing_mode`, `expired_policy_chosen`), `packages/db/prisma/migrations/20260824000000_batch_pricing_and_expiry_choice/migration.sql` (additive, IF NOT EXISTS, inherits the table's existing FORCE RLS — no new table/policy/grant; no backfill, the defaults are the backfill), `packages/db/src/index.ts`.
+Shared: `pharmacy-pricing.ts`, `pharmacy-settings.ts`.
+API: `pharmacy-settings.{dto,repositories,service}.ts`, `pharmacy.{dto,controller,service,repositories}.ts`, `__fakes__.ts`.
+Web: `settings/sections/SalesTaxSection.tsx`, `settings/sections/ReturnsSection.tsx`, `pharmacy/pos/PosClient.tsx`, `pharmacy/inventory/PharmacyInventoryClient.tsx`, `pharmacy/returns/new-sale-return/NewSaleReturnClient.tsx`.
+i18n: 18 keys, EN + UR.
+Tests: `apps/api/src/pharmacy/batch-pricing-342.spec.ts` (end-to-end: split vs no-split, FEFO untouched, weighted COGS, committed sales unchanged, quarantine exclusion + both releases + refusals), `apps/api/src/pharmacy/batch-pricing-resolver-342.spec.ts` (the pure engine and its one branch), `packages/ui/src/lib/batch-pricing-and-expiry-342.spec.ts` (source assertions: the branch exists once, no surface re-decides, the ask gates on `expiredPolicyChosen`, the quarantine card sits outside the dispensing order, EN/UR parity).
+
+### Gates
+
+`pnpm prisma generate`, `pnpm lint` and `pnpm typecheck` all green (one pre-existing unused-eslint-disable warning in `doctor-portal.repositories.ts`, untouched). `pnpm test:unit` / `test:e2e` / `build` are the controller's, per the standing rule.
+
+**Block-final.** 342 is the last spec of this group; there is no 343 authored.
+
+---
+
+## 343 — realtime-everywhere — DONE (2026-08-26)
+
+**Work type:** FIX. **Branch:** `fix/343-realtime-everywhere`. **Spec:** `specs/343-realtime-everywhere.md`.
+**Schema:** none. **RLS / auth / permissions / flags:** unchanged. **Endpoints:** none added or changed.
+**i18n keys:** none added — no new user-visible copy.
+**Money logic:** byte-identical. Nothing on this step's paths computes, allocates or posts money; every
+subscription re-reads an endpoint that already existed. Vendor console untouched apart from being named
+in the reader allow-list.
+
+### The problem, stated as the owner stated it
+
+Five separate reports asked for realtime on five separate screens. That is a RULE failure, not five
+feature requests: 305/312 wired the surfaces that existed when they were written, and nothing made a
+later surface inherit the obligation. So the rule is now standing, recorded in ARCHITECTURE.md §2 as
+principle 14: **every list and detail surface subscribes on the day it is built — creates, updates,
+deletes and status changes — display only, and KPI cards, pill counts and badges are surfaces too.**
+
+### §1 — the audit (the finding, and where each gap actually was)
+
+The publish side was NOT the problem, and that is the finding worth recording. `list-row-open-and-
+realtime-305.spec.ts` already proves, against the real service, that a purchase return announces
+`return.recorded` + `supplier.balance.updated` when it releases stock and — crucially — announces
+`return.recorded` ALONE when it is held for approval (289 §6). Every gap the owner reported was a
+CLIENT filter or a surface that never subscribed:
+
+| surface | before | after |
+| --- | --- | --- |
+| Returns list | `accepts: type === RETURN_RECORDED` | whole desk scope |
+| Returns drawer | never subscribed | re-reads quietly with the list |
+| Purchases list | `accepts: purchase.updated \| supplier.balance.updated` — deaf to a HELD return, which is the owner's badge/balance report | whole desk scope |
+| Purchases drawer / sheet | never subscribed — the surface actually quoting the returned-against badge | re-reads quietly, no skeleton flash |
+| Suppliers list | two-envelope filter | whole desk scope |
+| Suppliers ledger drawer | never subscribed | `openLedger(id, true)` — the quiet path it already had |
+| Customers register | `accepts: customer.updated` | whole desk scope (a sale return moves its returned column) |
+| New Purchase | already whole-scope (325) | unchanged |
+| Inventory pills / KPIs | stock scope only | + desk scope (a purchase adds a catalogue row that moves no stock) |
+| Dashboard KPI row | stock cards live, money tiles not | + desk scope |
+| Pharmacy home | stock only | + desk scope |
+| Recent Sales | its own copy of the read loop, which had drifted: NEVER re-read on reconnect | shared `useSaleLive`, re-reads on reconnect |
+| Day-close | never subscribed | sale + desk, quiet — see the judgement call below |
+| Reports | never subscribed | sale + desk + stock, quiet (no skeleton flash) |
+| Accounts (cash book, statements) | never subscribed | sale + desk |
+| `/inventory`, `/purchase` (the legacy generic desks) | never subscribed | stock + desk, re-reading only the tab on screen |
+| New Sale Return / New Purchase Return | stock only (purchase) / nothing (sale) | + desk: another till returning against the same document moves what is still returnable |
+| Alerts, POS, nav counts, global search, bell | already live | unchanged |
+
+Everything else under `apps/web/app/(app)` is enumerated in the test's AUDIT table with a written
+reason: child components and print templates, configuration forms (no scope publishes a settings or
+role change), tenant administration, and the other verticals — appointments, lab, patients, doctor,
+prescriptions, samples, vitals, billing, commission, home collection — where NOTHING reaches the bus
+yet. Those last are the surfaces the standing rule is for: the step that adds their scope subscribes
+them on the same day, and the table is where its author is told so.
+
+### §2 — the fix
+
+1. **`accepts` is DELETED from `useDeskLive`.** Not "unused" — removed, so a screen cannot name a
+   subset of its scope. Every screen that used it eventually went deaf, because naming envelopes is a
+   bet on which one a writer sends, re-placed every time a later step adds a reason (342's expiry
+   return, 346's approve/reject). A surface hears its whole scope; the hook already coalesces a
+   document's three envelopes into one re-read, so hearing more costs nothing.
+2. **One read loop, keyed by endpoint.** The module-scope connection in `lib/stock-live.ts` became a
+   `Map<path, LiveConnection>`, and `useSaleLive` was added for the completed-sale feed. Recent Sales'
+   private ~60-line reader is gone. Its own ENDPOINT stays (237 §4: `sales.recent.view` is not
+   `pharmacy.sell`, and merging would hand one grant's traffic to the other) — a second endpoint now
+   costs a second connection and no second code path.
+3. **Open drawers and sheets re-read**, quietly, into the same mounted surface — nothing unmounts, no
+   focus moves, no scroll jumps, and a failed re-read leaves what is on screen rather than emptying it.
+4. Every rule of 305 §2.2 preserved: display only, re-read never patch, sort pinned, arrivals marked,
+   coalesced per burst, held while hidden, re-read on reconnect, unsubscribed on unmount.
+
+### Judgement calls (recorded because I decided them rather than escalating)
+
+- **Day-close does NOT reseed its denomination inputs on a live re-read.** `load(quiet)` refreshes the
+  summary, the expected cash and the variance and leaves the counts alone: the cashier is typing into
+  them, and a sale rung at the front counter overwriting a half-entered drawer count would cost more
+  than the stale figure it fixed. No-focus-theft read literally on the one screen where breaking it
+  costs money.
+- **Reports and Day-close re-read quietly** (no skeleton). A range change still shows its shape — that
+  is what 303 §4 is about — but a live refresh must never replace figures a reader is mid-sentence on.
+- **The New Sale Return form refreshes only the returnable view, never the drafts.** `pick()` reseeds
+  line decisions, so the live path deliberately is not `pick()`. The server clamps every quantity at
+  commit, so a figure a few seconds old can never post a refund that is not owed.
+- **Legacy `/inventory` and `/purchase` re-read only the tab on screen.** Re-reading all four would be
+  three requests nobody is looking at.
+- **The three surviving SSE readers are asserted, not eliminated.** `lib/notifications.ts` and
+  `lib/vendor-notifications.ts` are the two notification bells, with their own session and scope; they
+  are not data surfaces and unifying them was outside this step's risk budget. The test allows exactly
+  those three and fails on a fourth.
+- **Wider subscription over narrower**: every surface now issues a re-read for desk traffic it may not
+  render. Deliberate, and the cheaper mistake — one coalesced GET per burst against a screen that
+  silently stops updating, which is what the last four steps kept paying for.
+
+### Files
+
+`apps/web/lib/stock-live.ts` (per-path connections, `useSaleLive`, `accepts` removed) ·
+`apps/api/src/pharmacy/realtime-everywhere-343.spec.ts` (new) · `ARCHITECTURE.md` (§2 principle 14) ·
+web clients: Dashboard, Pharmacy home, Inventory (both), Purchase (both), New Purchase, Suppliers,
+Customers, Returns, both return forms, Recent Sales, Day-close, Reports, Accounts.
+
+### Tests written
+
+`realtime-everywhere-343.spec.ts` — 6 tests. The audit table must match the files on disk exactly (a
+new screen fails the suite until it is audited); every audited surface either subscribes through
+`lib/stock-live` with the hooks it claims, or carries a written reason; an "exempt" surface must not
+quietly subscribe, or the table would be lying; no screen reads a stream of its own; `useDeskLive`
+offers no way to hear part of its scope. The audit is therefore the last one done by hand.
+
+### Gates
+
+`pnpm lint` and `pnpm typecheck` clean (one pre-existing unrelated warning in `doctor-portal`). The
+new spec file was run alone and passes 6/6; the full suites are the controller's.
+
+### Not done, and why
+
+The two notification bells keep their own readers (above). No API, schema or permission change was
+needed — the audit found the publish side already correct, which is why this step touches no money.
+
+### Gate fix — 343 unit-test failures (2026-08-26)
+
+`pnpm test:unit` red on three suites, all test-side, no product code touched:
+
+- `apps/api/src/pharmacy/batch-pricing-342.spec.ts` — "FEFO IS UNTOUCHED" tendered
+  `PER_BATCH_TOTAL` (the twenty-unit figure, Rs 336) for an EIGHT-unit pick, so the
+  settlement policy rejected it with "The payments must add up to the total." Added
+  `PER_BATCH_EIGHT` (8 × 15) and `SINGLE_EIGHT` (8 × 20) and tendered those; the
+  single-price side already paid the right 160, now named rather than a literal.
+- `packages/ui/src/lib/customers-ledger-334.spec.tsx` and
+  `purchase-colour-truth-and-polish-325.spec.tsx` — both asserted the `accepts`
+  filters that 343 §2 deliberately DELETED from `useDeskLive`. Re-pointed at the
+  widened subscription: customers asserts `useDeskLive({ onChange: liveReread });`,
+  the purchase draft asserts it carries no `accepts:` at all. The obligation each
+  test guards (this surface re-reads on a desk event) is unchanged.
+
+Gates: `pnpm lint` and `pnpm typecheck` clean (one pre-existing unrelated warning in
+doctor-portal.repositories.ts). The three suites re-run individually and pass.
+
+## 2026-08-26 — gate fix: green the 343 gate, round two (unit tests)
+
+`pnpm test:unit` failed in two packages after step 343. Test-side only again; no product code changed.
+
+**@mp/db — `schema-enum-types.spec.ts`.** The migration-SQL reader did not understand
+`ADD COLUMN IF NOT EXISTS`, so 342's re-runnable `pharmacy_settings.batch_pricing_mode` read as a
+column with no SQL type at all and the reconciliation reported it as an offender. The `ADD COLUMN`
+pattern now steps over an optional `IF NOT EXISTS`; `CREATE TABLE` already did.
+
+**@mp/ui — five suites still describing the pre-343 subscription layer.** 343 §2 moved the read loop
+into a per-endpoint map (`conn.*` rather than module-level `listeners` / `streamOpen` / `retry`),
+gave Recent Sales the shared reader instead of its own copy, deleted `accepts`, and left several
+screens taking two hooks off one import. The assertions were updated to the shape that is now true:
+- 291 — the shared-hook import is matched by MODULE, not by how many names are in the braces; the
+  "one stock endpoint" count excludes the completed-sale endpoint that joined the module (its own
+  gate, same reader); backoff string reads `conn.retry`.
+- 299 — refcount asserted on `streams`/`conn.listeners`/`conn.controller`, the already-open join on
+  `if (conn.open) {`, the refusal reset on `conn.refused`; import matched by module.
+- round-4 — backoff string reads `conn.retry`.
+- recent-sales-screen — the screen is asserted to hold `useSaleLive` and NO reader of its own, and
+  the endpoint plus frame handling are asserted where they now live, in `lib/stock-live.ts`.
+- 305 / 339 — Suppliers, Purchases, Returns and Customers no longer name envelopes; the suites
+  assert the widened subscription (no `accepts` in the call) and that the desk scope carries the
+  supplier, purchase and return envelopes those screens need.
+
+**Gates:** `pnpm lint` and `pnpm typecheck` pass. `packages/db` enum suite 4/4; `packages/ui`
+164 suites / 4274 tests all pass.
