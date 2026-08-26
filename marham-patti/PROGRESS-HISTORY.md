@@ -22507,3 +22507,106 @@ stale tests, not defects in 345's code, so the fix is in the specs only — no s
 
 Gates: `pnpm lint` and `pnpm typecheck` green. The three suites above pass under a targeted
 jest run (88 tests). No CSS, component or i18n change.
+
+---
+
+## 346 — approval-rejection-void — DONE (2026-08-26)
+
+**Branch:** `feature/346-approval-rejection-void` (WORK TYPE: FEATURE). Spec: `/specs/346-approval-rejection-void.md`. No CODEREF covers 346 (the set stops at 121).
+
+### What was already there, and what 346 actually built
+289 §6 + 341 §4 had already built the PENDING path and both approval actions: `approveSaleReturn` /
+`rejectSaleReturn` / `approvePurchaseReturn` / `rejectPurchaseReturn`, their permission
+(`pharmacy.return.approve`), the reject dialog with its required reason, and the caps that count a
+pending return's quantity. §1 and §2 were therefore verified and PINNED rather than rewritten.
+The new capability is §3, VOID, plus the state vocabulary the four surfaces needed to tell a
+rejection apart from a void.
+
+### Decisions
+1. **A void is a STAMP, not a fourth `ReturnStatus`.** `ReturnStatus.CANCELLED` means "a manager
+   refused it before anything moved"; a void means "it moved and was reversed". Folding them would
+   make the two indistinguishable in every list, KPI and audit, and would silently reclassify every
+   existing rejected row. So `voided_at` / `voided_by` / `void_reason` on both return tables — the
+   same shape `sales.voided_at` (313 §4) and `purchase_orders.voided_at` (261) already carry.
+2. **`returnState()` — one fold, four states** (PENDING · COMPLETED · REJECTED · VOIDED), shared.
+   The badge, the phone `.msig`, the drawer header, the CSV export and the void button all read it;
+   before this they each re-derived the answer from `status` + `pendingApproval`, and a purchase
+   return's PENDING means "awaiting the SUPPLIER", not "awaiting a manager".
+3. **What to reverse is READ, never re-derived.** `postedStockNet()` nets the `StockMovement` rows
+   carrying the document's own `refType`/`refId`. This is the only reading that survives 289 §5's
+   three dispositions: plain restock (+qty), WRITE_OFF (+qty then −qty → nothing to take back),
+   QUARANTINE (landed in a holding lot the request never named). New repo method
+   `listMovementsForRef` + a narrow `PostedMovementRow` (MovementRow lacks `medicineId`).
+4. **The reversal carries the SAME refType/refId as what it undoes**, so the movement history reads
+   as one document's two entries and a re-entrant void computes a net of zero rather than a second
+   reversal.
+5. **Money reverses by entries.** Sale side: one NEGATIVE `CustomerPayment` under
+   `return-void:<id>` mirroring the ONE 336's waterfall posted — `buildCustomerLedger` renders it as
+   a REFUND row (334 §2) and the balance walks back by arithmetic. `returnLedgerCredit` now nets
+   both references, so a voided return reads as the nothing it is. Cash that left the till is
+   accrued back as a NEGATIVE `cashRefund` on TODAY's day-close (the day the drawer is counted with
+   it in), under the same closed-counter rule the refund itself obeys.
+   Purchase side: the credit note is DERIVED from the return (304 §1.2), so the stamp withdraws it;
+   `reallocateAfter` then writes the difference, which for a withdrawn credit is a reversing
+   allocation row per placement plus a re-placement of whatever is left (317 §1).
+6. **Two predicates, said once.** `returnStands()` (holds its quantity — every CAP asks this) and
+   `returnHasPosted()` (its posting fired and still stands — every MONEY fold asks this). Twelve
+   filter sites that spelled `status !== CANCELLED [&& !pendingApproval]` now call one of the two,
+   which is what makes a voided return leave the supplier ledger, the invoice's returned value,
+   317's allocation book, the KPI totals and both document caps in one edit rather than twelve.
+   `returnIsReleased()` in @mp/shared gained the same `voidedAt` question.
+7. **Its own permission**, `pharmacy.return.void` (Owner + Manager, gated by the `pharmacy.pos`
+   flag): approving RELEASES what a pending return holds, voiding REVERSES what a settled one did.
+   `canVoid` rides on the list view beside `canApprove`; both endpoints enforce it regardless.
+8. **Four refusals**, each naming what to do instead: a second void (by name and date), a PENDING
+   return ("reject it instead"), a REJECTED one ("nothing to void"), and §3's sold-stock refusal.
+   The last is checked lot by lot BEFORE any write; the message names a QUANTITY in the counter's
+   own words via `formatBaseQty` and never a lot id, and it says "sold" only when a SALE movement
+   is what took the stock — a write-off or a stock-take gets its own sentence.
+
+### Files
+- `packages/db/prisma/schema.prisma` + `migrations/20260826000000_return_void/` — six nullable
+  columns on `sale_returns` / `purchase_returns`; both tables already tenant-scoped under FORCE RLS
+  since `20260721000000_pharmacy_data_models`, so all six inherit the fail-closed policy. No new
+  table, no new policy, no new grant. No backfill: NULL is the honest reading of every existing row.
+- `packages/shared/src/pharmacy-returns.ts` — `ReturnStateLit`, `returnState`, `returnIsVoidable`,
+  `RETURN_VOID_REASON_MAX`, the two movement-ref constants, the ledger reference, the movement
+  reason, five refusal messages; `returnIsReleased` + `returnListStats` now read `voidedAt`.
+- `packages/shared/src/permissions.ts`, `apps/api/src/pharmacy/pharmacy.constants.ts` — the key.
+- `apps/api/src/pharmacy/pharmacy.repositories.ts` + `__fakes__.ts` — the two void stamps (claimed
+  by a CONDITIONAL `updateMany`, so a racing second void finds zero rows and stops),
+  `listMovementsForRef`, `PostedMovementRow`, the row/select/mapper additions.
+- `apps/api/src/pharmacy/pharmacy.service.ts` — `voidSaleReturn`, `voidPurchaseReturn`,
+  `assertVoidable`, `assertReturnedStockStillHeld`, `reverseReturnStock`, `postedStockNet`,
+  `resettleOriginalSale`, `returnStands`, `returnHasPosted`, `returnStateOf`; both views + the list
+  rows carry `state` / `voidedAt` / `voidedBy` / `voidedByRole` / `voidReason`; `listReturns` takes
+  and returns `canVoid`.
+- `apps/api/src/pharmacy/pharmacy.dto.ts` / `pharmacy.controller.ts` — `parseVoidReturn` and
+  `POST /pharmacy/returns/{sale,purchase}/:id/void`, both `@Audited`.
+- `apps/web/app/(app)/pharmacy/returns/ReturnsClient.tsx` — the state word/tone/pill tables (four
+  surfaces now share them), `VoidMark`, the footer's quiet-danger button, the confirm dialog with
+  its required reason, `voidReturn` (RE-READS the list and the open drawer; 343's rule).
+- `apps/web/app/globals.css` — `.btn--dangerquiet` and `.voidmark` gained `.mp-ret` as a SECOND
+  SCOPE on the existing rules rather than a second copy of both components.
+- `packages/i18n/src/messages/{en,ur}.json` — thirteen keys.
+- `apps/api/src/pharmacy/approval-rejection-void-346.spec.ts` — 15 cases across §1/§2/§3.
+
+### Gate results
+- `pnpm prisma generate` — ok (schema.prisma changed).
+- `pnpm lint` — clean (one PRE-EXISTING warning in `doctor-portal.repositories.ts`, untouched).
+- `pnpm typecheck` — 31/31 tasks green.
+- Targeted `jest` (NOT `pnpm test:unit`, per the standing rule): the new suite 15/15, the whole API
+  package 221 suites / 2918 tests green, `@mp/i18n` 5 suites / 35 tests green. 108/304/317/336 are
+  byte-identical — their own suites pass unchanged.
+
+### Notes
+- The §2 acceptance is proved by COMPARISON on a twin: a held return approved by the manager and a
+  return the manager raised directly are asserted to move the same net stock and post the same
+  ledger leg, rather than by re-asserting 336's figures a second time.
+- `paidOut` reads 0 on a voided sale return: the cash went back into the till and the reversing
+  entry has already netted `ledgerCredit` to zero, so stating the refund total would be the drawer
+  claiming money that came back.
+- UI design self-check by inspection against `specs/mockups/pharmacy/returns-{desktop,mobile}.html`:
+  quiet-danger footer button with the `ban` glyph (6497), `.voidmark` in the BODY as a state and not
+  a toast (3675), the destructive confirm whose button stays dead without a reason (6853), and a
+  word beside every colour.
