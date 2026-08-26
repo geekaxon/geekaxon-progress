@@ -22333,3 +22333,177 @@ New suite `apps/api/src/pharmacy/credit-allocation-proof-344.spec.ts`, 7 tests. 
 ### Gates
 
 `pnpm lint` and `pnpm typecheck` clean (one pre-existing unrelated warning in `doctor-portal.repositories.ts`). Targeted jest over the money paths this touches — `credit-allocation-317`, `credit-allocation-plan-317`, `credit-allocation-proof-344`, `supplier-ledger`, `supplier-ledger-314`, `returns-ledger-and-history-304`, `payments-round-2-318`, `void-payment-reversal-270`, `new-purchase-payment-behaviour-332`, `supplier-terms-and-due-date-324` — 149 tests, all green. Full suites left to the controller. 108/304/317 posting logic byte-identical outside the two reads; vendor untouched; no schema, no migration.
+
+---
+
+## 345 — returns-page-close — DONE (2026-08-26)
+
+**Work type:** FIX. **Branch:** `fix/345-returns-page-close`. **Spec:** `/specs/345-returns-page-close.md`.
+**Schema:** none. **RLS:** unchanged. **Migration:** none.
+
+### §1 — the two second attempts, and why 341 missed them
+
+The spec's evidence rule asks what 341's build touched for each item and why it missed. `git show
+--stat 1f4bf36` (341's build commit) shows `ReturnsClient.tsx` +721/−… and `globals.css` +22 — both
+files WERE touched for both items. Both misses have the same shape: **341 built the capability and
+never wired it to the surface.**
+
+1. **Card initials.** 341 added a `medallion` flag to `PartyCell` and wrote its own comment on the
+   table column — *"the mockup gives initials to the CARD, where there is room for a face"* — then
+   wrote `ReturnCard` without calling through it. The flag's only caller has always passed `false`,
+   so the `true` branch never rendered once. The CSS (`.mp-ret .supmark--xs`, `.rcard__t small`
+   flex row) had shipped in the same commit and sat unused.
+   *Fixed:* the card draws the mark itself, in the Purchases card's own `.supmark--xs` anatomy
+   (`<span className="supmark supmark--xs">{initials(...)}</span>` then `.who`, the same two nodes
+   in the same order as `PharmacyPurchaseClient`'s `.icard__t small`). A walk-in keeps the neutral
+   `UserRound` glyph. The dead `medallion` flag and its unreachable branch are deleted, so the
+   capability cannot half-exist in two places again.
+
+2. **Drawer header badges.** 341 §3 built exactly the two pills the mockup asks for — `Completed` ·
+   `Sale`, with `StatusPill` + `TypePill` — and mounted them as the first row of the drawer's
+   **body**, because `<Panel>` had no header slot. `returns-desktop.html` 6453 draws them inside
+   `.pdrawer__hd` under the subtitle. A pill at the top of a scrolling body is not a header badge:
+   it scrolls away, and the header itself was unchanged, which is exactly what the owner reported.
+   *Fixed:* `Panel` gained a `headBadges` slot, rendered after the description inside the header's
+   own text column (so the frame keeps owning the title, the description and the ONE `DrawerClose`,
+   242 §1). Drawer-only by design — the phone's sheet states the same fact in `.mfacts__hd` where
+   `returns-mobile.html` puts it, and the dialog's `<ModalHead>` has no badge row. CSS: one line,
+   `.mp-ret .drawer__head .drawmeta { margin-top:7px; }`.
+
+The info block (`.drawfacts` — items returned, refund method / credit note, return date, by whom)
+was already correct from 341 §3 and is unchanged apart from its position (see §2).
+
+### §2 — the drawer's blocks, reordered; and links that actually open a drawer
+
+- **The supplier block is removed.** `rtnOpenSupplier` is deleted from `ReturnsClient` and from both
+  message files. In its place, on both surfaces, the **source document** block — one new
+  `<SourceDocBlock>` component serving sale and purchase, desk and phone, so the two surfaces cannot
+  describe the same return differently (which is how the desk ended up on a supplier block).
+- **It sits ABOVE the info block**, per the mockup and per the reader's order: which document is this
+  about, then what came back off it. 341 had the info block first and the document last — after the
+  reasons and both notes — so "which invoice?" was three scrolls below a drawer whose whole subject
+  is that invoice.
+- **The purchase side needed new server data.** The list row has carried `sourceRef`/`sourceId` since
+  341 §1; `PurchaseReturnView` never did, which is precisely why 341 drew a supplier there — it was
+  the only party the detail could name. Added `sourcePurchaseId` / `sourceInvoiceNo` /
+  `sourcePurchaseAt` / `sourcePurchaseTotal`, filled by a new private `sourcePurchase()` that does
+  ONE `findPurchase` by id (never the `listPurchases(tenant, 2000)` scan the list amortises across
+  every row — the same reasoning `creditNotePlacement` records). The total is the shared
+  `purchaseGrandTotal` fold, so the block cannot state a figure the invoice's own drawer disagrees
+  with. All four are null together on a pre-302 return that names no invoice; the block then names
+  the supplier with NO link, because a guessed document is worse than none.
+- **THE LINKS. Two of the three hrefs 341 wrote pointed at query keys the destination does not read**
+  — the failure mode that survives review, because the page loads fine and does nothing.
+  `?purchase=` was never read by anything (Purchases has opened its drawer on `?pi=` since 273), and
+  `RecentSalesClient` had no deep-link handler at all. Both are fixed at the source: a single
+  `sourceHref(kind, id)` now spells both destinations once, and every surface — card, table row,
+  drawer block — goes through it. `RecentSalesClient` grew the `?sale=` opener in the shape Purchases
+  uses: `openDetail` fetches BY ID (so the link answers whatever window/page/chip the screen was left
+  on, without needing the row in the loaded feed) and an `openedRef` fires it once per id (so a
+  refetch cannot re-open a drawer the reader closed — 302 §8's own rule, in the other direction).
+
+### §3 — mobile KPI cards, measured
+
+The register claims the `returns` page chrome and mounts the very same object five other screens do
+(the title row plus the `.mfiltrow` search-and-month row that survives the collapse, built by
+341 §1) — but `returns` was never added to the 117px reservation list, so the body fell back to the
+shell's generic 84px for a title row ALONE and the `.mkpis` strip slid under the glass. 248 §1's
+defect on a fourth screen; 248 §1's cure applied: the name joins the `--mchrome:117px` group on
+`html:has(...)`, and `.mp-shell[data-page-chrome='returns'] .mp-shell-main` joins the padding group,
+so ONE declaration feeds the body padding and the `scroll-padding-top` alike and the two cannot
+drift. Measured as 117px because it is the identical chrome object, not an eyeballed number: 59px
+title row + 44px field row + the gap, the same value Purchases and Suppliers reserve for it. Added
+by NAME rather than by loosening the selector to `[data-page-chrome]`, per 214 §1 — a future header
+without a search row is a different height and would inherit this one silently.
+
+Also added, while the drawer's blocks moved: `.mp-ret-drawer .drawer__body > .srcdoc|.drawfacts|
+.drawreasons|.cart { flex:none; }`. The body is a flex column with its own scroll, so a child's
+default `flex-shrink:1` lets a fixed-height block be compressed by a taller sibling. It was never
+needed while `.srcdoc` sat near the foot; it is needed the moment the block became the FIRST child
+above a returned-lines cart. The mockup states the same guard on the same four blocks (5327).
+
+### §4 — import and export
+
+**EXPORT** now toasts `Returns exported` (`rtnExportDone`, en + ur), fired from the one `exportCsv`
+after the file is handed over, per 310 §4's rule that the words name what THIS export exported.
+
+**IMPORT: absent, and the absence is argued** — which the spec explicitly permits ("if returns
+import is genuinely out of scope for the framework, say why and ship export only — but say it").
+The reason is the framework's contract, not effort, and it is recorded in the source where the icon
+would be:
+
+- 254/266's framework imports records that have a **natural key**, and its apply is idempotent on
+  that key — a supplier by name, a customer by phone, an invoice by its number (unique per tenant
+  since 251 §3.2). Re-running a file is safe because the second run matches and updates.
+- **A return has no such key.** Its number is minted by the sequence at commit, so two runs of one
+  file are two different returns — and a return is not a row, it is a MOVEMENT: 108's frozen service
+  refunds cash, puts stock back (or writes it off per 338 §2), posts 336's udhaar waterfall against
+  the customer's account, raises a gapless credit note and allocates it across the supplier's open
+  invoices (317/344). An import that "just re-ran" would refund the same customer twice and credit
+  the same supplier twice, and the wizard's dry-run preview cannot honestly price any of that
+  without performing it.
+- Every return already passes through approval (289 §6, and 346 next). A bulk path landing releases
+  without a manager is the one route around the control these steps have been building.
+
+So 254 §5's rule stands: the icon is ABSENT rather than inert. If returns import is ever wanted it
+wants its own spec, with an explicit answer to "what does the second run of this file do?"
+
+Export stays CLIENT-side here, unlike the four desks 254 §4 moved to the server. That change existed
+to close a data-loss trap — a catalogue behind infinite scroll exported whatever fraction had been
+scrolled to. This register holds its WHOLE feed in memory (one `/pharmacy/returns` read; the phone's
+infinite scroll pages a window over an already-complete array), and `sorted` is that feed with the
+reader's month, chips and search applied. There is nothing to truncate and a round trip would return
+the same rows. Recorded as a decision, not an oversight.
+
+### Files
+
+- `apps/api/src/pharmacy/pharmacy.service.ts` — `PurchaseReturnView` + four source-document fields;
+  `purchaseReturnView` fills them; new private `sourcePurchase()`.
+- `apps/web/components/pharmacy/Panel.tsx` — `headBadges` slot on the drawer frame.
+- `apps/web/app/(app)/pharmacy/returns/ReturnsClient.tsx` — card medallion; `sourceHref`;
+  `SourceDocBlock`; drawer reorder + header badges; `PartyCell` flag removed; export toast; the
+  import justification.
+- `apps/web/app/(app)/pharmacy/recent-sales/RecentSalesClient.tsx` — the `?sale=` deep link.
+- `apps/web/app/globals.css` — `returns` chrome reservation; header badge gap; drawer block guards.
+- `packages/i18n/src/messages/{en,ur}.json` — `rtnOpenPurchase`, `rtnReceivedOn`,
+  `rtnSourcePurchaseUnknown`, `rtnExportDone`; `rtnOpenSupplier` retired.
+- `apps/api/src/pharmacy/returns-page-close-345.spec.ts` — NEW (5 cases): the detail's four source
+  fields, the grand-total fold with discount and tax, all-null on an unlinked return, the list and
+  the detail agreeing on which document it is, and a still-pending return.
+- `packages/ui/src/lib/returns-page-close-345.spec.ts` — NEW (~24 source assertions): both §1 second
+  attempts pinned at the exact node level that failed last time, the supplier block's absence, one
+  block component mounted twice, the block above the info block on both surfaces, every href spelled
+  once and read by its destination, the chrome reservation and its scroll-padding twin, the export
+  toast, and the import justification's presence in the source.
+
+### Gates
+
+`pnpm lint` — clean (one pre-existing unrelated warning in `doctor-portal.repositories.ts`).
+`pnpm typecheck` — clean, 31/31. Every source assertion in the new UI suite was verified against the
+real files before commit. `pnpm test:unit` is the controller's gate per CLAUDE.md §6. Vendor
+untouched; no schema, no migration, no RLS change.
+
+## Gate fix — `pnpm test:unit` after step 345 (2026-08-26)
+
+Two @mp/ui suites (3 tests) held assertions that step 345 deliberately superseded. Both were
+stale tests, not defects in 345's code, so the fix is in the specs only — no source changed.
+
+- `packages/ui/src/lib/returns-page-to-mockup-341.spec.ts`
+  - "keeps the medallion on the cards": 341 gave `PartyCell` a `medallion` prop and then wrote
+    the card without calling through it, so the true branch never rendered and the sole caller
+    always passed `false`. 345 §1 deleted the flag and drew the mark on the card in Purchases'
+    own `.supmark--xs` anatomy. The test now asserts the flagless call and that anatomy — the
+    same claim, minus the dead branch. `returns-page-close-345.spec.ts:79` asserts the removal.
+  - "makes the source document a LINK": 341 spelled the purchase href `?purchase=`, a key that
+    screen has never read. 345 §2 centralised both hrefs in `sourceHref` and uses `?pi=` (the
+    key `PharmacyPurchaseClient` has opened its drawer on since 273). The test follows the
+    parameter name (`sourceId`) and the corrected key, and pins the call site.
+- `packages/ui/src/lib/stock-alerts-screen-polish.spec.ts`
+  - "the tab row sits at the chrome's offset": the assertion pinned three ADJACENT lines of the
+    `--mchrome:117px` selector list; 345 §3 added `returns` between Suppliers and Purchases and
+    split them. Rewritten to slice the rule at the declaration and assert MEMBERSHIP, so the
+    next screen mounting this chrome does not break a test about line order. What it guards is
+    unchanged: this screen reserves 117px through the same tokens the POS does.
+
+Gates: `pnpm lint` and `pnpm typecheck` green. The three suites above pass under a targeted
+jest run (88 tests). No CSS, component or i18n change.
