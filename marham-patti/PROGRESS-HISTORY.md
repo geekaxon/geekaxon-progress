@@ -22296,3 +22296,40 @@ screens taking two hooks off one import. The assertions were updated to the shap
 
 **Gates:** `pnpm lint` and `pnpm typecheck` pass. `packages/db` enum suite 4/4; `packages/ui`
 164 suites / 4274 tests all pass.
+
+## 344 — credit-allocation-proof — DONE (2026-08-26)
+
+**WORK TYPE:** FIX (branch `fix/344-credit-allocation-proof`). Second attempt on the oldest-open-invoice leg of 317. Schema: none. RLS: unchanged. Flags/permissions: unchanged. No new endpoint.
+
+### §1 — Evidence, recorded before the fix
+
+Staging's rows were not reachable from this session, so the owner's case was reproduced against the service over `FakePharmacyRepo`, which mirrors both reads under test byte-for-byte (`listPurchases`: sort `createdAt` DESC, `slice(0, limit)`; `listPurchaseReturns`: same). The probe seeded the owner's book — PI-OLD Rs 600 open as baqaya (2026-06-01), PI-NEW Rs 300 part-paid Rs 250 at entry (2026-08-01) — inside a tenant carrying 1,200 other-supplier purchase documents, which is what a shop looks like a few months after a full inventory import.
+
+1. **The allocation rows 317 wrote.** For the Rs 150 partial return raised against PI-NEW: exactly one row, `(CN, PI-NEW) = 50` — the own-invoice leg, capped at that invoice's Rs 50 of room. The Rs 100 excess referenced NO invoice; the plan reported it as `advance`. With PI-NEW paid in full instead of part-paid (317's own headline scenario), the walk wrote **zero rows** and the whole Rs 150 became an advance. PI-OLD is referenced by nothing in either case, which is the owner's report exactly: `creditApplied` 0, `owed` still 600.
+
+2. **The walk's query.** `allocateSupplierCredit` planned over `this.repo.listPurchases(tenantId, 1000)` and `this.repo.listPurchaseReturns(tenantId, LEDGER_RETURN_SCAN /* 2000 */)`. Both are TENANT-WIDE and both order `createdAt` DESC before taking their page. The plan's own ordering is `at` ASC over `AllocatableInvoice` (`at` = the purchase's own `createdAt`, which 251 §3.3 sets from `purchaseDate`, so a backdated delivery ages from the day it arrived) — correct. The filter for "open" is `creditAllocationBook`: drop `status === 'VOIDED'` (261 §1.3) and opening-stock documents (272 §2.3), then `grossOpen = max(0, grandTotal − paid)`, gross of credit notes because the plan places every credit itself — also correct. No overdue state is excluded anywhere.
+
+3. **Which shape it was.** None of the four §1.2 predicted. The walk is right; **the book handed to it was truncated before it began**. The ordering that mattered was the READ's, not the plan's: a newest-first tenant-wide page of 1,000 drops the OLDEST open invoices first, and the oldest open invoice is the one and only thing §1.2 exists to walk to. So on a big book the target was outside the window before the walk started, the excess had nowhere to go, and it became an advance. The other two observations in the report follow for free and are why this stayed invisible for a build: the supplier's total moves because 304 posted the credit note, and the returned invoice moves because `Returned` is its own document's line — neither needs an allocation to exist. Only the older invoice does, so only the older invoice reported the failure.
+
+### §2 — The fix
+
+- `PharmacyRepo.listSupplierPurchases(tenantId, supplierId)` and `listSupplierPurchaseReturns(tenantId, supplierId)` — one supplier's book, read entire, **no limit**. A supplier's book is bounded by its own trade, and the walk reads exactly one supplier at a time. Prisma impls scope on the ORDER (`tenant_id, supplier_id` index) rather than filtering a tenant-wide item scan; the pharmacy-purchase test (carries 98 items) and the newest-first ordering both match `listPurchases`. Fake impls mirror them.
+- `allocateSupplierCredit` reads those two instead of the tenant-wide pages. **`planCreditAllocation` in `@mp/shared` is untouched** — 317 §1's rule and arithmetic were never wrong, and 317's own two suites (41 tests) stay green unmodified.
+- `appliedCreditOfSupplier` (the invoice drawer's applied-credit read) scoped the same way: a credit note outside a tenant-wide page is one `appliedCreditByPurchase` cannot name, and an allocation whose note it cannot name is dropped — so on a big book the drawer would have gone on saying "Rs 0 applied" over a row that said otherwise.
+- `assembleLedger` scoped the same way. Found by the guard, not by inspection: the supplier ledger folded the same newest-1,000 page and then filtered it down to one supplier, so on the 1,200-document book the seeded supplier's baqaya read **Rs 50 instead of Rs 650** — its oldest charges were dropped before the fold began. That is the very figure §2's invariant ("supplier totals identical before and after any allocation") is stated against, so leaving it truncated would have made the invariant unprovable.
+- **Judgement call — what was left alone.** `listSupplierSummaries` and the Purchases list page still read `listPurchases(tenantId, 1000)`. Both are genuine tenant-wide aggregates over a paged screen; re-scoping them would mean one query per supplier and a real perf regression, and neither decides an allocation. The line drawn is: anything that decides or states one invoice's balance reads that invoice's supplier's whole book; a list page stays a page.
+- §3's reconciliation already existed (317 §3, `POST credit-allocations/reconcile`, `apply` defaulting to false). Under the corrected book it now re-walks staging's under-allocated notes. Added `corrections: { purchaseId, invoiceNo, creditNo, amount }[]` to each supplier's line so the report NAMES the invoices it will correct rather than only counting them (spec §3). Built from the same `deltas` the write consumes, so the report cannot drift from the act; additive field, no UI consumes it.
+
+### §3 — Proof
+
+New suite `apps/api/src/pharmacy/credit-allocation-proof-344.spec.ts`, 7 tests. **Verified as a guard, not just as a test: reverted to the old reads, 4 of the 7 fail; restored, all 7 pass.**
+
+- THE REGRESSION — the owner's case on a 1,200-document book: the Rs 100 excess lands on PI-OLD, its balance moves 600 → 500, its drawer names the CN and the invoice it came off (`fromInvoiceNo: 'PI-NEW'`), and the supplier's baqaya is 650 before and 500 after — down by the credit note and by nothing else.
+- The rows say it: `[(PI-NEW, 50), (PI-OLD, 100)]`, attributed to the actor, and neither invoice's own totals move.
+- The older invoice's PILL responds: credit that clears it reads `SETTLED` via the shared `documentPaymentState`, and the last Rs 10 stays as 310's advance.
+- Reconciliation: reports per supplier and names the corrected invoice before writing; a dry run writes nothing; applied, the invoice comes right and the supplier total does not move; a second pass writes nothing (idempotent); no payment row is written, stamped or moved.
+- `stock.qty == Σ batch.qty` asserted at the end of the flow.
+
+### Gates
+
+`pnpm lint` and `pnpm typecheck` clean (one pre-existing unrelated warning in `doctor-portal.repositories.ts`). Targeted jest over the money paths this touches — `credit-allocation-317`, `credit-allocation-plan-317`, `credit-allocation-proof-344`, `supplier-ledger`, `supplier-ledger-314`, `returns-ledger-and-history-304`, `payments-round-2-318`, `void-payment-reversal-270`, `new-purchase-payment-behaviour-332`, `supplier-terms-and-due-date-324` — 149 tests, all green. Full suites left to the controller. 108/304/317 posting logic byte-identical outside the two reads; vendor untouched; no schema, no migration.
