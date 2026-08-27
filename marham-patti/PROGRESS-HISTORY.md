@@ -22610,3 +22610,281 @@ rejection apart from a void.
   quiet-danger footer button with the `ban` glyph (6497), `.voidmark` in the BODY as a state and not
   a toast (3675), the destructive confirm whose button stays dead without a reason (6853), and a
   word beside every colour.
+
+---
+
+## 347 — print-and-mobile-parity — DONE (2026-08-26)
+
+**Branch:** `fix/347-print-and-mobile-parity` · **WORK TYPE: FIX** · **Spec:** /specs/347-print-and-mobile-parity.md
+**Schema:** none. **RLS / auth / permissions / flags:** unchanged. **New endpoints:** none.
+
+### §1 — THE CAPTURE the spec asks for by name: why mobile's PDF differed
+
+It was **not** a second render path (there has been exactly one writer since 279 §3), **not** a
+missing stylesheet, and **not** a server render. It was a **viewport-dependent layout reaching a
+renderer that assumed there was none**:
+
+* the phone shows the A4 sheet through `transform: scale(.355)` (`.a4--phone` — 794px of paper on
+  282px of glass, plus `.a4wrap` clipping it);
+* `dom-to-pdf.ts` measured every box with `getBoundingClientRect()`, which reports the
+  **transformed** box, while it read every type size, border width and corner radius from
+  `getComputedStyle`, which reports the **untransformed** value.
+
+So the phone wrote a **282 × 399pt page carrying full-size 10.5px type** — boxes a third of the
+size of the words inside them. Print never showed it because the print stylesheet already resets
+`transform:none !important`; only the download path was measuring the *preview* instead of the
+*document*. The logo raster had the same fault one layer down (`embedMark` sized its canvas off
+the scaled box, so the phone's mark carried a third of the pixels).
+
+**The fix is the general rule, not a patch for `.a4--phone`:** the walker now works in **one
+coordinate space** — the sheet's own, unscaled CSS px, relative to its top-left — and every
+measurement is converted at the moment it is taken. New in `dom-to-pdf.ts`: `sheetScale(rendered,
+laidOut)` (painted width over `offsetWidth`, which a transform cannot change), `toSheetBox()`, the
+`SheetBox` type and a per-sheet `frameOf()` read **once** and shared by the page box, the walk and
+the logo raster. `walkSheet`, `borderOps`, `baselineOf` and `strike` all take `SheetBox` now, so
+there is no way left to place an op from a raw viewport delta. Nothing is mutated to do it — the
+preview keeps its transform while the file is written, so there is no reflow, no flash and no
+restore to get wrong.
+
+`sheetScale` returns **exactly 1** whenever the difference is under 0.1% or either number is
+unusable, so the desktop's arithmetic is byte for byte what it was before this step. That was
+deliberate: `offsetWidth` is an integer and a fractional layout width must not become a divisor
+that shifts every op on the page.
+
+**THE RENDERER AUDIT (grep-proven, asserted in the suite):**
+
+| document | path to paper | path to a file |
+|---|---|---|
+| purchase invoice | `<PrintDocShell>` → `window.print()` over `.mp-print-surface` | `<PrintDocShell>` → `renderSheetsToPdf` over the on-screen `.docsheet` |
+| debit note | the same shell, the same call | the same shell, the same call |
+| customer statement | `<CustomerStatement>` → `window.print()` | `<CustomerStatement>` → `renderSheetsToPdf` over `.invoice` |
+| POS quotation · day-close Z · thermal slips | `window.print()` / the 58mm transport | no Save PDF on **either** tier |
+
+Exactly **two** components in the whole app call `renderSheetsToPdf`, both from nodes already on
+screen; exactly **one** `writePdf` call exists, in `dom-to-pdf.ts`. No A4 surface re-renders into
+a new window (`window.open` / `document.write` are absent from all three).
+
+**Finding recorded, deliberately NOT fixed in this step:** the customer statement's sheet
+(`.mp-inv .invoice`) is **fluid** — it has no fixed A4 width — so its PDF page size follows the
+viewport even though it has only one renderer. That is not the defect §1 reports (there is no
+second renderer and no mixed-unit measurement), and pinning it to 794px would force a horizontal
+scroller into the statement's phone composition — a design change the owner has not asked for and
+that this FIX step may not make on its own. Flagged as the natural first item whenever the
+statement's own step lands.
+
+**The sheet's two buttons now share a line.** The phone's branch rendered `<div
+className="sheet__foot">{actions}</div>`, which is the **column** foot (52px, full width each), so
+`Save PDF` and `Print invoice` stacked and the paper below them lost a button's height of preview.
+They are now nested in `<span className="sheet__foot--row">`, which is the View Purchase footer
+pattern exactly — secondary hugs its label, committing action takes the rest. **No new CSS**: the
+shared footer already draws that shape; this branch simply asks for it.
+
+### §2 — the debit note matches the purchase invoice
+
+The note's line table asked for `.num` / `.nw` (the app's *screen* table classes) and wrapped its
+item in `li-nm`, **a class no stylesheet has ever defined** — which is why the line read as one
+flat run of grey text beside the invoice's typographic rows. Both documents already live under
+`.mp-pur2 .docsheet`, so the fix needed **no new CSS**, only the anatomy that scope already draws:
+`.rn` rule number · `.li-name` + `.li-sub` (bold item, generic beneath) · `.li-batch` (batch AND
+expiry, wrapping — 283 §2: a batch number a supplier reads back to us is never truncated) ·
+`.r .li-qty` with `.li-units` · `.r .li-money` · `.li-none` for a fact the shop does not have.
+Column widths re-spread to the invoice's proportions as `NOTE_COLS = [20, 250, 164, 102, 82, 96]`,
+summing to **714** — the same figure `SHEET_COLS` makes on the invoice, and the width `.tbl` is
+given.
+
+It also carries **`Against PI-…`** in the header meta (`mh__grn`, beside the note's own number),
+absent when the return names no document rather than guessed — a wrong invoice number is worse
+than none. No new endpoint: 345 §2 already put `sourceInvoiceNo` on the purchase-return detail and
+the document simply never asked for it.
+
+One small API addition was needed: `ReturnItemView.genericName` (`apps/api/src/pharmacy/
+pharmacy.service.ts`, `returnItemViews`), read from the medicine row the view already loads —
+`genericName: m?.genericName ?? null`, exactly as 311 §1 sends the parts on the purchase side.
+Optional on the web type, so a pre-347 payload renders the brand alone rather than crashing.
+
+### §3 — the small ones
+
+**Account / Reference stack full width on the phone.** Owner reversal of 340 §2, mobile only.
+Half a phone is ~160px; an account is "HBL Current · ****4471" and a reference is a bank's own
+transaction id, so at half width both controls truncate the only part worth reading and the select
+loses its chevron's room. 340's complaint — two questions occupying the height of four — is a
+**desk** complaint, and the desk keeps its one line. The rule lives in `.payacct` itself under
+`@media (max-width: 767.98px)`, so every surface that mounts `<PayAcctFields>` (POS single tender,
+POS split legs, supplier desk, New Purchase) moves together on both tiers; only the flow direction
+is per-tier. The breakpoint is `MOBILE_TIER_QUERY`'s own number, never a second one.
+
+**A one-unit product renders the unit as a select, pre-chosen.** Owner clarification of 340 §3,
+which is therefore **reversed**: `soleUnit` and `.unitfix` are gone from both tiers and from the
+stylesheet. The reasoning recorded, since this overturns a decision: 340 argued a control whose
+every answer is its current value is a step, not a choice — true in isolation, but the **row must
+not change shape with the product**. A strip-only line and a box/strip/tablet line sit in the same
+table, and a field that is a control on one row and a word on the next teaches the operator that
+the unit is sometimes editable — a worse cost than the tap it saved. What survives from 340 is the
+**auto-selection**: the base-unit effect still picks the unit, so nothing is asked; it simply looks
+like every other line. The 340 suite's three assertions on this were rewritten in place (as the
+345→346 gate was) so the two specs cannot both be believed at once.
+
+**The quarantined stock view: it was UNFINDABLE, not missing.** 342 §2 built it correctly as
+`<QuarantineCard>` inside the product drawer — but the only route to it was to *already suspect a
+particular product* and open it, which is why the owner asked "from where?". The view is unchanged;
+what it gained is an entry point where the question is actually asked: **Inventory's chip row**,
+beside Low stock / Out of stock / Near expiry / Expired / Requires Rx. An in-place filter rather
+than a deep link, because the view IS the drawer's card and what was missing is the *list of
+products to open it from* — which is exactly what that table is. The chip is **absent at zero**,
+unlike everything else on that row: quarantine is a state most shops are never in, and a chip
+reading "Quarantined 0" invites a press that shows an empty table. The figure is the endpoint's own
+`quarantinedQty`, sent per row since 342 §2 and already excluded from sellable stock; the list type
+simply never read it.
+
+### Files
+
+* `packages/ui/src/lib/dom-to-pdf.ts` — the whole §1 fix, and the recorded cause at the top.
+* `packages/ui/src/index.ts` — `sheetScale`, `toSheetBox`, `SheetBox` exported.
+* `apps/web/components/pharmacy/PrintDocShell.tsx` — the phone's footer row.
+* `apps/web/components/pharmacy/DebitNoteDocument.tsx` — the invoice's table anatomy, `NOTE_COLS`,
+  `sourceInvoiceNo`, `genericName`.
+* `apps/web/app/(app)/pharmacy/returns/ReturnsClient.tsx` — passes both through.
+* `apps/api/src/pharmacy/pharmacy.service.ts` — `ReturnItemView.genericName`.
+* `apps/web/app/(app)/pharmacy/purchase/PharmacyPurchaseClient.tsx` — the unit select, both tiers.
+* `apps/web/app/(app)/pharmacy/inventory/PharmacyInventoryClient.tsx` — the quarantined chip.
+* `apps/web/app/globals.css` — `.payacct` mobile stacking; `.mp-pur2 .unitfix` deleted.
+* `packages/i18n/src/messages/{en,ur}.json` — `rtnA4Against`, `pinvFilterQuarantined` (EN+UR parity).
+* `packages/ui/src/lib/print-and-mobile-parity-347.spec.ts` — new suite (§1 scale + parity proof +
+  the audit, §2 the table and `Against PI-…`, §3 all three).
+* `packages/ui/src/lib/new-purchase-payment-polish-340.spec.tsx` — the three superseded assertions.
+
+**Why the parity proof is a unit test on `toSheetBox` and not a rendered comparison:** jsdom has no
+layout engine, so a rendered check would compare two sets of zeroes and pass while the product
+stayed broken. Feeding the SAME sheet's geometry at 1:1 and at 355‰ through the conversion and
+asserting one answer is the real claim, in the unit the defect lives in.
+
+### Self-checks (§4B, by inspection)
+
+i18n EN+UR parity with matching placeholders (asserted) · isolation ➖ presentation + one
+already-tenant-scoped read · flags unchanged (no new capability) · white-label untouched (the
+document's lockup is `@mp/brand`'s as before) · audit ➖ no state change · offline ➖ · design: no
+new CSS for §1/§2 (both reuse rules the scope already draws), one new responsive rule for §3, no
+hex literal added, dark/RTL unaffected (the sheet is `color-scheme:light` by design) · no secrets.
+
+### Gates
+
+`pnpm lint` and `pnpm typecheck` both clean (the one API warning is a pre-existing unused
+eslint-disable in `doctor-portal.repositories.ts`, untouched by this step). `pnpm test:unit`,
+`pnpm build` and `pnpm test:e2e` are the controller's, per AGENT.md §4A — not run here. Vendor
+untouched.
+
+## 348 — unit-snapshot — DONE (2026-08-27)
+
+**Branch:** `fix/348-unit-snapshot` (off `fix/347-print-and-mobile-parity` head). Spec: `/specs/348-unit-snapshot.md`. No CODEREF in range.
+
+**The defect.** Returning an old purchase failed with *"Unknown unit for cmt2mcgsb001wfkmorjw3ubo8 — re-pick the pack."*
+Two faults in one message: a raw cuid on screen (standing rule 7), and a legitimate return refused because
+`PurchaseItem.productUnitId` — a LINK into the live `product_units` catalogue — no longer resolved after the
+product's chain had been re-cut. Nothing else on the line could say what "1" of that unit had meant.
+
+**§1 — the rule, implemented.** Every document line now snapshots its unit at write time: `unit_name` (what the
+paperwork prints) and `unit_contains` (how many BASE units ONE of them held). `unit_contains` is the CUMULATIVE
+base factor, not `product_units.contains` — a box of 10 strips of 10 tablets stores 100, because reading back a
+bare 10 would need the whole chain, which is the thing that may be gone. Snapshot first, live link second; the
+link stays for analytics. A line that named NO pack snapshots nothing, deliberately: giving it the base unit's
+name would turn a greedy "4 box · 2 strip · 6 tab" display into "426 tab".
+
+**Line-writing paths audited (spec §1 asked for the list).**
+- `purchase_items` — `createPurchase` → `pricePurchaseLine`; also the opening-count `createMany` (base units only,
+  names no pack, snapshots none) and `purchase.importer.ts`, which routes through `createPurchase`.
+- `sale_items` — `commitPosSale` → `splitLineUnit` (each part of a SPLIT carries the same snapshot, so two halves
+  of one "3 box" can never read as two different packs). Held-sale restore commits through the same writer.
+- `return_items` — `createSaleReturn` (via `returnedUnit`, which now reads the SOLD line's snapshot) and
+  `createPurchaseReturn`.
+- `stock_adjustments`, `reconciliation_lines`, `po_items`, `grn_items`, `transfer_items`, `invoice_items`,
+  `prescription_items`, `online_order_items` — NONE of these carries `product_unit_id`; they are base-unit-only
+  and have no unit to snapshot. Confirmed by grepping `productUnitId` across `schema.prisma`: exactly three tables.
+
+**The seam.** `resolveEnteredQty` gained an optional `source` — the SOURCE DOCUMENT the line comes off. When the
+client's `productUnitId` resolves in the live chain, behaviour is byte-identical to before. When it does not, the
+source line's own snapshot supplies the factor and the conversion goes through on the document's authority. Only
+the SOURCE's snapshot is ever trusted (and only when it names the same unit id) — never a factor supplied by the
+client — so a stray id is refused exactly as it always was and no caller can talk the converter into a wrong
+multiple. Sale returns pass the `SaleItem`; purchase returns pass the matching `PurchaseItem` of
+`originalPurchaseId` (the new-purchase-return screen has always sent it, 302 §1.2).
+
+**§2 — the repair.** `packages/db/src/line-unit-repair.ts`, wired into the deploy seed beside 188's base-unit
+repair. Three passes of decreasing certainty, over all three tables, in one transaction with FORCE RLS lifted and
+restored (the 61/90 lesson — a cross-tenant sweep under the ordinary seam sees nothing and "succeeds"):
+1. link still resolves → copy name + resolved multiple;
+2. link dead → RELINK by the pack size the line itself proves (`qty ÷ unit_qty`), and only when the medicine holds
+   EXACTLY ONE unit with that multiple. Two candidates is an ambiguity and a document is not the place to guess;
+3. neither → store the multiple, leave the name NULL. Honest: the line can prove what one of its unit was WORTH
+   but nobody can say what it was CALLED. A null name renders as the base-unit figure it already showed, and the
+   multiple is what unblocks the return.
+Counts are REPORTED per table before a single write; idempotent (passes 1–2 guard on `unit_name IS NULL`, pass 3
+on `unit_contains IS NULL`), so a second run writes zero. A line with a dead link and no `unit_qty` can prove
+nothing; it is counted and logged as unreadable and reads/returns in base units — deliberately NOT fatal, unlike
+the base-unit repair, because refusing to boot over one legacy row is a worse answer than naming it.
+
+**§3 — the message.** `${label}: this line's pack could not be read — re-pick it.`, where `label` is the medicine's
+display name resolved by a new `labelsOf` helper. Grepped every throw/toast in the app for id interpolation and
+fixed the operator-facing ones: `transfer.service.ts` ×3 (medicine/batch/transfer item), `purchase.service.ts` ×2,
+`pharmacy-inventory.service.ts` (reconciliation line), `online-pharmacy.service.ts`, `lab.service.ts` (test id),
+`pharmacy.service.ts` POS commit, `packages/ai/src/index.ts` (tenant id). Deliberately left: `TenantContextError`
+in `packages/db/src/index.ts` (a developer wiring guard that must fail loudly and never renders), and the
+build/seed-time invariant assertions in `demo/plan.ts`, `demo/purchase-book.ts`, `pharmacy-shortcuts.ts`.
+
+**Found, out of scope, flagged for a later step.** `apps/web/app/(app)/consultation/ConsultationClient.tsx:418`
+renders `{f.medicineId}` — a doctor-favourite's raw medicine id, on screen. It is a LIST RENDER, not a toast or an
+error, so it is outside §3's stated sweep, and fixing it needs the favourites API to start returning a resolved
+name. Recorded here rather than changed silently.
+
+**Money.** Byte-identical. No price, cost, discount or total column was touched; `qty` keeps its meaning (BASE
+units) everywhere; `stock.qty == Σ batch.qty` unaffected — the snapshot moves paperwork, never a figure. The
+existing 185 money assertions (pack price billed to the paisa, no per-base rounding drift) pass unchanged.
+
+**Migration.** `20260827000000_line_unit_snapshot` — six nullable columns, `IF NOT EXISTS`, additive only, on three
+tables already tenant-scoped under FORCE RLS since `20260721000000_pharmacy_data_models` (pre-migration record of
+all three written into the migration header). No backfill inside the migration: the lookup is three passes, not one
+UPDATE, and belongs in a repair that reports and can be re-read. Applied under the inline-env sourcing rule.
+
+**Files.** `packages/db/prisma/schema.prisma`, `packages/db/prisma/migrations/20260827000000_line_unit_snapshot/`,
+`packages/db/src/line-unit-repair.ts` (+ `.spec.ts`), `packages/db/src/index.ts`, `packages/db/prisma/seed.ts`,
+`packages/shared/src/retail-units.ts` (`LineUnit`, `unitSnapshotOf`, `lineUnitName`, `lineUnitFactor`,
+`lineUnitLabel`; `unitQtyLabel` kept as a thin wrapper), `apps/api/src/pharmacy/pharmacy.repositories.ts`,
+`apps/api/src/pharmacy/pharmacy.service.ts`, `apps/api/src/pharmacy/__fakes__.ts`,
+`apps/api/src/pharmacy/unit-snapshot-348.spec.ts`, plus the seven message fixes above. No web change needed — the
+drawer already echoes `productUnitId` and `originalPurchaseId`, and the server resolves from its own source line.
+
+**Gates.** `pnpm prisma generate` ok. `pnpm lint` — 0 errors (1 pre-existing warning in
+`doctor-portal.repositories.ts`, untouched). `pnpm typecheck` — clean. Targeted suites run green rather than left
+for the controller: the two new ones (11 + 13 assertions, including the owner's end-to-end case and a cuid-shaped
+regex proving no id reaches the message), plus `unit-aware-*`, `unit-conversion`, `returns`,
+`returns-flows-and-correctness-302`, and the whole of `transfer`/`lab`/`online-pharmacy`/`purchase`/
+`pharmacy-inventory` for the message changes — 108 + 85 + 24 passing.
+
+**Note on PROGRESS.md.** Trimmed from 2,687 to ~1,750 bytes by compressing the standing header without dropping a
+single fact. Still over the 1.5 KB target; the remainder is standing controller instruction I did not author and
+would not delete unilaterally.
+
+## Gate fix — green `pnpm test:unit` after 346/347/348 (2026-08-27)
+
+`pnpm test:unit` failed with 7 suites / 13 tests red in `@mp/ui`. Every failure was a source-text
+or per-selector guard from an EARLIER step still asserting a literal that a LATER step legitimately
+superseded. No product code was wrong, and none was changed — specs only.
+
+- **260 / 261 / 264 (per-selector CSS diff).** 346 §3 gave `.voidmark` and `.btn--dangerquiet` a
+  second scope in one rule (`.mp-pur2 X, .mp-ret X { … }`) rather than a byte-identical copy in the
+  returns block, so `ruleOf`'s `indexOf('.mp-pur2 .voidmark {')` no longer matched. The three
+  helpers now fall back to the grouped form: the rule as written first, then `sel` followed by `,`
+  — nothing else, so `.voidmark b` and `:hover` stay their own rules. 261 keeps its "opens its own
+  line" requirement on BOTH passes: the first attempt tries the exact selector so a mockup's
+  `@media print` group (`.a4--phone,.a4wrap{…!important}`) can never answer for the base rule.
+- **288 / 297 (dom-to-pdf source guards).** 347 §1 folded the origin and the phone's preview scale
+  into a measured `SheetBox` and carried the frame's scale into mark embedding. Updated to the
+  current text: `borderOps(style, box, ops, radius)`, `embedMark(img, scale)`,
+  `marks.set(src, { img, scale: frame.scale })`, `collectImages(frames)`. Intent unchanged — one
+  radius for fill and stroke, embed from the decoded element, one mark per source.
+- **341 / 345 (returns).** 346 §3 moved the state's word behind `stateWord`/`RETURN_STATE_TONE`
+  (a void is a fourth state), so the drawer-header patterns read `<StatusPill … <TypePill` instead
+  of the `rtnStatusPending` key; the inline money predicate became the shared `returnHasPosted`
+  fold; the ledger reference became the release + reversal `Set`; and the list path resolves
+  `canApprove` inside a `Promise.all` with `canVoid`, so the count drops the `await`.
+
+Gates: `@mp/ui` jest 166 suites / 4338 tests pass; `pnpm lint` and `pnpm typecheck` clean.

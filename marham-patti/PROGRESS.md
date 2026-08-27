@@ -1,23 +1,25 @@
-> ⚠️ **PUBLIC FILE** — no secrets, hosts, endpoints or keys.
+> ⚠️ **PUBLIC FILE** — no secrets, hosts, endpoints or keys. Placeholders only.
 
 # PROGRESS.md — Marham Patti Build Tracker (SHORT)
 
-> Detail in PROGRESS-HISTORY.md. Under 1.5 KB. A DONE step is never rebuilt; a dangling Next means [HUMAN_REQUIRED].
+> Detail lives in PROGRESS-HISTORY.md. Under 1.5 KB. A DONE step is never rebuilt; a dangling "Next" is [HUMAN_REQUIRED].
 
 ## Current Status
-- **Phase:** **PHASE 38** — realtime rule, allocation proof, returns close-out.
-- **Last completed:** **346 — approval-rejection-void**.
-- **Next:** specs/347-print-and-mobile-parity.md
-- **Group order:** 343 → 344 → 345 → 346 → 347. One step, then stop.
-- **RULES:** every screen subscribes; a balance reads the whole book; a link to a document opens its drawer.
-- **347:** one renderer per document — the same numbers on paper and on the phone.
-- **BRANCH RULE:** the spec's own branch BEFORE any commit. Numbering never skips.
-- **Then:** Recent Sales → Settings → Day-close → Accounting → Prints → Dashboard.
-- **Held:** A4 sale invoice; thermal receipt (Goojprt PT-210, 58mm). **Before production:** fresh secrets, VAPID keys, staging relax off, demo tokens unset.
+- **Project:** Marham Patti — multi-tenant white-label healthcare platform.
+- **Phase:** **39** — snapshots, voids, and the returns finish.
+- **Last completed:** **348 — unit-snapshot**.
+- **Next:** specs/349-payment-fixes.md
+- **Group order:** 349 → 350 → 351 → 352. One step, then stop.
+- **351 §1 is a THIRD attempt:** name the file rendering the deployed drawer, and why 341/345 missed it, before any fix.
+- **352 §4 import is a SECOND attempt:** a framework, or a written justification — silence forbidden.
+- **RULES:** numbers right, text left, headings capitalised; realtime everywhere; one renderer per document; a document is readable forever on its own; never skip a number; branch before committing.
+- **After this:** Recent Sales → Settings → Day-close → Accounting → Prints → Dashboard → audits.
+- **Held:** A4 sale invoice; thermal receipt (Goojprt PT-210, 58mm, hardware pending).
+- **Before production:** VAPID keys; blank VENDOR_BOOTSTRAP_*; fresh secrets; MFA_STAGING_RELAX=false; SEED_DEMO + SCREENSHOT_TOKEN unset.
 
 ### Recent steps
-- **346 — approval-rejection-void** — DONE (2026-08-26) — a return can now be signed off, refused, or taken back by entries.
-- **345 — returns-page-close** — DONE (2026-08-26) — cards show a face, and the drawer opens on the document it is about.
-- **344 — credit-allocation-proof** — DONE (2026-08-26) — the credit walk read a page, not a book; the older invoice moves.
+- **348 — unit-snapshot** — DONE (2026-08-27) — a line remembers its own pack; old ones repaired on deploy; no id in a message.
+- **347 — print-and-mobile-parity** — DONE (2026-08-26) — the phone saves the paper the desk saves.
+- **346 — return-approval** — DONE (2026-08-25) — a return can be signed off, refused, or taken back.
 
 > Older steps in PROGRESS-HISTORY.md
