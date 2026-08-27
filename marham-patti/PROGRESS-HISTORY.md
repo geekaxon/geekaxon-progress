@@ -23216,3 +23216,191 @@ Thirteen new keys, EN + UR, placeholders matching: `rtnWriteOffTitle`, `rtnApWai
 `pnpm lint` and `pnpm typecheck` run once at the end — both clean, including the design-drift, token-integrity,
 tenant-english-only, search-select and page-title checks. `pnpm prisma generate` not required (no schema change).
 Unit/e2e/build left to the controller per §4A.
+
+---
+
+## 352 — returns-sweep — DONE (2026-08-27)
+
+**Branch:** `fix/352-returns-sweep` · **WORK TYPE:** FIX · **Spec:** `specs/352-returns-sweep.md`
+**Schema:** none (confirmed — §6 rides the existing `Notification` table and the existing
+`SUPPLIER_PAYMENT_DUE` kind; no Prisma enum value added, no migration). **RLS:** unchanged — the
+one new repo read (`hasNotification`) goes through `runWithTenant` like every other read there.
+**Flags/permissions:** unchanged. **Vendor:** untouched.
+
+### §1 — the two app-wide display rules, and why the fix is two lines of CSS
+
+Both rules were already true on screens whose CSS scope happened to re-declare them and silently
+false on the ones that did not. Neither was a per-screen mistake, so neither was fixed per screen.
+
+- **Right-align.** `th.num`/`td.num` was declared four times (`.mp-kit`, `.mp-inv`, `.mp-dc`,
+  `.mp-pur2`) and NOT under `.mp-inv2`, the list kit the most tables wear — Returns among them.
+  So Returns' `Items` and `Amount` headings sat left over cells forced right by an inline
+  `style={{textAlign:'end'}}`: the cell patched locally, the heading left behind. Now declared
+  ONCE, **cell-side and scope-free** (`th.num, td.num`), so a screen no longer has to be under
+  the right prefix for the marker to mean anything. The four scoped copies still win on
+  specificity and say the same thing, so nothing already-correct moved. `td.num .expcell` moves
+  the two-line date block as a block (`text-align` alone leaves a flex column at the start).
+- **Capitalisation.** A sortable heading is a `<button>`, and the UA stylesheet resets
+  `text-transform`/`letter-spacing`/`color`/`font` on form controls. `.mp-pur2` carried a
+  `.sorth` rule restoring all four; Returns wears `.mp-inv2 .mp-ret` and never saw it — so every
+  SORTABLE heading rendered as mixed-case 13px Arial beside two non-sortable ones in uppercase
+  tracked grey. That is the whole of "the Returns list first"; it was never a translation to
+  re-capitalise. `.sorth` is now ONE block with two entry selectors (`.mp-inv2`, `.mp-pur2` — the
+  latter for drawer tables mounted without the kit above them), and it gained
+  `text-transform:inherit`, which even the `.mp-pur2` original was missing.
+
+**JUDGEMENT CALL (recorded, not escalated):** a leading IDENTITY date — the register's own `Date`,
+a ledger's `When` — stays LEFT. It starts the row rather than being scanned down and compared,
+and all three of the owner's own examples (`Nearest Expiry`, `Items`, `Amount`) are mid-table
+columns. The exceptions are written down per column in the audit rather than left to be noticed.
+
+**The audit is recorded** in `docs/352-table-alignment-audit.md`: every `.tsx` under
+`apps/web/app/(app)` and `apps/web/components` that renders a `<th>` — 36 files — each verdict
+compliant / fixed / exception-with-reason. Fixed: Returns (`Items`, `Amount`), Low stock
+(`Nearest expiry`, `Days left`, `Risk`, `Reorder qty`, `Cost to reorder`), Inventory
+(`Nearest expiry`, and `SortTh` gained a `num` flag), POS cart preview (`Qty`, `Price`, `Total` —
+had no marker at all and was reached only because the declaration is now scope-free). Exceptions
+with reasons: progress-bar cells (`Stock`), stepper-input columns (`Return qty`), the purchase
+entry grid's `Expiry` (an input column), the A4 invoice's `Expiry` (the owner's own committed
+reference document — this step copies that pattern, it does not edit it), and Lab's `Value`
+(a result that is `12.4` on one row and `Positive` on the next is text).
+
+### §2 — cards act without hover
+
+`.scard__acts`, `.icard__acts` and `.rcard__acts` all opened at `opacity:0`, faded in on
+`:hover`/`:focus-within`, and carried a `@media (hover:none)` escape hatch. Inventory's card
+simply drew them, and it is the one that was right. Hover is a mouse assumption — the standing
+keyboard principle's cousin: `:focus-within` only helps somebody already inside the card, and
+neither lets a person SEE what a card offers before deciding to reach for it. Now ONE declaration
+block, three selectors, no transition, no touch exception. Grep-proven in the suite: no `__acts`
+rule carries `opacity:0`, and no `:hover`/`:focus-within`/`hover:none` reveal survives.
+
+### §3 — pills
+
+`ReturnsFilterLit` is now `all | SALE | PURCHASE | PENDING | REJECTED`. `Today`/`This month` are
+gone: the header's month window has owned time on this screen since 341 §1, and a second time
+control inside the first one's window is two answers to one question. `returnMatchesFilter` is a
+new shared predicate, and the chip COUNT and the list are both folded through it (315 §3's rule)
+— a chip whose count came from its own expression is how `Pending 4` ends up over three rows.
+The phone gets the SAME five: 290 §1 cut it to three because two of them were the time chips and
+five did not fit at 360px, but `.mchips` has scrolled horizontally since 214 (it is the rail the
+Purchases phone carries five settlement chips on), and losing `Pending` by picking up a phone is
+losing the one filter an approver opens this screen to use. New i18n: `rtnFilterPending`,
+`rtnFilterRejected` (EN+UR); `rtnFilterToday`/`rtnFilterMonth` deleted from both catalogues.
+
+### §4 — import, second attempt: EVIDENCE, then the written answer
+
+**What 345's build did with that section:** it chose the justification 345 §4 offered and it wrote
+one — a twenty-five-line block comment inside `ReturnsClient.tsx`, beside the toolbar. The
+owner's screenshot showed neither a control nor a justification, and both halves are true: the
+reasoning was sound, the filing was not. An argument reachable only from the source tree is, to
+the person who asked for it, silence. **A filing failure, not an engineering one.**
+
+**Decision (mine, recorded — no escalation): the justification stands and export stands alone.**
+Written where it can be read: `docs/352-returns-import-decision.md`. In short: the framework's
+apply is idempotent on a NATURAL KEY; a return has none (its number is minted at commit); and a
+return is not a row but a MOVEMENT — cash out or 336's waterfall, stock back or written off per
+338 §2, a gapless credit note allocated across open invoices (317/344). A second run of one file
+refunds the same customer twice, and the dry-run preview cannot price any of it without
+performing it. Bulk import would also be the one route around the approval gate 289 §6/346 §3
+built. 254 §5: the icon is ABSENT rather than inert. The doc also states what WOULD change this —
+a file-carried idempotency key plus every imported return landing PENDING — so the next spec has
+a starting point rather than this argument again. The code comment is now four lines and points
+at the doc.
+
+### §5 — the purchase list's return shortcut, and realtime under a filter
+
+- **Return action** on purchase rows AND cards, both from one `purchaseCanReturn` (a card and a
+  row that offer a document different actions is how a person learns to distrust one view).
+  Disabled — never absent — on a voided or fully-returned invoice. It navigates to
+  `/pharmacy/returns/new-purchase-return?pi=<id>`; `?pi=` is the key the Purchases desk already
+  deep-links a document by (319 §3). The flow lands on **step 2** by calling `pick(id)`, not by
+  setting a step: `returnFlowStep` derives the step from the chosen document, so there is no step
+  state a link could put out of agreement with the buttons. The URL WINS over a restored draft —
+  a draft is what this screen was last doing, a link is what the person is doing now — and the
+  draft is not destroyed. The sale side mounts the same when Recent Sales lands.
+- **The filter defect, found and fixed with a failing-then-passing test.** `pinRowOrder` decided
+  "is this a first paint?" by asking `previous.order.length === 0` — and a list filtered to
+  NOTHING answers that exactly as an unloaded one does. So a re-read after the reader filtered to
+  an empty result took the seeding branch, which marks nothing on purpose, and a created purchase
+  landed with no live mark. That is the case where the mark matters most: with no other row on
+  screen to be noticed against, an unmarked insert into an empty table is indistinguishable from
+  the screen having done nothing — which is what was reported. `previous.seeded` now says the
+  fact out loud (the READER'S CHOICES unchanged, not the row count); `useLiveOrder` passes it.
+  Optional with the old reading as its fallback, so every existing caller is untouched. The suite
+  asserts the fixed path AND reproduces the defect via the old reading, so the difference is
+  proved rather than believed, plus the guard that a genuine first paint still marks nothing
+  (320 §4's defect) and that a row the filter excludes is not resurrected from the pin.
+
+### §6 — overdue, in the bell
+
+**Schema checked first, as the spec asked:** the `Notification` table and the
+`SUPPLIER_PAYMENT_DUE` kind already exist. Nothing added.
+
+- `RealtimeService.purchaseOverdue` replaces the parameterless raiser that has sat uncalled since
+  112 (it could not name the invoice it was about, so its bell entry would have said "a supplier
+  has a payment due" and linked to a list). New seam `RealtimeRepo.hasNotification(tenant, kind,
+  href)` — Prisma impl under `runWithTenant`, fake in the 112 suite.
+- **"One per invoice per crossing, not per view"** is enforced by the notification TABLE, not by a
+  counter: a row already carrying this kind and this invoice's href means the crossing has been
+  announced. An in-memory guard would be wrong after a restart and wrong on a second instance.
+- **JUDGEMENT CALL:** the crossing is noticed on the purchase LIST READ. A crossing is not an act
+   — nothing happens at midnight, the date simply becomes true — so there is no write to hang a
+  publish off. The honest alternatives were a scheduler (which this deployment does not have and
+  which is a second thing to keep alive) or the next read of the book, which is where every row's
+  due date and balance is already resolved at no extra query. The observation is free; only the
+  raise costs anything, and the raise dedupes. `void`-ed, try/caught: a bell is never on the path
+  of a list the shop is waiting to read.
+- `purchaseOverdueHref` is shared because it is TWO things at once — the link the bell opens and
+  the dedupe key the raise checks. Two spellings would mean the bell opened the right invoice and
+  rang about it once a day.
+- Rides the same `InventoryAlertEmitter` port as low-stock and near-expiry (third kind,
+  `PURCHASE_OVERDUE`) — the seam for "things the system noticed", one place to look when somebody
+  asks why a phone did or did not buzz.
+- **Push waits for VAPID keys** (production checklist), stated in the method's own doc comment and
+  asserted by the suite so nobody reads "notification" as "push" and reports it missing.
+- i18n: `notifSupplierDueTitle` → "Invoice overdue", `notifSupplierDueBody` now names the invoice
+  (EN+UR).
+
+### §7 — the debit note print, finished
+
+To the owner's Purchase-invoice PDF pattern: **Lines** and **Pages** in the header meta (`Items`
+stays — it counts UNITS, a different question, and the two disagree on every multi-unit line);
+the trailing `· —` after a no-expiry batch removed (`expiryShort`'s em-dash is right in a cell of
+its own and wrong inside a sentence — an undated lot HAS no expiry); `Lines 1–15 of 30` at the
+table's end on EVERY sheet (a single-page note says `Lines 1–4 of 4`, telling the reader it is
+whole rather than leaving them to assume it) with `Continued on page 2 — 15 more lines · Rs …`
+only where there is a next page, quoting the RUNNING credit as the invoice's `.contline` does;
+**per-line reasons** under each item (`.li-sub li-reason`, italic — no new colour, no new size),
+with the header stating the shared reason or bare `Mixed` (`rtnReasonMixedBare`, EN+UR). The
+`ReturnItemView.reason`/`reasonNote` the document now prints has been on the wire since 289 §3 —
+the document simply never asked, which is how one header reason came to speak for three lines.
+**`LINES_PER_SHEET` 16 → 13:** a stated cap only stays honest if it is restated when the row it
+counts grows a third line, and this document's fixed pagination exists to keep the totals inside
+the well.
+
+### Files
+
+`packages/shared/src/pharmacy-returns.ts` (filters + `returnMatchesFilter`),
+`pharmacy-desk-live.ts` (`pinRowOrder.previous.seeded`), `pharmacy-notifications.ts`
+(`purchaseOverdueHref`) · `apps/web/lib/live-list.ts` · `apps/web/app/globals.css` ·
+`ReturnsClient.tsx`, `NewPurchaseReturnClient.tsx`, `PharmacyPurchaseClient.tsx`,
+`PharmacyInventoryClient.tsx`, `StockAlertsClient.tsx`, `PharmacyClient.tsx`,
+`components/pharmacy/DebitNoteDocument.tsx` · `apps/api/src/notifications/*` (repo seam, service,
+112 fake), `apps/api/src/pharmacy/pharmacy.alerts.ts`, `pharmacy.service.ts` ·
+`packages/i18n/src/messages/{en,ur}.json` · new: `apps/api/src/pharmacy/returns-sweep-352.spec.ts`,
+`docs/352-table-alignment-audit.md`, `docs/352-returns-import-decision.md`.
+
+### Gates
+
+`pnpm lint` clean (0 errors; the single warning is a pre-existing unused-disable in
+`doctor-portal.repositories.ts`, untouched by this step). `pnpm typecheck` clean, all 31 tasks.
+Unit/e2e/build left to the controller per AGENT.md §4A. Note for the record: this repo has no
+Playwright harness and no `test:e2e` script, so §7's print and §3's chips are proved by the
+source-reading suite in the shape 343 established rather than by a `page.goto`.
+
+## Gate fix — 352 (test:unit)
+Two stale filter-chip assertions from earlier steps still expected the pre-352 chip set.
+- `apps/api/src/pharmacy/returns-desktop-289.spec.ts` — `RETURNS_FILTERS` now `all/SALE/PURCHASE/PENDING/REJECTED` (352 §3 retired the `today`/`month` time chips; the header month filter owns time).
+- `apps/api/src/pharmacy/returns-mobile-290.spec.ts` — the phone no longer carries a cut-down three-chip set; asserts `RETURNS_MOBILE_FILTERS` equals `RETURNS_FILTERS`.
+Test-only change; no production code touched. `pnpm lint` + `pnpm typecheck` pass (one pre-existing unused-eslint-disable warning in doctor-portal.repositories.ts).
