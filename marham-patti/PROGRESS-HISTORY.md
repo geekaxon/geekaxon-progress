@@ -23088,3 +23088,131 @@ literal outside `globals.css`, light/dark via tokens, skeleton while the preview
 via logical properties, "—" wherever a figure is absent. White-label ✓ — no brand string anywhere.
 Accountability ✓ — the voids' existing `@Audited` + StockMovement writes are untouched; the previews
 write nothing. Offline ➖ — a void is not an offline-critical path.
+
+---
+
+## 351 — return-drawer-round-3 — DONE (2026-08-27)
+
+**WORK TYPE:** FIX · **Branch:** `fix/351-return-drawer-round-3` · **Spec:** `specs/351-return-drawer-round-3.md`
+**Schema:** none. **RLS/auth/permissions/flags:** unchanged. **Endpoints:** none added or altered. Vendor untouched.
+
+### §1 — THE SOURCE RECORD, before any fix (the spec's third-attempt condition)
+
+**The file rendering the deployed View Return drawer/sheet header is `apps/web/components/pharmacy/Panel.tsx`** — not
+`ReturnsClient.tsx`. `Panel` owns the desk's `.drawer__head` (title, subtitle, the one `DrawerClose`) and, on the phone,
+delegates to `@mp/ui`'s `MobileSheet`, which owns `.sheet__hd`. `ReturnsClient`'s `ReturnDrawer` only supplies props.
+
+**Did 341 and 345 touch that file?**
+
+* **341** (`1f4bf36`, "the returns page reads like Purchases"): touched `ReturnsClient.tsx`, `globals.css`, the API, i18n
+  and four other files — **and never `Panel.tsx`**. It built the two pills (`Completed` · `Sale`) correctly and mounted
+  them as the first row of the drawer's scrolling BODY, because the frame had no slot. Neither header changed.
+* **345** (`79e2576`, "the drawer opens on the document"): **did** touch `Panel.tsx`, +23 lines — but only inside the
+  `frame === 'drawer'` return, and it wrote the restriction into the new prop's own doc comment verbatim:
+  *"THE DRAWER'S SLOT ONLY. The phone's sheet has its own header anatomy … and states the same fact in its
+  `.mfacts__hd` pill."*
+
+**Why the mockup's markup never reached the surface.** Not a second drawer component, not a stale route, not a build on
+the wrong surface. The phone's header **was never in either round's diff**: 341 changed the wrong layer, 345 changed the
+right layer on one of its two branches and documented the omission as a decision. `MobileSheet` has carried a third
+head row since 260 §2 (`headExtra` + `headClassName="sheet__hd--stack"`, which is where View Purchase's sheet draws its
+`.vdsub` strip and where `returns-mobile.html` 6080 draws these same two pills) — `Panel` simply never forwarded to it.
+The desk's badges did ship at 345; the owner's screenshots were taken against a build in which only 341 had landed.
+
+**The pending state has the same shape of miss.** `returns-desktop.html` 5617 declares a whole component for it —
+`.apstate`, three tones, head/who/note/trail. 341 §6 shipped `<p className="mp-subtitle">{rtnPendingNote}</p>`, one
+grey line of prose, and 345 did not revisit it. `.apstate` had **never appeared anywhere in `globals.css`**, which is
+checkable: the class did not exist in the app before this step.
+
+### What changed
+
+* **`Panel.tsx`** — the mobile branch forwards `headExtra={headBadges}` + `headClassName="sheet__hd--stack"`. ONE prop
+  now feeds both headers; a future round cannot dress one surface and forget the other.
+* **`ReturnsClient.tsx` (`ReturnDrawer`)** — `headBadges` renders the desk's `.drawmeta` (unchanged) **or** the phone's
+  `.vdsub` (state pill · kind pill · date · who). The sheet body stopped repeating the state in `.mfacts__hd` and the
+  kind in `.mfacts`, so its fact block is the mockup's exact four (items, settlement, date, **Processed by**) at 2×2.
+* **The stray `Process…` badge** — the sheet closed on `<span className="msig">Processed by …</span>`. `.msig` is the
+  mockup's *reason chip* (a 4px/9px pill), so a whole sentence in one truncated to "Process…". The fact moved into the
+  info block as its fourth cell and the badge is gone.
+* **`<ApprovalState>`** — one new component, both surfaces, replacing three `mp-subtitle` sentences (pending, rejected,
+  approved). Wears `.apstate--wait/--rejected/--approved`, an `.apstate__age` ("6 days" / "today", computed from
+  `createdAt`), and `.apstate__note` carrying the decider's own words verbatim. A VOIDED return renders nothing here —
+  `VoidMark` is that record's state, and two stacked state blocks are two answers to one question.
+* **Frame** — drawer width 520px → **700px** (the View Purchase drawer's own figure, `.mp-pur2-drawer--700`); footer
+  split **Void left / spacer / Print right** per `returns-desktop.html` 7199 `.pdrawer__foot--split`; the button reads
+  **`Print debit note`** (the `(A4)` is gone from EN and UR).
+* **The measured gap** — `.drawfacts` carried `margin-top:12px` from 341, when it was the body's first child. 345 §2 put
+  `.srcdoc` above it, so the two spacings added: **28px** where every other seam in the body is 16px. The margin is now
+  0 and the body's own `gap:16px` is the whole gap. **Measured: 28px → 16px.**
+* **Totals colour (325 §3, this surface)** — a refund is money LEAVING the till and reads `--warning` (it read `--accent`,
+  which on this screen means only "the emphasised number" and says nothing about direction); a supplier credit is money
+  coming BACK and reads `--success` on its own `.cart__line--credit`, which 350 §1's void strike follows.
+* **Sheet fact grid** — `.mp-ret .mfacts` is four columns and only `.mp-ret-flow` overrode it, so the detail SHEET (which
+  carries `.mp-ret` but not `.mp-ret-flow`) had been drawing four ~80px columns at 360px. `.mp-ret-sheet .mfacts` takes
+  the phone's two (`returns-mobile.html` 3310).
+* **`.mp-ret-sheet .sheet__hd--stack`** — 260 §2 declared the wrap for `.mp-pur2` only. Without it the forwarded strip
+  would have been squeezed onto the head's single row and read exactly as if it had never arrived.
+
+### §2 — the flow polish
+
+* **Exhausted lines read disabled.** `.is-off` (mockup: .45 desk / .6 phone) is the treatment for a line the operator has
+  not *chosen* yet — one tap from being on. A line whose invoice balance is spent can never be turned on and wore the
+  identical grey. New `.is-spent`: opacity .32 desk / .42 phone, `cursor:not-allowed`, `aria-disabled`, its own figures
+  struck. Both flows, both surfaces. `.is-off` is untouched, so the two stay distinguishable.
+* **Return qty types directly on the phone.** Both flows' `.retqty--lg` field was `readOnly`, so 14 of 20 strips was
+  fourteen taps. It is now `inputMode="numeric"`, clamped by `clampReturnQty` to the server's own `remaining` — the
+  desk's rule (302 §5) on the other surface. The composed-stepper `drift-guard-allow` reasoning is restated, since a kit
+  `<Input>` would draw a bordered box inside this one.
+* **The `Other` note keeps its gap.** The desk has had the mockup's 6px since 302 (`.reasoncell > input`, mockup 6510);
+  the phone's required-note field sat flush under the reason trigger, so a danger-bordered trigger and the stepper above
+  it read as one block. Same measured 6px, stated as one rule for the other surface.
+* **Mobile Step 3 already lists the returned items** — `<MobileReturnLine>` above `MobileTotalBar` in both flows, 337 §3
+  intact. **Not a second attempt; verified present and pinned by a test** so it cannot silently regress.
+* **The expiry write-off warning is one rule on two surfaces.** Two different things put a line in the write-off path:
+  the batch is past its date, or the operator names `Expired` as the reason. The desk only ever asked the first and the
+  phone's reason sheet only ever answered the second — so a desk operator choosing "Expired" against an in-date lot was
+  told nothing at all (the owner's "mobile only"). New `writesOff(line, draft)` predicate, read by both line notes, plus
+  the mockup's `.alert--warning` banner (returns-desktop.html 6531) above the settlement on BOTH surfaces. What it says
+  about where the stock goes is `expiredNoteKey(policy)` — this shop's Settings → Returns choice, never a fixed sentence.
+
+### Judgement calls (recorded, not escalated — §7)
+
+1. **Drawer width.** The spec says ~700px "the mockup's figure"; `returns-desktop.html` itself declares
+   `.pdrawer--ret{width:520px}` and 700px only for View Purchase. The spec is authoritative and the reasoning holds — the
+   drawer grew four blocks since that figure was drawn. Took 700px, and took it from `.mp-pur2-drawer--700` so there is
+   one number, not two.
+2. **`.apstate` scope.** Built the head, the age pill and the note. Did **not** build `.frzn` (what is held) or
+   `.aptrail` (the timeline): both need data the detail endpoint does not return — the approver roster, the notification
+   times, the per-facet holds — and inventing them would be the fabrication rule 89 forbids. The spec asks for the
+   designed state, and the designed state is what shipped; the two extra blocks are a data question for a later step.
+3. **`.is-spent` is new, not a mockup class.** The mockup has one `is-off`. The owner asked for disabled lines to be
+   "more invisible so user can easily detect", which is a request for a *distinction* the single class cannot express.
+   It extends the mockup's own opacity treatment rather than replacing it.
+4. **The write-off banner ships on BOTH surfaces** although the mockup draws it only on the desk. The spec's own words
+   are "one rule, two surfaces"; a banner the phone lacks would be the next round's bug report.
+5. **Approved returns also take `.apstate`.** The spec names pending and rejected. Leaving the third state as the lone
+   `mp-subtitle` sentence would have kept the pattern this step exists to delete.
+
+### Tests written (not run — §4A)
+
+`packages/ui/src/lib/return-drawer-round-3-351.spec.ts` — the source record itself as assertions: the forward in
+`Panel`, the row's position inside `MobileSheet`'s `.sheet__hd`, both surfaces' badge shapes, the wrap rule, the four
+facts, the absent `mp-subtitle`/`msig`, the `.apstate` family in CSS, 700px, the split footer, the totals colours, the
+`is-spent`/`is-off` pair, the typed quantity clamped to `remaining`, the 6px note gap, Step 3's line list, the one
+`writesOff` predicate and its two readers, and EN/UR parity with matching placeholders for all thirteen new keys.
+
+`packages/ui/src/lib/returns-page-close-345.spec.ts` — one assertion widened. 345 pinned `.drawmeta` within 400
+characters of `headBadges={`; the slot now carries both surfaces and the phone's strip is written first. What that test
+is for — the row belongs to the header prop and not to the body — is asserted unchanged.
+
+### i18n
+
+Thirteen new keys, EN + UR, placeholders matching: `rtnWriteOffTitle`, `rtnApWaitTitle`, `rtnApWaitingDays`,
+`rtnApWaitingToday`, `rtnApRejected`, `rtnApRejectedBy`, `rtnApRejectedSub`, `rtnApNothingMoved`, `rtnApReasonGiven`,
+`rtnApApprovedBy`, `rtnApApprovedSub`, `rtnApReleased`. `rtnPrintDebitNote` reworded in both languages.
+
+### Gates
+
+`pnpm lint` and `pnpm typecheck` run once at the end — both clean, including the design-drift, token-integrity,
+tenant-english-only, search-select and page-title checks. `pnpm prisma generate` not required (no schema change).
+Unit/e2e/build left to the controller per §4A.
