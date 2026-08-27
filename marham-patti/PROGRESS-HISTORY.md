@@ -22888,3 +22888,36 @@ superseded. No product code was wrong, and none was changed — specs only.
   `canApprove` inside a `Promise.all` with `canVoid`, so the count drops the `await`.
 
 Gates: `@mp/ui` jest 166 suites / 4338 tests pass; `pnpm lint` and `pnpm typecheck` clean.
+
+## 349 — payment-fixes — DONE (2026-08-27)
+
+**Branch:** `fix/349-payment-fixes` (from the 348 head). Spec: `/specs/349-payment-fixes.md`. No CODEREF covers 349. **Schema: none. RLS: unchanged. Money computation byte-identical** (`purchase-pay-box.ts` untouched — the clamp and the surplus lines are asserted verbatim by the new suite).
+
+### §1.1 — the Split advance leg did not cap, and WHY (recorded, as the spec demands)
+
+323 wrote the advance cap TWICE. New Purchase's `Advance held` pot capped **on the way in** (`setPaidCapped` rewrote the typed value); the split's advance leg was "capped" by handing `<MoneyInput max={advanceHeld}>` down. `max` is read by `stepMoneyDraft` ALONE — the ↑/↓ arrow contract — and `useMoneyField`'s `onChange` has never consulted `bounds` at all. So a Rs 400 advance took Rs 500 by typing, and the refusal only appeared afterwards as `splitLegsError`'s sentence under the board. That is the whole defect: two statements of one rule, one of which never looked at a keystroke.
+
+Fix: **`capTypedAmount(raw, cap)` in `packages/shared/src/payment-accounts.ts`** — text in, text out (a half-typed `12.` / `.5` must survive a cap), a paisa of slack, `null` means "no ceiling", a negative ceiling floors at 0. Call sites, all of them: `SplitLegs.tsx` both skins (`.payleg` sheet and `.pleg` row) and `PharmacyPurchaseClient.tsx` both tiers (`setPaidCapped` → `typePaid(capTypedAmount(v, payBox.cap))`). The hand-written ternary is gone from both entries. The leg still STATES its ceiling in place (`pdSplitAdvanceCap`), as the method's `.paycap` does. Server-side refusal (`splitLegsError` / `advanceLegError`) unchanged — the browser cap is the visible half of a rule the API still re-reads.
+
+### §1.2 — an overpayment in the totals
+
+`purchasePaidAmount`'s clamp is frozen, so the totals column read `Balance Rs 0` for a Rs 57,000 tender against a Rs 56,636 delivery — true of the invoice, silent about the Rs 364. `PurchasePaySummary` takes `extra` (the box's own figure, `extra={box.extra}`) and the balance row wears a third face: `Held as advance + Rs 364.00`, `.paysum__r--bal.is-extra` in the success tone the outcome line already uses. New key `pdBalanceHeldAdvance` (en + ur). The POSTING path is 332 §1.4's, untouched — the surplus still rides the tender row as legs and lands on the supplier's ledger as the advance it is (317).
+
+### §2 — the layout items
+
+- **Calculation line removed** (owner decision): `.paysum__proof` markup, the `pdEntryProof` read, the `plain()` helper, the `Calculator` import and the CSS rule are all gone. The five named rows above it are the calculation. The i18n key stays in both catalogues (331's parity test reads it).
+- **Split totals restyled**: `.plegsum` was two non-wrapping spans with no `min-width:0`, one of them holding a whole refusal sentence — so a long refusal pushed the total through the card's right edge. Now `flex-wrap:wrap`, `min-width:0` on both, `align-items:flex-start`, the mockup's own `margin-top:10px`, and a column stack at `@container (max-width:620px)` and beside `.pleg--m`.
+- **`Draft restored` toast, double-fire cause NAMED**: 218 §2's class. `useMobileTier` is `false` on first render by construction (SSR safety), so on a phone `/pharmacy/purchase/new` mounts the DESK entry — mount effect restores the draft and toasts — then the media query lands, that tree unmounts and `MobilePurchaseEntry` mounts and toasts the same draft again. Fix: a module-scope `announcedDrafts` set keyed `owner:cid` (cid is regenerated on discard/save, so a genuinely new draft is announced again; a reload announces again). The seeding and the `.pdraft` NOTE stay unguarded — they are form state and every mount draws them.
+- **`.pdraft` restyled** to the mockup's premium row (`.advline`'s anatomy): 30px `info-soft` medallion (`pdraft__ic`), 10px/12px padding, tinted card + hairline + `--shadow-xs`, 13/11 type, the Discard control pinned at the end (`pdraft__x`). Tone stays info; the words are 301 §2's.
+- **Choose supplier sheet opens typing-ready**: new opt-in `autoFocusSearch` on `SearchSelect` (`autoFocus={skin === 'panel' || !!autoFocusSearch}`), default OFF so 199/163's tier rule stands everywhere else. Exactly one caller: the phone entry's supplier book.
+- **Phone's folded supplier head**: initials medallion removed (320 §2's decision, applied to the phone), `.midt--centre` centres the name and its terms. `.mfacts__hd .supmark` CSS is deliberately KEPT — 273's suite reads it.
+
+### Gates
+
+`pnpm lint` clean (incl. design-drift, token-integrity, tenant-search-select). `pnpm typecheck` clean, 31/31. Per CLAUDE.md the unit/e2e/build gates are the controller's; every string assertion in the new suite was dry-run against the live sources (43/43) before commit.
+
+**Tests:** new `packages/ui/src/lib/payment-fixes-349.spec.tsx` — `capTypedAmount` as a function (the owner's Rs 500/Rs 400 figures, drafts, slack, no-ceiling, negative ceiling), the shared-call grep-proof for all four call sites, the recorded miss (`onChange` never reads `bounds`; `stepMoneyDraft` does), the calculator test with its own excess (single tender and split), the balance row's third face + its cascade colour, and each §2 item. **Superseded assertions updated, not deleted:** 331's proof-line requirement (§2 removes the line) and 329's raw leg binding (§1 caps it).
+
+**Standing notes moved out of PROGRESS.md at 349** (the file was over its 1.5 KB limit; both are roadmap/backlog, not step state):
+- *After this:* Recent Sales → Settings → Day-close → Accounting → Prints → Dashboard → audits.
+- *Held:* A4 sale invoice; thermal receipt (Goojprt PT-210, 58mm, hardware pending).
