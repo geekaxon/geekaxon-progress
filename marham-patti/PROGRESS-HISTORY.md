@@ -22921,3 +22921,170 @@ Fix: **`capTypedAmount(raw, cap)` in `packages/shared/src/payment-accounts.ts`**
 **Standing notes moved out of PROGRESS.md at 349** (the file was over its 1.5 KB limit; both are roadmap/backlog, not step state):
 - *After this:* Recent Sales → Settings → Day-close → Accounting → Prints → Dashboard → audits.
 - *Held:* A4 sale invoice; thermal receipt (Goojprt PT-210, 58mm, hardware pending).
+
+---
+
+## 350 — void-purchase-and-return — DONE (2026-08-27)
+
+**Branch:** `feature/350-void-purchase-and-return` · **Work type:** FEATURE
+**Spec:** `/specs/350-void-purchase-and-return.md` (no CODEREF in range) · **Phase 39**
+
+### The problem
+261/270/304/317 built what voiding a purchase DOES and 346 §3 built what voiding a return does. What
+neither built was the FLOW the mockups draw. Both confirmations were a reason box and one sentence:
+the purchase's stated the invoice, the value and the quantities; the return's stated a single line of
+prose. The mockups state the AMOUNT first and then every consequence as its own checkable row — the
+stock, the payable, the payment that loses its invoice, the credit note and its allocations, the
+prices that deliberately do NOT move, and the entry the void writes. And both refusals were discovered
+by pressing a live button and catching a toast, where the mockup draws a refusal STATE naming the
+quantity that moved and the products behind it. 261's own refusal sentence said only "some of the
+stock it brought in has already been sold", which a shopkeeper holding a delivery note cannot act on.
+
+### What changed
+
+**Schema: NOTHING. Checked first, as the spec asked.** `voidedAt` / `voidedBy` / `voidReason` already
+exist on `purchase_orders` (261 §1.4), `sale_returns` and `purchase_returns` (346 §3). No column, no
+migration, therefore no new RLS surface — the fail-closed policies those tables already carry are
+unchanged. The only attribution gap was in the VIEW, not the record: the purchase detail resolved
+`voidedBy` to a bare name where the returns drawer has read "Full Name (Role)" since 346, so
+`voidedByRole` joins `PurchaseDetailView` (resolved by the existing `staffRole`) and the purchase's
+void marker now credits a person in full, per 311 §3 and the spec's §3 acceptance.
+
+**`packages/shared/src/pharmacy-void.ts` (new) — the two voids' shared contract.** `VoidPreview`,
+`VoidConsequence`, `VoidRefusal`, `VoidRefusalLine` plus the pure folds:
+`voidReversalReference` (PI-20488 → VD-20488, RET-P-0447 → VD-P-0447 — the document's prefix swapped
+for VD, so a ledger pairs the two rows without opening anything), `purchaseVoidMovedOut`,
+`foldPurchaseVoidRefusalLines`, `purchaseVoidStockMovedSentence`, `purchaseVoidStockShortSentence`.
+
+  *Judgement call — no sentences in `@mp/shared` except the refusal's.* A consequence row carries
+  NUMBERS AND NAMES only, and the screen words it from the EN/UR catalog. A sentence assembled in
+  the shared package is a sentence Urdu never sees, and this app's two-tier i18n is a hard gate. The
+  one exception is `VoidRefusal.message`: an HTTP client that bypasses the UI has no dictionary, and
+  §3 requires the refusal to fire server-side with named quantities even then — so the server's own
+  sentence travels in the response. The 350 UI suite pins that exception by shape, so a later round
+  cannot quietly add a second one.
+
+  *Judgement call — `purchaseVoidMovedOut` is a SIBLING of 261's `purchaseStockMoved`, not a rewrite.*
+  The guard needs the first hit; a refusal that names quantities needs all of them. 261's fold is
+  frozen and its own suite pins it, so the filter restates the same predicate beside it and the 350
+  suite asserts the two agree movement-for-movement on the same input. Duplication, deliberately,
+  with a test standing between the copies.
+
+**API.** `voidPurchase`'s entire guard moved into `purchaseVoidPlan(tenantId, id)`, which RETURNS its
+refusal rather than throwing it, in the same order and with the same reads 261/270/304 established.
+`voidPurchase` is now `if (plan.refusal) throw new BadRequestException(plan.refusal.message)`. Three
+new read-only endpoints hang off it:
+
+  * `GET /pharmacy/purchase/:id/void-preview` — `PHARMACY_PURCHASE_VOID`
+  * `GET /pharmacy/returns/sale/:id/void-preview` — `PHARMACY_RETURN_VOID`
+  * `GET /pharmacy/returns/purchase/:id/void-preview` — `PHARMACY_RETURN_VOID`
+
+  On the returns side, `assertVoidable` and `assertReturnedStockStillHeld` became one-line wrappers
+  over `returnStateRefusal` and `returnStockRefusal`, which answer the same three-and-two refusals as
+  data. So the preview, the disabled button and the 400 are ONE computation with three audiences —
+  the identity a test asserts directly, because the day they drift a courtesy and a guard start
+  refusing different documents.
+
+  *Judgement call — the previews are permission-gated at the same key as the void, not left open.*
+  They state a supplier's outstanding balance, an unallocated credit note and what a recorded payment
+  becomes. A reader not trusted to void is not trusted to be told those. They are NOT `@Audited`:
+  they write nothing, and an audit row per dialog-open is noise in the log that matters.
+
+  *Judgement call — a refusal comes back INSIDE the preview with a 200, not as a 4xx.* The dialog
+  RENDERS the refusal state (`.norev`); a 4xx would only tell the screen that something went wrong.
+  The void endpoint itself still refuses with a 400, unchanged.
+
+  *Judgement call — `day-close` is emitted from the posting date, not from a day-close read.*
+  Resolving a counter inside a GET can create a row, and a read-only preview must not write. The
+  reversal is dated today either way (`voidSaleReturn` accrues on today's business day), so the row
+  is stated whenever cash left the till on an earlier business day — which is true whether or not
+  that day was formally closed, and needs no extra read.
+
+  *Judgement call — the supplier balance the preview promises is `outstanding − grandTotal`.* The
+  void removes the CHARGE; the payments and credits stay in the book (270 makes an orphaned payment
+  an advance, 317 re-places the credit). A figure below zero is exactly the advance the supplier then
+  holds, and the screen says so in words rather than printing a negative rupee amount. The suite
+  proves the promise by voiding and re-reading the ledger.
+
+**Web.** `apps/web/components/pharmacy/VoidConfirm.tsx` — ONE confirmation, opened by the purchase
+drawer/sheet and by the returns drawer/sheet, built on the shared `<Panel>` so it is a dialog on the
+desk and a sheet on the phone with the whole sheet-family contract. 261's private
+`VoidPurchaseDialog` is DELETED (125 lines) and the returns screen's bare reason `<Panel>` with it.
+It draws `.vdamt` → `.vdcons` → reason chips + note → footer, with the confirm `autoFocus` and dead
+until there is a reason, and it renders `.norev` plus the forward-path alert where the server refuses.
+The voided record on both screens now carries `.revref` — the entry the void wrote, named, which is
+what makes "nothing was deleted" checkable rather than merely asserted. The returns panel gained
+`is-voided` so its record mutes like the purchase drawer's has since 261.
+
+  *Judgement call — reason chips write WORDS, not an enum.* A picked chip stores its own label (plus
+  the note when there is one); "Other" stores the note. One stored shape — a sentence a human wrote —
+  so every surface that shows a void simply shows it, and no surface has to translate an enum back
+  into prose. `RETURN_VOID_REASON_MAX` / `PURCHASE_VOID_REASON_MAX` are unchanged at 500.
+
+**CSS.** The mockups' whole "VOID FLOW" block (`.vdamt*`, `.vdcons*`, `.revref*`, `.norev*`,
+`.rjreasons`/`.rjchip`, the `.is-voided` muting, `.refcell--void`, `tr.is-reversal`) ships four times
+across the four mockup files because each is a self-contained page. `globals.css` carries it ONCE,
+grouped across `.mp-pur2` and `.mp-ret` exactly as 346 §3 did for `.voidmark`. Two declarations
+diverge from the mockup ON PURPOSE: `.vdcons` and `.norev__list` use `overflow: clip` where the
+mockup says `hidden`, because 264 §1's app-wide radius-only audit is still enforced and refuses
+`hidden` there. The 350 suite tolerates that one substitution by name and nothing else.
+
+**i18n.** 106 new `vd*` keys in EN and UR, placeholder-for-placeholder (the parity gate is green).
+
+### The clause that turned out to be a no-op, recorded so a later round does not invent it
+§1 asks for a `Voided` filter pill "where the mockup adds one". Checked all four recommitted mockups:
+none of them adds one — the purchases chips are All / Unpaid / Partly paid / Paid / Settled / Overdue
+/ Partially returned / Fully returned, and the returns chips are All / Sale / Purchase / Awaiting
+approval / Rejected. So no pill was added, and the 350 suite PINS THE ABSENCE in all four files, so
+the prose cannot later be read as a missing feature.
+
+### Endpoints
+`GET /pharmacy/purchase/:id/void-preview`, `GET /pharmacy/returns/sale/:id/void-preview`,
+`GET /pharmacy/returns/purchase/:id/void-preview`. No endpoint changed shape; `POST .../void` on all
+three is byte-identical in behaviour except that its refusal message now names what moved.
+
+### Tests written
+* `apps/api/src/pharmacy/void-purchase-and-return-350.spec.ts` — 15 tests. The preview enumerates the
+  consequences; the balance it promises is the balance the void lands on (calculator-checked against
+  `supplierLedger` on a two-invoice book); an unpaid purchase promises nothing about money; the
+  purchase-return preview's allocations and payable are proven by voiding; the refusal names quantity,
+  product, forward path and no id; the SAME refusal comes back from the void when the dialog is
+  bypassed; short-lot, has-returns, already-voided, pending and rejected each get their own code and
+  path; `stock.qty == Σ batch.qty` after every path; and the pure folds, including that
+  `purchaseVoidMovedOut` agrees with 261's frozen `purchaseStockMoved`.
+* `packages/ui/src/lib/void-flow-350.spec.tsx` — 36 tests. Per-selector diff of 17 selectors against
+  the mockups; the four mockups ship the same block (which is why the app ships one); one component
+  opened by both screens with 261's private dialog gone; the amount precedes the list; every
+  consequence kind and every refusal code is worded; the reason is required and the confirm focused;
+  absent figures render the dash; the reversal reference is on the record; both previews gated
+  server-side; EN/UR parity with matching placeholders; no sentence in `@mp/shared` beyond the
+  refusal's; and the absent `Voided` pill.
+
+### Suites this step superseded, and how they were greened (not deleted)
+* `packages/ui/src/lib/purchases-void-261.spec.tsx` — the two confirmation tests now read
+  `VoidConfirm.tsx`; every question 261 asked is still asked, of the file that now answers.
+* `packages/ui/src/lib/void-payment-reversal-270.spec.tsx` — 270's payment promise is now a
+  `payment-advance` consequence row, and the "only when there IS one" half moved to the service.
+* `apps/api/src/pharmacy/void-purchase-261.spec.ts` — the service-level refusal asserts the 350
+  sentence ("1 of 10 units", "already been sold") instead of 261's bare one. The rule is unchanged:
+  one unit out of the lot still refuses the whole void, and nothing moves.
+* `packages/ui/src/lib/list-row-open-and-realtime-305.spec.tsx` — the purchases screen's last inline
+  `<DialogContent>` left with the void dialog; 312 §2's point (the shell owns the dismissal, the
+  screen reaches for `stopPropagation` nowhere) is now pinned on `<Panel>` / `<VoidConfirm>` and on
+  `Panel.tsx` itself.
+
+### Gates
+`pnpm lint` clean (one pre-existing unrelated warning in doctor-portal). `pnpm typecheck` clean, 31/31.
+Unit suites run targeted rather than whole-repo: `apps/api` pharmacy 92 suites / 1486 tests green,
+`packages/ui` 168 suites / 4403 tests green, `packages/i18n` 5 suites / 35 tests green. No e2e runner
+exists in this repo (no Playwright config, no `test:e2e` script); the API `*.e2e.spec.ts` files are
+jest+supertest and none covers this module.
+
+### Self-checks
+i18n EN+UR parity ✓ (gate). Isolation ✓ — every new read goes through the tenant-scoped repo; no
+query widens; no cross-tenant join. Flags ✓ — the new endpoints sit inside the already-gated pharmacy
+module and add no route outside it. Design ✓ — `@mp/ui` primitives and tokens throughout, no hex
+literal outside `globals.css`, light/dark via tokens, skeleton while the preview is in flight, RTL
+via logical properties, "—" wherever a figure is absent. White-label ✓ — no brand string anywhere.
+Accountability ✓ — the voids' existing `@Audited` + StockMovement writes are untouched; the previews
+write nothing. Offline ➖ — a void is not an offline-critical path.
