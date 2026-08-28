@@ -1,20 +1,29 @@
-> ⚠️ **PUBLIC FILE** — no secrets, hosts, endpoints or keys. Placeholders only.
+> ⚠️ **PUBLIC FILE** — placeholders only, no secrets or hostnames.
 
 # PROGRESS.md — Marham Patti Build Tracker (SHORT)
 
-> Detail lives in PROGRESS-HISTORY.md. Under 1.5 KB. A DONE step is never rebuilt; a dangling "Next" is [HUMAN_REQUIRED].
+> SHORT tracker; detail in PROGRESS-HISTORY.md. A done step is NEVER rebuilt.
 
 ## Current Status
 - **Project:** Marham Patti — multi-tenant white-label healthcare platform.
-- **Phase:** **39** — snapshots, voids, and the returns finish. **Block complete.**
-- **Last completed:** **352 — returns-sweep**.
-- **Next:** none — awaiting next spec block [HUMAN_REQUIRED]
-- **RULES:** numbers right, text left, headings capitalised; realtime everywhere; one renderer per document; a document reads forever on its own; never skip a number; branch first.
-- **Before production:** VAPID keys; blank VENDOR_BOOTSTRAP_*; fresh secrets; MFA_STAGING_RELAX=false; SEED_DEMO + SCREENSHOT_TOKEN unset.
+- **Phase:** **PHASE 40** — allocation completes, dialogs and the returns polish.
+- **Last completed:** **353 — payment-allocation**.
+- **Next:** specs/354-dialogs-and-drawer-facts.md
+- **Group order:** 354 → 355 → 356. One step, then stop at the checkpoint.
+- **354 §2 root cause is FOUND:** the drawer facts grid auto-fits 4-in-a-row; the mockup's 2×2 is the fix.
+- **354 §1 lands ONCE in the shared void confirmation** — both voids inherit.
+- **355 §1 and §3 carry the evidence rule** — git-log the earlier misses first.
+- **RULE:** a heading aligns as its column's data does; a print button names its document.
+- **Import is CLOSED:** export-only; 356 §4 removes the vacant slot.
+- **BRANCH RULE:** switch to the spec's own branch BEFORE any commit.
+- **Numbering is continuous — never skip a number.**
+- **Next up:** Recent Sales → Settings → Day-close → Accounting → Prints → Dashboard.
+- **Held for build:** A4 sale invoice; thermal receipt (awaiting the 58mm counter printer).
+- **Before production:** fresh keys and secrets, staging relaxations off, demo seeding unset.
 
 ### Recent steps
-- **352 — returns-sweep** — DONE (2026-08-27) — figures line up everywhere, cards act without hover, and an overdue invoice rings.
-- **351 — return-drawer-round-3** — DONE (2026-08-27) — one header slot for both surfaces, and a waiting return says so.
-- **350 — void-purchase-and-return** — DONE (2026-08-27) — one confirm for both voids, and a refusal that says what moved.
+- **353 — payment-allocation** — DONE (2026-08-28) — a supplier payment settles the oldest open invoice first, rest to advance.
+- **352 — returns-sweep** — DONE.
+- **351 — shared header slot** — DONE.
 
 > Older steps in PROGRESS-HISTORY.md
