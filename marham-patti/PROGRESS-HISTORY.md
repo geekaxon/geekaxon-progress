@@ -23428,3 +23428,105 @@ Test-only change; no production code touched. `pnpm lint` + `pnpm typecheck` pas
 **Gates.** `pnpm prisma generate` OK. `pnpm typecheck` 31/31 clean. `pnpm lint` 17/17, 0 errors (1 pre-existing unrelated warning in `doctor-portal.repositories.ts`). Per CLAUDE.md, `test:unit` / `build` were NOT run here — the controller runs them.
 
 **Not done, deliberately.** No UI for the reconciliation endpoint (317 shipped it API-only and 353 does not widen that); the supplier drawer's ledger is untouched (allocation is attribution, and the ledger reads payment rows).
+
+---
+
+## 354 — dialogs-and-drawer-facts — DONE (2026-08-28)
+
+**Branch:** `fix/354-dialogs-and-drawer-facts` (from the 353 head). WORK TYPE: FIX.
+**Spec:** `/specs/354-dialogs-and-drawer-facts.md`. No CODEREF covers 354 (the companions stop at 113–121). Schema: none. RLS: unchanged.
+
+### §2 — THE DIAGNOSIS THE SPEC ASKED TO BE RECORDED (the lesson, not the CSS line)
+
+Three specifications (341, 345, 351) asked for the return drawer's fact block, and each one was
+answered — because the block was never missing. `.drawfacts` has had its border, its background
+and its four cells since 341 §3. What it also had, in `globals.css`, was
+`grid-template-columns:repeat(auto-fit,minmax(132px,1fr))`. Four 132px tracks plus a 16px gap
+come to ~560px, which fits comfortably inside the 700px detail drawer — so `auto-fit` did exactly
+what it exists to do and laid all four facts in ONE row. The owner's fourth report ("the block is
+missing") was really "the block is wearing the wrong grid", and three rounds were spent re-adding
+something that had been on screen the whole time.
+
+**The lesson, written down because it will recur:** an `auto-*` track function defers the
+arrangement to the viewport. A mockup that draws a FIXED arrangement must be given a fixed
+template, and a block reported missing for a second time should be checked in the inspector's
+computed styles BEFORE a line of it is rebuilt. `repeat(2,1fr)`, stated after the 341 rule at
+equal specificity so the later declaration wins.
+
+### §4 — WHAT WAS STEALING THE SUPPLIER FIELD'S FOCUS (second attempt, cause named)
+
+`MobileSheet`'s open effect. 349 §2 gave `SearchSelect` an `autoFocusSearch` exception so the
+supplier book opens typing-ready, and the field kept focusing and then instantly blurring. It was
+neither a race nor the sheet's mount animation — it was a SECOND focus call, and the ordering made
+it inevitable: `visible` turns true and the children mount in the same commit, React applies the
+input's `autoFocus` during that commit, and the sheet's passive effect then runs a beat later and
+calls `closeRef.current?.focus()` (163's in-sheet trap anchor). Ten opens, ten steals.
+
+**Fix:** the anchor becomes a FALLBACK rather than an override — it runs only when focus is not
+already inside `sheetRef`. 163's rule is unchanged for every sheet whose content focuses nothing.
+A second, latent defect was fixed with it: `openerRef` was captured inside that same effect, i.e.
+AFTER the content had auto-focused, so closing an auto-focusing sheet tried to restore focus to a
+node that had just unmounted. The opener is now captured on the `open` transition, while the sheet
+is still `null`, and cleared on close.
+
+### What was built
+
+- **§1 — the void confirmation, once, for both voids** (`VoidConfirm.tsx` + `globals.css`):
+  600px on the desk frame only (`.mp-inv2.mp-voiddlg`, two classes so the kit's `max-w-[460px]`
+  utility loses); the `Why` asterisk is the app's own `.reqmark` in `--danger` instead of a grey
+  character inside the label; the helper sentence takes the owner's measured
+  `margin-bottom:0 / margin-top:.4rem` with the parent `.mp-field` at `.3rem`, and is restyled
+  muted (both class names were inherited by accident from the auth surface and the notifications
+  admin, which is why one helper line rendered larger than the labels above it); the note renders
+  ONLY when `Other` is chosen and wears `.field__label`; the footer's "Pick a reason to continue"
+  subtitle is deleted — it restated what the disabled confirm already said, and on the phone it
+  was a third item inside the shared two-button `.sheet__foot--row`, which is why the void sheet's
+  footer never matched Record Payment's (265 §1). Every item lands in the one component.
+- **§3 — the four inspected one-liners:** `.mp-pur2 .vtot__row--bal .sub { width:max-content }`
+  (each `Credit applied … · CN-N` on its own single line); `.mp-pur2 .msum__row--bal b
+  { text-align:end }`; the mobile View Return header drops the date and user `.vddate` lines after
+  the badges (the facts block states both); the mobile facts block drops the supplier name row
+  (`.mfacts__hd`) — four facts, 2×2, the party lives in the header.
+- **§4 — the Draft restored bar:** `.pdraft` (349's tinted `--info` card with a medallion and a
+  `Discard draft` button — rejected twice) is deleted from markup AND stylesheet, replaced by the
+  recommitted mockup's neutral `.dnote` inline bar, drawn by ONE `DraftRestoredBar` component both
+  tiers mount. Glyph, title, `Left 9:22 am · 3 lines`, Discard as a text link in danger ink, and a
+  ✕ that hides the NOTICE without touching the draft. The time is read off a new `savedAt` stamp
+  the draft STORE writes on every save; a pre-354 draft has none and states its size alone rather
+  than inventing a time. 349 §2's toast dedupe (keyed on the draft, not the mount) verified intact.
+- **§5 — the print button names its document:** `PrintDocActions` took a hardcoded `ppurPrint`
+  ("Print invoice"), which was true while the purchase invoice was the only A4 and became a lie the
+  moment 341 §1 shared the shell with the debit note. `printLabel: MsgKey` is now a REQUIRED prop
+  on `PrintDocShell` → `PrintDocActions` — not defaulted, because a default is how the next
+  document inherits the wrong word. Audit: invoice → `Print invoice`; debit note →
+  `Print debit note` (new key); quotation → `Print quotation` (it said `Print A4`, which is the
+  paper, not the document); customer statement → `Print statement`.
+
+### Decisions taken autonomously
+
+- The note field is REMOVED rather than disabled when a chip other than `Other` is picked: the
+  stored reason already ignores it in that state, and a field whose own caption has to say it is
+  usually not a field is the defect.
+- `savedAt` is stamped by the store, not passed by callers — a caller that must remember could
+  forget, and a made-up time is worse than no time. `savePurchaseDraft`/`draftWorthKeeping` take
+  `Omit<PurchaseDraft,'savedAt'>` so a freshly assembled draft need not invent one.
+- The statement's button was relabelled even though the spec says "when it lands" — the surface
+  exists, and leaving one document saying `Print A4` would fail the audit clause.
+
+### Tests
+
+New: `packages/ui/src/lib/dialogs-and-drawer-facts-354.spec.ts` (26 assertions across §1–§5 plus
+EN/UR parity), leading with the §2 diagnosis in prose so the next reader meets the cause first.
+Updated where this step deliberately supersedes an earlier design: 349 (the `.pdraft` measurements
+block is retired with a note saying why; the toast-dedupe block is untouched), 350 (the footer
+subtitle), 351 (`.vddate` and `.mfacts__hd`), 301 (the draft note's shape), 296
+(`draftWorthKeeping`'s signature), 340 / 272 / 261 (the print label is the caller's).
+
+### Gates
+
+`pnpm lint` clean (including the four design-drift / token-integrity / tenant checks).
+`pnpm typecheck` clean — 31/31 tasks. The `packages/ui` jest suite: 4454 passed, 4 failed, and all
+four failures are pre-existing on the 353 head and in files this step never touched
+(`251` row actions, `345 §4` import/export, `347 §2` DebitNoteA4's batch column, `§1` inventory
+days-left). Verified by stashing this step's changes and re-running. Vendor untouched; no schema,
+no migration, no RLS change.
