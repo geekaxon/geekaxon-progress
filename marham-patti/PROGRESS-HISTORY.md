@@ -23530,3 +23530,105 @@ four failures are pre-existing on the 353 head and in files this step never touc
 (`251` row actions, `345 §4` import/export, `347 §2` DebitNoteA4's batch column, `§1` inventory
 days-left). Verified by stashing this step's changes and re-running. Vendor untouched; no schema,
 no migration, no RLS change.
+
+## 355 — approvals-polish — DONE (2026-08-28)
+
+**Branch:** `fix/355-approvals-polish` (from the 354 head). **Spec:** `/specs/355-approvals-polish.md`.
+No CODEREF covers 355. Schema untouched, RLS untouched, API untouched — web, CSS, i18n and one spec file.
+
+### §1 — the reject dialogue, to the mockup, with 346's miss named
+
+**THE EVIDENCE FIRST, because §1 is a second attempt.** `git log -S rtnRejectTitle --
+apps/web/app/(app)/pharmacy/returns/ReturnsClient.tsx` returns exactly ONE commit: `c356e6e`,
+step 289. 346 (`85c9c66`) never touched the dialogue, and its own message says why in its opening
+line — *"289 §6 already built the pending path and both approval actions, so §1 and §2 are
+verified and pinned rather than rewritten. The new capability is §3: VOID."* So 346 verified the
+BEHAVIOUR (a rejection is refused without a reason, on the screen and on the server) and never
+opened the dialogue against the mockup at all. What the owner has been looking at is 289's:
+a generic `Panel` wearing a warning triangle, one free-text `<Input>`, a helper sentence.
+
+**The miss, precisely.** `returns-desktop.html` 7212-7245 and `returns-mobile.html` 6364-6389 draw
+a danger-marked confirmation whose reason is a ROW OF CHIPS (`.rjreasons` / `.rjchip`), a note
+reserved for `Other`, and an `.alert--info` stating what rejecting does and does not do. A refusal
+is one of four things nearly every time; a free-text box is how two clerks record the same refusal
+in two different sentences and Reports can count neither.
+
+**Built as `RejectDialog`, on the void confirmation's anatomy — deliberately.** 354 §1 settled every
+one of these questions one dialogue over, so the rejection takes the same answers rather than a
+second set that can drift: the mockup's four chips plus `Other`, the note that appears only when
+`Other` makes it the whole reason and carries its own `n / 500` count, the required marker in
+`--danger`, a destructive confirm that opens focused (Enter refuses, Esc closes) and stays dead
+until there is a reason, and NO footer hint beside a button already dead for the reason the hint
+would state. What is stored is unchanged in shape: a sentence a human wrote, so every surface that
+shows a rejection simply shows it. The reason state left `ReturnsClient` with it — the dialogue
+owns the question it asks.
+
+`rtnRejectReasonLabel`, `rtnRejectReasonPlaceholder` and `rtnRejectNote` are deleted from both
+message files rather than left orphaned. New: `rtnRjSubSale/Purchase`, `rtnRjWhy`, `rtnRjWhyHelp`,
+the four reasons, `rtnRjOther`, `rtnRjNote/NoteCount/NotePh`, `rtnRjEffectSale/Purchase`.
+`rtnRejectTitle` now asks the mockup's question ("Reject this return?").
+
+CSS: `.mp-rjdlg .cxdialog__ic, .mp-rjdlg .sheet__hdic` tints the head `--danger-soft` on BOTH
+frames from one class (the desk's tile and the sheet's medallion are the same object at two
+sizes), and `.rjdlg` takes 354's body measurements verbatim.
+
+### §2 — the pending flow's owner items
+
+- **Approve and Reject in the Actions column**, on the desk's list row (`iconbtn--ok` + `iconbtn--danger`,
+  mockup 7040) and on its card — the two halves of one view switch, so both offer the shortcut.
+  Gated on the same `canApprove` the drawer's pair is gated on; the endpoint refuses regardless.
+  Approve decides straight from the row; Reject opens the dialogue, because the shortcut must not
+  become a second way to refuse without saying why. The phone keeps 290 §1's decision (the whole
+  card is the target, the sheet's footer holds the full flow) — two 32px icons beside each other
+  on a phone card is two mis-taps.
+- **`.iconbtn--ok` did not exist in `globals.css`** under any scope; the danger half existed only
+  under other screens'. Both are now declared for `.mp-ret`, per mockup 5705-5707.
+- **The drawer's Reject styles danger** — `.btn--dangerquiet` with the cross, the mockup's footer
+  (7200 / 6339). A plain ghost made refusing look exactly like cancelling.
+- **The pending copy** now reads *"Awaiting approval — nothing has moved yet: no refund, no stock,
+  no supplier credit."* — "Awaiting a manager" predated 341 §4, which assigns the permission to any
+  role, so the sentence was naming a person the shop may not have.
+
+### §3.1 — the `Other`-reason danger gap, third report, source-first
+
+**The element carrying the danger surface is `.mretcard__hd`.** A line whose `Other` reason has no
+note sets `.mretcard.is-invalid` on the CARD, and `.mretcard.is-invalid .mretcard__hd {
+background:var(--danger-soft) }` fills the whole head band. `.mretcard__body` is declared
+`padding:0 13px 13px` — no top padding, by the mockup, because in a resting card the head simply
+runs into the body — so the first thing under that red band is the body's first child, the
+`Return qty` row. The stepper sits flush against the fill.
+
+**Why two fixes missed it.** Both went after the NOTE, not the quantity, because both assumed the
+danger surface was the reason control: 302 §5 gave the desk `.mp-ret .lineitems .reasoncell > input
+{ margin-top:6px }`, and the phone was given `.mp-ret-flow .mretcard__body > .field { margin-top:6px }`
+— the note spaced away from `.mreason.is-error`, whose danger is a 1px BORDER. Neither rule can
+reach an element one level up that is a FILL. Two correct fixes to a different gap; both kept.
+
+**The mockup's gap, measured.** `.plinecard` is the same anatomy in the same file — same
+`is-invalid`, same `--danger-soft` head — drawn `.plinecard__body{padding:12px}` over a head that
+closes on a hairline (`returns-mobile.html` 3329, 3341, 3364). So 12px and a closing hairline,
+applied only when the card is invalid so the resting card keeps the 0 the mockup draws. Both
+declarations ride the BODY rather than adding a second `.mretcard__hd` rule beside the one that
+tints it — a duplicated selector is how the next reader fixes whichever they find first.
+
+### §3.2 — mobile Step 3's summary rows, and what 337 §3 actually left behind
+
+`git log` on the block: 337 (`2cdb923`) moved the selected-line list from UNDER the settlement to
+above it and touched nothing else — the diff on both flows shows the `.totals` block passing
+through unchanged. So the parity 337 §3 claimed was the LIST's alone. The rows the owner names,
+`Value returned` and the credit note, have rendered on the phone since 290/302 and still do; what
+diverged is the row SET around them. The desk's purchase summary opens on `rtnTotalItems` and the
+phone's did not, so the phone stated what a credit was worth without ever stating how many units
+were behind it; the desk's sale summary also closes on `rtnSettledBy` and the phone's stopped at
+the waterfall. Both phone blocks now carry the desk's rows in the desk's order.
+
+### Verification
+
+- `pnpm lint` — clean (design-drift, token-integrity, tenant checks all pass).
+- `pnpm typecheck` — clean.
+- New spec `packages/ui/src/lib/approvals-polish-355.spec.ts` — 22 source assertions, green.
+- The whole `packages/ui` `src/lib` suite re-run: 147 suites / 4278 tests green.
+- `packages/i18n` suite (parity included): 5 suites / 35 tests green.
+- `pnpm test:unit`, `test:e2e` and `build` deliberately NOT run (controller gate).
+
+**WORK TYPE:** FIX (branch fix/355-approvals-polish)
