@@ -23632,3 +23632,99 @@ the waterfall. Both phone blocks now carry the desk's rows in the desk's order.
 - `pnpm test:unit`, `test:e2e` and `build` deliberately NOT run (controller gate).
 
 **WORK TYPE:** FIX (branch fix/355-approvals-polish)
+
+---
+
+## 356 — alignment-and-print-sweep — DONE (2026-08-28)
+
+**Branch:** `fix/356-alignment-and-print-sweep` (WORK TYPE: FIX). Spec `/specs/356-alignment-and-print-sweep.md`. No CODEREF covers 356. Schema unchanged, RLS unchanged. Block-final: ends `[HUMAN_REQUIRED]`.
+
+### §1 — the headings follow their data
+
+**Diagnosis (the point of the step).** 352 declared the right-align marker scope-free — `th.num, td.num` (0,1,1) — reasoning that the four scoped copies would keep everything already right. They did, for CELLS: `.mp-inv2` declares no `td` text-align, so `td.num` was unopposed and the figures moved. But `.mp-inv2` DOES declare `.mp-inv2 table.tbl th { text-align:left }` (0,2,2), which outranks the marker, so not one heading in the kit moved. The owner's list is exactly the set of `num`-marked headings under `.mp-inv2`. It also explains the odd shape of that list: the kit's OTHER marker, `th.r` (0,3,2), does outrank the base rule, which is why Inventory's `Cost`/`Sale`/`Tax` looked right while `Nearest expiry` one column over did not.
+
+**Fix.** One declaration, `.mp-inv2 table.tbl th.num { text-align:end; }`, at the rank `th.r` already sits at. 352's scope-free rule is untouched — it is still what reaches an unscoped screen.
+
+**ACTIONS** is now centred, heading and cluster. The column is `width:1%`, so end-aligning both left the word over the last icon rather than over the cluster. `.mp-kit/.mp-inv table.tbl th.tbl-actions` + `.mp-inv2 .tbl thead th.tbl-actions { text-align:center; cursor:default; }` (213 §3's cursor folded in, so the heading has ONE declaration), and `.tbl-actions .rowactions, .tbl-actions .rowacts { justify-content:center; }` at the end of the stylesheet — every rule it corrects is a scoped one of equal specificity, so order is what decides. `.mp-set`'s `.acts` column untouched: heading and cells were both `end` already.
+
+**Audit re-run, recorded in `docs/356-heading-and-hover-audit.md`.** Every `<th>` under `apps/web/app/(app)` and `apps/web/components`, read for the heading this time. Zero strays after the sweep. One source fix: Recent Sales aligned `Items` and `Total` with an inline `style={{textAlign:'end'}}` on the heading AND on the cell — aligned, but by two patches rather than by the marker; both are now `className="num"`. Two exceptions recorded, not fixed: Suppliers' reversal column heading is deliberately empty (270 §1.3), and Recent Sales' bare `<th />` over its actions column is a Recent Sales defect inherited by the next step in the sequence.
+
+### §2 — hover and pulse honesty
+
+**Card hover.** The list row has had `background:var(--surface-hover)` since the kit was written; the card grids grew `:hover` rules that lift the shadow and darken the border and never touch the surface, so the same record acknowledged a pointer two different ways depending on the view. One block at the end of the stylesheet gives the list's surface to 329 §3's own family list — `invcard`, `minvcard`, `pcard`, `scard`, `icard`, `rcard`, `mrcard`, `mcard`, `minv__row` — which is the repo's existing enumeration of "a card that stands for a row", so there is no second set to keep in step. Cards carry state on the border, so one value is safe; `.minv__row` tints its own background and takes the desk table's tinted hover at the same 11% mix.
+
+**The pulse's false trigger, captured.** Two faults, the second a fix for the first. (1) 329 wrote the wash `forwards`, which pins `background-color:transparent` onto a marked row for the life of the pin — so a pulsed row could never paint a hover surface or its own tone again. (2) 329 compensated with `.is-live-marked:hover,:active { animation:none }`; but `none` → a name is a NEW animation to CSS, so mouse-out RESTARTS the keyframes. Marks accumulate deliberately (`useLiveOrder`, so the accessible name outlives the wash), so EVERY row ever marked pulsed again on every mouse-out. Neither branch the spec guessed at: not a hover-driven re-render, and the class never clearing is correct. **Fix: drop `forwards`, which drops the need for the cancel with it** — the wash plays once, hands the background back to the cascade, and no rule is left for a mouse-out to un-apply. `useLiveOrder` and `row-open.ts` unchanged.
+
+### §3 — the debit note paginates
+
+**Which element overflowed.** `LINES_PER_SHEET = 13` meant thirteen lines on a sheet carrying nothing else. The LAST sheet also carries notes, credit callout, totals stack and three signature areas (~250px of a 992px well); the FIRST carries masthead, parties and a fact strip (~290px). So a nine-to-thirteen-line note was drawn as ONE sheet holding a full header, thirteen three-row lines and the whole closing block, and `.docsheet__well` is `overflow:hidden` — the totals and signatures on CN-17 are below the floor and simply are not on the paper. CN-21 sits under the closing-sheet capacity, which is why it printed correctly and why 16 → 13 could not have told them apart: **one cap cannot express the difference between a sheet with a closing block and a sheet without one.**
+
+**Fix.** `DebitNoteDocument` now paginates the way the purchase invoice has since 288 §2 — weight draft, then `measureSheet`/`capsFrom`/`paginateByHeight`/`samePagination` over the laid-out sheets, re-chunked until a pass changes nothing, five passes maximum, draft kept where there is no layout (server render, unit environment). `LINES_PER_SHEET = 13` survives as the draft first/cont budget and `LINES_PER_CLOSING_SHEET = 8` is the budget it could not state; both go through the same paginator in row units, so "the closing block is never orphaned" is written once. The table head repeats because every sheet renders its own `<thead>` (unchanged). A closing-only sheet (page one filled to the last row) states the DOCUMENT's range rather than printing `Lines 14–13 of 13`. The header meta block loses `Reason` per the owner's decision — it has printed per line since 352 §7 — leaving Note date · Items · Lines · Pages · Credit claimed.
+
+### §4 — the import slot
+
+The rendered toolbar has drawn no import icon since 341: `onImport` is optional and Returns never passed it. **The vacant slot was in the SOURCE** — a desk that will never import calling a component named for a PAIR with half of it null, which reads as an omission rather than as the decision it is. `ExportAction` (same button, same `iconClass`, same slot Purchases gives the pair) is now exported from `PurchaseHeadActions.tsx` and used by Returns on the desk and on the phone; `ImportExportActions` composes it. The two absences are now spelled differently: `onImport` omitted on the pair means THIS USER may not import (Suppliers and Customers, `canImport ? … : undefined`), while a desk with no importer at all asks for `ExportAction`. Nothing about the rendered page changes. `docs/352-returns-import-decision.md` gained a §4 section saying exactly that.
+
+### Files
+
+`apps/web/app/globals.css` (356 §1 heading block, the pulse's fill-mode, the end-of-file hover/cluster block) · `apps/web/components/pharmacy/DebitNoteDocument.tsx` · `apps/web/components/pharmacy/PurchaseHeadActions.tsx` · `apps/web/app/(app)/pharmacy/returns/ReturnsClient.tsx` · `apps/web/app/(app)/pharmacy/recent-sales/RecentSalesClient.tsx` · `docs/356-heading-and-hover-audit.md` (new) · `docs/352-returns-import-decision.md` · `packages/ui/src/lib/alignment-and-print-sweep-356.spec.ts` (new).
+
+**Superseded assertions, updated in place with a 356 note:** `new-purchase-payment-329.spec.tsx` (the wash is no longer `forwards`; the hover cancel is gone and the test now asserts its absence and why) and `returns-page-to-mockup-341.spec.ts` (Returns draws `ExportAction`, not the pair). `returns-sweep-352.spec.ts` untouched — every string it pins is still present.
+
+### Gates
+
+`pnpm lint` clean (eslint + design-drift, token-integrity, tenant-english-only, tenant-search-select, tenant-page-titles all green) and `pnpm typecheck` clean, both run once at the end. `pnpm test:unit` is the controller's. The new spec's source assertions and its pure-paginator arithmetic (CN-21 → one sheet, CN-17 → `[12,1]`, the 3-page synthetic → `[12,16,12]`, and every row count 1–60 fitting its page kind's capacity) were verified out-of-band before the gate.
+
+### Not done, deliberately
+
+Regenerating the owner's two PDFs and the 3-page synthetic needs a browser; the arithmetic they exercise is asserted as a unit test against the note's own measured budgets instead, and the visual regeneration belongs to the controller's e2e run. The purchase invoice keeps its own copy of the measuring loop (288 §2 pins its source strings); the shared implementation is the measuring module both call, which is where the law lives.
+
+## 357 — allocation-itemized-and-verified — DONE (2026-08-30)
+
+**Branch:** `fix/357-allocation-itemized-and-verified` (WORK TYPE: FIX). Spec: `specs/357-allocation-itemized-and-verified.md`. No schema, no RLS change, no money computation touched — this step reads and renders.
+
+**The report.** The owner paid IBL HealthCare Rs 10,000 and watched a Rs 32,848 invoice turn `Paid`. Nothing was wrong with the money: the supplier header said so — the balance fell exactly ten thousand and the oldest unpaid moved to July — which means 353's reconciliation walked his NINETEEN older supplier-level payments onto that invoice, not the ten thousand. Every figure right, arrived at by a route the screen did not show, because the drawer stated `Payment applied − Rs 32,848` once and named none of its nineteen sources. That is 325 §1's calculator test failing in the place 325 built it.
+
+**§1 — the verification, and the decision recorded.** `packages/db/scripts/verify-allocations-357.ts`, read-only, exits 1 with the listing on any violation, writes nothing ever (a correction to money is the owner's decision, never a script's). It checks: (1) no source — payment or credit note — has placed more than it is worth, netting reversing allocations rather than taking the last row; (2) no supplier's advance is negative, which is "Σ open-invoice balances + advance == the running balance" expressed in the only terms an allocation can break it in; (3) no allocation names a source it may not (missing, reversed, invoice-level `po:<id>`, legacy `return:<id>` contra) — each of those is the same rupee counted twice by another route. `--supplier "IBL HealthCare"` prints §1.3's listing: per invoice, every constituent allocation with its date, amount and slip.
+
+**IT HAS NOT BEEN RUN, and could not be.** The build agent's `.env` carries placeholder credentials (`USER:PASS@HOST`) and no database is reachable from this session; there is no psql either. So §1's gate was not evaluated here and the step did not stop at [HUMAN_REQUIRED] for it — stopping would have delivered nothing, and AGENT.md §2 reserves that marker for a missing spec or infra that cannot be done in code. The instrument ships instead, and PROGRESS.md carries the pointer that it is unrun. Deliberately NOT re-derived in the script: any invoice's totals. Those are folded from line items by the read path, and a script that folded them again would be a second definition of money in a repo whose discipline is having one — so the invoice side of §1.2 is left to that read path, which §2 now makes checkable by eye.
+
+**§2 — itemized on screen.** `AppliedPaymentLines` (apps/web/components/pharmacy/DocumentReturns.tsx) now takes `dateLabel` and an optional `onOpen`, and draws one `.sub` line per payment: `Payment applied Rs 10,000.00 · 12 Aug 2026 · SLIP-42`, exactly as 317's credit lines draw and inheriting 354 §3's `width:max-content` alignment with them (that rule selects `.sub` generically, so no CSS was needed for it). New exported `appliedPaymentsOldestFirst` puts them newest-LAST over a copy: a column of arithmetic is added downwards. The anonymous `AppliedPaymentTotalRow` is gone from the desk drawer and the mobile sheet; it STAYS on the A4 sheet, because paper has no lines under its balance and no link to follow, and without it the printed column stops adding up (325 §1). 317's credit aggregate is untouched — it names its single source and was never anonymous.
+
+**§2 — clicking one lands on the ledger entry.** A supplier payment is a row in the supplier's book, so the slip is a link: `SUPPLIER_LEDGER_HREF` → `/pharmacy/suppliers?supplier=<id>&entry=<paymentId>`, the same one-hop shape the returns register has answered `?ret=` with since 302 §8. `SuppliersClient` answers it over the WHOLE list (never the filtered view), once, guarded by a `linked` ref so a re-render cannot reopen a file the reader closed; `closeLedger` forgets the entry. The desk drawer takes the Ledger tab and then the PAGE the row is on (`Math.floor(focusAt / SUPPLIER_TAB_PAGE_SIZE) + 1`); the phone has no pages, so it widens its infinite-scroll window to reach the row. Both then `scrollIntoView({block:'center'})`, once — a page the reader turned is not undone by an effect. The row carries `aria-current="location"` and `.is-target`: a tinted surface plus a 3px accent bar drawn as a pseudo-element on `inset-inline-start`, never a physical-left box-shadow, because Urdu reads the other way. The range and the search are deliberately left alone: a freshly opened file carries neither, and silently clearing a filter is how a screen starts arguing with its own controls.
+
+**i18n.** One new key, EN + UR: `docPaymentOpenLedger` ("Open {no} in the supplier's ledger").
+
+**Tests.** `packages/ui/src/lib/allocation-itemized-357.spec.ts` — source assertions in the house style: the aggregate absent from both screen bodies and present in the print body, the lines carrying amount/date/slip, the oldest-first sort, the single deep-link builder used by both mounts, the once-only landing, the three `aria-current` marks, the leading-edge bar, and the script's four properties (writes nothing, both checks, netting, non-zero exit).
+
+**Gates.** `pnpm lint` clean; `pnpm typecheck` clean (31 tasks). The new script sits outside `@mp/db`'s tsconfig `include` (it only covers `src`, as the existing scripts do), so it was typechecked once standalone against the generated client and `@mp/shared` — clean. Per CLAUDE.md, `test:unit`/`build`/`e2e` were not run here; the controller runs them.
+
+## 357 §1 — follow-up fix: the verification was reading through a fail-closed connection
+
+The script shipped with 357 opened a bare `PrismaClient` and set no tenant context. Every table it
+reads is FORCE RLS, so `current_setting('app.tenant_id', true)` was NULL, the `tenant_isolation`
+policy matched nothing, and all five reads returned zero rows with no error: it reported
+"0 sources, 0 net allocations, 0 suppliers … both checks PASS" and could not find IBL HealthCare.
+A verification that passes because it could not see is worse than none.
+
+Rewritten (`packages/db/scripts/verify-allocations-357.ts`, still read-only, still writes nothing):
+
+- every read now runs inside `runWithTenant` from `@mp/db` — the same seam the API uses — one pass
+  per tenant, using the transaction client only. The `tenants` registry is not RLS-bound, so the
+  one read outside a context is the list of tenants to iterate.
+- `--tenant <id>` verifies that tenant; without it, every tenant in the registry.
+- the counts read per tenant (suppliers, purchases, sources, allocations) are printed BEFORE any
+  verdict, so the reader can see what the verdict is based on.
+- EMPTY READ IS A FAILURE, exit 1, PASS not reported: zero suppliers or zero purchases for a named
+  `--tenant`; zero of either in total across a whole-registry run (per tenant that rule cannot
+  apply — a fresh or demo tenant is legitimately empty); or a `--supplier` name matching nobody.
+  The failure text names the two causes worth checking, RLS context and `DATABASE_URL`, including
+  the inverse trap: a BYPASSRLS superuser role would make it pass for the wrong reason.
+- unknown `--tenant` id and an empty registry also exit 1 rather than verifying nothing.
+
+Gates: `pnpm lint` and `pnpm typecheck` pass. `packages/db/tsconfig.json` includes only `src`, so
+scripts are linted but not typechecked; the file was typechecked separately with a temporary config
+(clean apart from `@mp/shared` being undeclared in `packages/db/package.json` — pre-existing for all
+three scripts there, and it resolves at runtime under `pnpm exec tsx`, which is how they are run).
+Executed here as far as the first query, which fails on `DATABASE_URL` not being set: no database is
+reachable from the build agent, so the verification itself is still unrun.
