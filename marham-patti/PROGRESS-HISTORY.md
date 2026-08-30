@@ -23728,3 +23728,51 @@ scripts are linted but not typechecked; the file was typechecked separately with
 three scripts there, and it resolves at runtime under `pnpm exec tsx`, which is how they are run).
 Executed here as far as the first query, which fails on `DATABASE_URL` not being set: no database is
 reachable from the build agent, so the verification itself is still unrun.
+
+## 357 (correction 2) — the verification script says where it looked, and proves the context took (2026-08-30)
+
+Branch: `fix/357-allocation-itemized-and-verified`. Operator report: `npx tsx scripts/verify-allocations-357.ts`
+on staging printed zero suppliers / zero sources / zero net allocations and could not find supplier
+"IBL HealthCare", which exists. Correction 1 had already moved every read inside `runWithTenant` and added
+the empty-read gate; this correction closes the remaining ways the script can be blind or point elsewhere,
+and makes every one of them say so.
+
+- `packages/db/scripts/load-env.ts` (new). Neither `tsx` nor `@prisma/client` reads `.env` — only the Prisma
+  CLI does — so a script launched off an SSH prompt without `deploy.sh`'s environment connects nowhere or,
+  worse, somewhere else. Walks up from cwd, loads every `.env`, nearest first, never overwriting a variable
+  the real environment already set. No new dependency (the repo does not ship `dotenv`). `redactDatabaseUrl`
+  renders `user@host:port/database` and never the password.
+- `verify-allocations-357.ts` now prints, BEFORE the first tenant read: which `.env` supplied `DATABASE_URL`,
+  the redacted target, and — from `pg_roles` — whether the connected role is SUPERUSER/BYPASSRLS. That last
+  one changes what an empty read MEANS, so the empty-read failure text now branches on it: an exempt role
+  saw everything the database holds, so empty means wrong database or genuinely absent rows, not lost context.
+- The tenant context is now PROVEN, not assumed: the first statement inside each `runWithTenant` transaction
+  reads `current_setting('app.tenant_id', true)` back and throws unless it equals the tenant asked for. This
+  is the only cheap detector for a transaction-mode pooler, which would silently break the transaction-local
+  GUC the whole seam depends on.
+- `--tenant` accepts id, then slug, then a unique name match (an ambiguous name is refused, never guessed);
+  a miss prints the whole registry as `id  slug  name` instead of "pass the id, not the slug".
+- A `--supplier` miss now lists up to 20 supplier names actually read per tenant, so "cannot find IBL
+  HealthCare" resolves to wrong-tenant or wrong-database on the spot rather than on the next run. With no
+  `--tenant`, every tenant is scanned, so the supplier is found without knowing which tenant holds it.
+- `../src/index` is imported DYNAMICALLY inside `main`, after the env load: a static import evaluates before
+  any statement and would build the shared `PrismaClient` bound to an environment not yet loaded.
+- `runWithTenant` gained an OPTIONAL third argument `{ timeout, maxWait }`, passed straight to
+  `$transaction`. Additive; request paths must not use it. The script reads whole tables in one transaction
+  and would otherwise die at the 5 s interactive default with a P2028 mid-read — one more failure that
+  looks like an answer. Script uses 120 s / 20 s.
+
+Exit codes now: 1 for no `DATABASE_URL`, empty registry, unresolvable/ambiguous `--tenant`, a GUC that did
+not read back, zero suppliers or zero purchases, an unmatched `--supplier`, or any violation. PASS is only
+ever printed over rows it demonstrably read, under a context it demonstrably had.
+
+Gates: `pnpm lint` and `pnpm typecheck` pass. `scripts/` is outside `packages/db/tsconfig.json`'s `include`,
+so both scripts were additionally typechecked under a throwaway config mapping `@mp/shared` to its source —
+clean. The script was executed against the placeholder `.env` on the build box to prove the env load, the
+dynamic-import ordering and the preflight all run; it stops at "Can't reach database server", as it must —
+no database is reachable from here, so the checks themselves remain unrun.
+
+NOT DONE, flagged: the three sibling maintenance scripts (`count-non-pk-phones.ts`,
+`reconcile-return-postings.ts`, `grant-return-approval-341.ts`) each open a bare `PrismaClient` with no
+tenant context and no `.env` load — the exact bug corrected here. Their zero-row reports are not to be
+trusted until they get the same treatment. Out of scope for this correction.
