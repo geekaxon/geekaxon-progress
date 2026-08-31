@@ -24382,3 +24382,95 @@ warning is a pre-existing unused eslint-disable in `doctor-portal.repositories.t
 confirmed by stashing). `pnpm test:unit` / `test:e2e` / `build` are the controller's, per AGENT.md.
 UI design self-check by inspection: every i18n key, pill class and `ledtag` variant referenced by the
 new markup verified present; every table's column widths verified declared for its new column count.
+
+## 364 — customer-rules — DONE (2026-08-31)
+
+**Branch:** `fix/364-customer-rules` (WORK TYPE: FIX). Spec: `/specs/364-customer-rules.md`. No CODEREF covers 364.
+
+### §1 — udhaar is a switch AND a limit
+
+The owner's finding was that `creditLimit = 0` meant three things at once: "no udhaar account" to the
+POS pickers, "no headroom, therefore over the limit" to `isOverCreditLimit`, and "allowed, no ceiling"
+to every shopkeeper who left the field blank. The `No udhaar` pill matched only the first.
+
+- **Schema addition** `customers.udhaar_allowed BOOLEAN NOT NULL DEFAULT true` (migration
+  `20260901000000_customer_udhaar_allowed`). It holds the PERMISSION; `credit_limit` keeps holding the
+  CEILING and 0 there now means only "none set".
+- **DECISION — the column sits BESIDE `allow_credit`, which is never rewritten.** The spec derives the
+  new column off the limit alone ("limit > 0 → allowed"), and a customer refused outright under
+  107 §2.4 while still carrying an old limit would come out of that rule ALLOWED. So the migration
+  derives `allow_credit AND credit_limit > 0`, and the app's new `customerMayTakeUdhaar` ANDs the two
+  everywhere. A record refused before the migration stays refused; the form's ONE toggle writes both
+  columns from here on, so they cannot drift.
+- **Migration reports per customer** (RAISE NOTICE, in full, before a single row is written — 324's
+  pattern), then the derivation, then the spec's "limit cleared" as an explicit invariant. Re-runnable:
+  the backfill runs only on the pass that creates the column. RLS inherited unchanged (existing
+  force-RLS table, no new table/policy/grant). No money column is read or written.
+- **Shared (`@mp/shared`):** new `udhaarOverLimit`, `customerMayTakeUdhaar`, `udhaarLimitRefusesZero`,
+  `parseUdhaarLimit`, `udhaarLimitReading`; a sixth headroom kind `unlimited`; `udhaarAllowed?` threaded
+  through `customerStanding`, `customerHeadroom`, `customerCreditState`, `CustomerStatRow`.
+- **DECISION — an ABSENT flag is a pre-364 CALLER, not a default.** Every one of those inputs keeps its
+  pre-364 reading byte-for-byte when `udhaarAllowed` is undefined, and `isOverCreditLimit` itself is
+  untouched. Result: zero churn in 333/334/335/339/227/209's suites — not one existing assertion had to
+  be edited — while every surface this step touches passes the flag and gets the new rule.
+- **Form:** the limit field is drawn ONLY while udhaar is allowed; blank = no limit; a typed `0` is
+  refused with a sentence naming both things it might have meant, and Save is disabled on it.
+- **POS:** the checkout refusal now reads off the switch and NAMES the customer
+  (`"<name> is not allowed to buy on udhaar."`); `checkCreditLimit` is not run at all when no ceiling
+  exists (server AND `PaymentPanel`), so an allowed customer with no limit is never warned. A customer
+  WITH a limit warns past it exactly as 334 §3 states.
+- **Pills/cells:** three readings where a zero used to carry two — a figure, `No limit`, `No udhaar`.
+  Only the last wears the ban glyph. Counts and the Over-limit KPI fold the same predicate.
+
+### §2 — deactivate, one flow
+
+- The **Active toggle has left the Edit dialog** (with its `switchingOff` warning); the footer's
+  **Deactivate** button is the one route in.
+- The dialog is rebuilt to the mockup: `.vdamt` balance line in three tones (baqaya / advance / square),
+  the warning box only over a baqaya, the four-row `.vdcons` consequence list (one stops, three stay),
+  an optional **Why**, destructive confirm focused. New `.vdamt--warn/--ok/--nil` and
+  `.vdcons__row--stops/--stays` in globals.css, from the mockup's own rules.
+- **DECISION — the reason is a LINE ON `notes`, not a column** (the spec's only schema change is the
+  boolean). It is APPENDED, never prepended, because `readCustomerMergedInto` reads the FIRST line and a
+  reason written at the top of a merged record would be read back as the survivor's name. It travels
+  with the switch as `deactivateReason` and the SERVER composes it off the row it just read, so a stale
+  form cannot clobber a tombstone. Reactivating removes the line and keeps the rest.
+- **A merged tombstone shows no Reactivate** — drawer action list, desk row action and phone card foot.
+  Its book is the survivor's; switching it back on would put an empty duplicate at the counter again.
+
+### §3 — merge, finished
+
+- `Open ledger` now OPENS the survivor's ledger (new `onOpenLedger` prop; the register owns the drawer),
+  beside the mockup's `Back to customers`. Both surfaces already close from every step — the one
+  `<Panel>` wraps all three steps and the done state, and it owns the ✕ (242 §1).
+- New **`Merged`** filter chip; `Inactive` stops claiming tombstones.
+
+### §4 — money in and out
+
+- Verified against `RecordSupplierPayment` side by side: 319 §1's Pay/Refund state, 313's account +
+  reference block (`<PayAcctFields>`, imported not redrawn), the same DatePicker and method select are
+  all already in place from 334 §2.
+- **Mobile Record Payment drops the amount pills** (owner decision) — the desk keeps them.
+
+### Gates
+`pnpm prisma generate` ✓ · `pnpm typecheck` ✓ (31/31) · `pnpm lint` ✓ (17/17; the single warning is a
+pre-existing unused eslint-disable in `doctor-portal.repositories.ts`, untouched by this step).
+Per CLAUDE.md the agent does not run `test:unit`/`build`.
+
+### Tests added
+- `apps/api/src/pharmacy/customer-rules-364.spec.ts` — the rules: a warning needs a ceiling; the switch
+  off is never "over"; pre-364 callers unchanged; the KPI count; the three limit readings; the `0`
+  refusal and blank parse; the AND of both switches; the reason written/read/cleared and — the one that
+  guards the append decision — a reason that must not displace a merge tombstone.
+- `packages/ui/src/lib/customer-rules-364.spec.tsx` — structural (363's shape): the limit field gated on
+  the switch, Save disabled on `0`, one toggle to both columns, no Active toggle left in the dialog, the
+  four consequences and the reason, no Reactivate on a tombstone anywhere, `Open ledger` landing on the
+  survivor, the `Merged` chip, and the phone's pills off.
+
+### Notes / risks
+- Behaviour deliberately changed by §1: a customer who was `allowCredit: true, creditLimit: 0` and owed
+  money used to read **Over limit** and warn at the till. After the migration they read **No udhaar**
+  (derived not-allowed), which is exactly what the limit cell already printed for them. Money is
+  untouched — no balance, ledger row or total moves; only the READING of the limit changes.
+- Export keeps ONE `Allow udhaar` column and the import writes it to both switches; a second column
+  nobody could keep in step would only be a way to break them apart.
