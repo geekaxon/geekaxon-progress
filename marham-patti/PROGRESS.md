@@ -7,12 +7,12 @@
 ## Current Status
 - **Project:** Marham Patti — multi-tenant white-label healthcare platform.
 - **Phase:** **PHASE 42** — money proof, Customers parity, Recent Sales.
-- **Last completed:** **364 — customer-rules** (udhaar is a switch and a limit; deactivating is one flow).
-- **Next:** **365 — dialog-rule-and-statement** — specs/365-dialog-rule-and-statement.md
+- **Last completed:** **365 — dialog-rule-and-statement** (one width for every dialog and drawer; the statement is real paper).
+- **Next:** **366 — recent-sales-to-mockup** — specs/366-recent-sales-to-mockup.md
 
 ### Recent steps
+- **365 — dialog-rule-and-statement** — DONE (2026-08-31) — every dialog and drawer took one width, and the statement became a printable sheet.
 - **364 — customer-rules** — DONE (2026-08-31) — udhaar became a switch and a limit, and deactivating is one flow again.
 - **363 — customers-ledger-parity** — DONE (2026-08-31) — the customer book mounts the supplier drawer's parts, and a payment can be undone.
-- **362 — purchase-summary-truth** — DONE (2026-08-31) — one payments figure over both kinds, each row's parts beneath it.
 
 > Older steps and the standing notes in PROGRESS-HISTORY.md

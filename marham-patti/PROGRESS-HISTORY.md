@@ -24474,3 +24474,168 @@ Per CLAUDE.md the agent does not run `test:unit`/`build`.
   untouched — no balance, ledger row or total moves; only the READING of the limit changes.
 - Export keeps ONE `Allow udhaar` column and the import writes it to both switches; a second column
   nobody could keep in step would only be a way to break them apart.
+
+---
+
+## 365 — dialog-rule-and-statement — DONE (2026-08-31)
+
+**Branch:** `feature/365-dialog-rule-and-statement` · **Spec:** `/specs/365-dialog-rule-and-statement.md` · **Schema:** none · **RLS:** unchanged.
+
+### §1 — ONE WIDTH RULE (owner decision, made law)
+
+Two tokens, at the foot of `apps/web/app/globals.css`:
+
+```
+:root { --dialog-w:720px; --drawer-w:700px; }
+.mp-fdlg.mp-fdlg { width:var(--dialog-w); max-width:min(var(--dialog-w), calc(100vw - 32px)); }
+.mp-fdrw.mp-fdrw { width:var(--drawer-w); max-width:min(var(--drawer-w), calc(100vw - 24px)); }
+```
+
+The class is DOUBLED rather than made `!important`: the kit ships `max-w-[460px]` as a
+single-class utility, and two classes beat it whatever the source order — so the rule does not
+depend on where in a 19 000-line stylesheet it happens to sit. The import flow's two full-bleed
+phone layers (`.impfull` / `.mpick`, three classes) still outrank it and still opt out.
+
+`<Panel>` applies both — `mp-inv2 mp-fdlg` on the dialog frame, `mp-inv2 mp-fdrw` on the drawer
+frame — so fourteen callers cannot forget one or quietly choose another.
+
+**THE AUDIT, recorded.** Every dialog and drawer in the pharmacy module was walked. What was
+found and what happened to each:
+
+| surface | was | now |
+| --- | --- | --- |
+| Adjust stock, Add/Edit supplier, Add/Edit customer, Receive payment, Record supplier payment/refund, Reverse supplier payment, Reject return, purchase record-payment, Recent Sales dialog, Merge (steps 1–2), Customer statement | 460 (kit default) | 720, via `<Panel>` |
+| Void purchase / Void return (`.mp-voiddlg`) | 600 | 720 |
+| Merge customers, step 3 | 760 (`max-w-[760px]`) | 720 |
+| Customer statement | 860 (`max-w-[860px]`) | 720 |
+| Catalogue import | 720 (`.mp-inv2.mp-inv2-import`) | 720, now the token |
+| POS → Add customer | 420 (`max-w-[420px]`) | 720 — same dialog as Customers', which read at the token width |
+| Inventory add/edit drawer (`.mp-inv2-drawer`) | 520 | 700 |
+| Recent Sales drawer (`.mp-rsales-drawer`) | 520 | 700 |
+| Supplier / purchase / customer book drawers (`.mp-pur2-drawer`, `--700`) | 640 / 700 | 700, one rule |
+| Inventory detail drawer (`.mp-inv2-detail`) | 700 | 700, one rule |
+| Returns drawer (`.mp-ret-drawer`) | 700 | 700, one rule |
+
+**DELIBERATELY OUT OF SCOPE, and why** — these are not form dialogs and the rule does not claim
+them: the POS payment surface (940 — a full payment screen, 347 §1), held sales (520 — a picker
+list), the shortcut reference (520) and the global command palette (560) are overlays, and the
+print viewer is `bare`. Recorded here so a later audit does not read them as stragglers.
+
+Eight private width declarations were deleted from `globals.css`; three `mp-pur2-drawer--700`
+class usages were dropped from markup. Mobile is untouched — every one of these is a sheet below
+the breakpoint, which is the width of the phone.
+
+### §2 — THE REFUND METHOD CONTROL
+
+**The captured layout, and the cause.** The owner's screenshot is New sale return, Step 3. The
+control was wrapped in `<label className="field">`. `returns-desktop.html` (6543) wraps a
+`.pos-sel__trigger` `<div>`, which a label cannot activate; the kit's search select renders a
+real `<button>`, which it can — so a `<label>` re-dispatches the press onto the trigger and the
+popover opened on the first click and closed on the second. The label's hit area is also the whole
+grid cell, so a press on the help line under the control toggled the panel too.
+
+Nothing about the CSS was wrong: `.mp-inv2 .field` (the page carries `mp-inv2 mp-ret`) already
+gave the anatomy, and `.formrow2` already paired the two cells. It was the ELEMENT. Every other
+pharmacy screen that puts a select in this anatomy — Adjust stock, Receive payment — already used
+`<div className="field">`; this screen was the only one that did not, on all three of its selects
+(the desk's refund method and refund account, and the mobile flow's refund account). All three are
+`<div>` now; the fields that wrap a real `<input>` were left as labels, which is what a label is
+for. The controls keep the `aria-label` they have carried since 336 §1, which is the accessible
+name either way, and the settled branch (`.fixedval`, nothing to choose) became a `<div>` too so
+the two branches of one field cannot disagree about what element they are.
+
+The mockup's leading wallet glyph was also missing and is now drawn (`icon={<Wallet/>}`).
+
+### §3 — THE CUSTOMER STATEMENT (335 §2 completed to its design)
+
+**New:** `apps/web/components/pharmacy/CustomerStatementDocument.tsx`. 335 §2 drew the statement
+from the generic `.invoice` primitives, which have no page geometry — a range that ran past one
+sheet had no second sheet, no page number and no continuation footer. It is now a real A4
+document on the SAME `.docsheet` the purchase invoice and the debit note use (794 × 1122 at
+96dpi, the 992px well, `.mh` / `.parties` / `.facts` / `.tbl` / `.contline` / `.carried` /
+`.close` / `.sigs` / `.pfoot`), under the same `.mp-pur2 .docsheet` scope, so `renderSheetsToPdf`
+measures it exactly as it measures the other two. It paginates by MEASUREMENT with the invoice's
+own four primitives (`measureSheet` / `capsFrom` / `paginateByHeight` / `samePagination`) and
+359 §4's `fill={settled}`.
+
+CSS is DELTAS ONLY, transcribed from `customer-a4-statement.html`, which is itself written that
+way: the six-column `.tbl--stmt` cell classes, `.st-cr` (a negative balance prints `Cr`, never a
+minus — the utility-bill convention), `.st-open` (the opening balance is a ROW of the table, so
+the running column never starts mid-air), `.st-rev` (a reversed row is struck and muted and ITS
+RUNNING BALANCE IS NOT — that figure is the one thing on the row still true), `.stclose` in its
+three states (due / credit / zero, and zero is printed), `.stnote`, `.sttot`, `.sigs--stmt` (two
+rules, not three: the customer acknowledges, the pharmacy issues).
+
+**Ranges.** `CustomerStatementPreset` is now the mockup's four — `month` · `lastMonth` ·
+`days90` · `custom` — and `all` is gone. It had to go: an open range has no opening balance to
+state and no period to print in the masthead, so the one preset that could not fill the sheet's
+own header was on offer as a chip. `custom` is a REAL range (two whole UTC days, `Date.UTC(y,m,0)`
+for last month's last day so February and a year boundary are right), and a half-filled or
+reversed pair falls back to this month rather than to no bounds.
+
+**The dialogue** is the mockup's 720px form dialog: four chips (plus two day fields on `Custom`),
+the entry count, the paper below, and one row of exits — Cancel · Save PDF · Print statement —
+through the shared `<PrintDocActions>` (347 §1's one renderer, 354 §5's named button). The
+selected chip finally LOOKS selected: `.tbl-toolbar__mini.is-active` had been set on the markup
+since 335 and never declared anywhere, so all four chips read identically; it now takes the app's
+own `.filterchip.is-active` treatment.
+
+**Preview scaling.** A CSS transform does not reflow, so a scaled sheet still occupies
+794 × 1122 of layout — a two-page preview laid out bare leaves a page of white between sheets and
+overflows sideways. Each page therefore sits in a fixed box that reserves exactly what it shows:
+`.a4wrap` (the phone's, already there) and the new `.a4desk` (596 × 842 at 75%, the mockup's own
+`.prevzoom` measurement). Both are undone at print time, along with the form dialog's own
+`overflow:hidden`, the preview desk's 52vh cap and its scroller — the same shape the print
+viewer's `.printdlg` / `.printscrim` overrides have had since 320 §3.
+
+**One renderer, two outputs, both tiers.** Save PDF measures the very `.mp-print-surface .docsheet`
+nodes on screen and Print sends the same nodes through the shared isolation; the phone and the
+desk mount the same document at the same geometry and only the preview scale differs, which is
+what makes the two files byte-comparable.
+
+**THERMAL IS DEFERRED (owner decision).** The slip button is not drawn and the dialogue no longer
+calls `usePrintDocument`. Nothing was deleted to do it: `printDocument`'s union still carries the
+`statement` document and `renderCustomerStatement`, so landing it later is one button rather than
+a rebuild. Asserted as such in the 335 spec.
+
+35 message keys added to en + ur (the sheet's own words: the fact strip, the column heads, `Cr`,
+the four entry phrases, the carried/brought-forward pair, the dispute note, the two signature
+roles, the three range chips).
+
+### Decisions recorded
+
+- The statement's period totals are stated as **opening / charges in the period / payments and
+  credits**, not the mockup's `Sales · Payments · Returns` split: the customer ledger has no
+  RETURN kind (a return lands on the payment side), so a three-way split would be a figure the
+  book cannot support. Honest three rows over an invented fourth.
+- The A4 has no account NUMBER (the mockup prints `CUST-00412`); customers have no such column.
+  The account card states what the shop does know — whether udhaar is allowed, the limit, and
+  since when — and the masthead's sub-line carries the entry count and the reversal count.
+- The `<label>`→`<div>` conversion was NOT applied wholesale: fields wrapping a real `<input>`
+  keep their label, because that is the case a label is correct for.
+
+### Gates
+
+`pnpm lint` clean (one pre-existing unused-disable warning in `doctor-portal.repositories.ts`,
+untouched here). `pnpm typecheck` clean, 31/31. `@mp/ui` 179 suites / 4663 tests pass; `@mp/api`
+228 suites / 3017 tests pass; `@mp/i18n` 5/35 pass.
+
+### Files
+
+- `apps/web/app/globals.css` — the two tokens, eight private widths removed, the statement's
+  A4 deltas, `.a4desk` / `.prevpages` / `.prevbar__dates`, the active chip, the print overrides.
+- `apps/web/components/pharmacy/Panel.tsx` — both frames carry their token.
+- `apps/web/components/pharmacy/CustomerStatementDocument.tsx` — NEW, the A4 sheet.
+- `apps/web/components/pharmacy/CustomerStatement.tsx` — rewritten as the print dialogue.
+- `apps/web/components/pharmacy/MergeCustomers.tsx`, `apps/web/app/(app)/pharmacy/pos/PosClient.tsx`,
+  `.../suppliers/SuppliersClient.tsx`, `.../purchase/PharmacyPurchaseClient.tsx`,
+  `.../customers/CustomersClient.tsx` — private caps and `--700` dropped.
+- `apps/web/app/(app)/pharmacy/returns/new-sale-return/NewSaleReturnClient.tsx` — §2.
+- `packages/shared/src/pharmacy-customers.ts` — the four presets and the custom pair.
+- `packages/i18n/src/messages/{en,ur}.json` — 35 keys each.
+- `packages/ui/src/lib/dialog-rule-and-statement-365.spec.ts` — NEW, 32 assertions.
+- Updated to the new rule: `packages/ui/src/lib/{ledger-colour-source-330, import-dialog-and-error-recovery-263,
+  global-fixes-274, inventory-desktop-r2-and-global-fixes, purchases-desktop-r2-264,
+  new-purchase-payment-polish-340, customers-merge-and-statement-335, return-drawer-round-3-351,
+  customers-ledger-parity-363, dialogs-and-drawer-facts-354}.spec.*`,
+  `apps/api/src/pharmacy/customers-merge-335.spec.ts`.
