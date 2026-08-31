@@ -24241,3 +24241,144 @@ Verbatim, so nothing is lost by the trim:
 - Awaiting hardware: thermal printing — Goojprt PT-210, 18F0/2AF1, paced writes, FFE0 fallback, 58mm.
 - Before production: VAPID keys; blank VENDOR_BOOTSTRAP_*; fresh secrets; MFA_STAGING_RELAX=false;
   SEED_DEMO and SCREENSHOT_TOKEN unset; reseed guard re-verified.
+
+---
+
+## 363 — customers-ledger-parity — DONE (2026-08-31)
+
+**WORK TYPE:** FIX (branch `fix/363-customers-ledger-parity`). Spec: `specs/363-customers-ledger-parity.md`.
+Second attempt at 334's instruction, with evidence. No CODEREF covers this range (the last is 113–121).
+
+### What 334 built instead, from the source (§3 asks for this in the record)
+
+334 §1 said *"the supplier ledger is the pattern, reused where components allow — building parallel
+components fails this spec."* What landed obeyed that for exactly **two** objects: `LedgerKit.tsx`
+was created and is genuinely shared (`LedgerModeSwitch`, `LedgerAmountCell` / `LedgerAmountText`,
+`ledgerSignedReading`), and both books import it. **Everything else the supplier drawer is made of
+stayed private to `SuppliersClient.tsx`**, and `CustomerRecord` was written fresh beside it. Each of
+the six defects the owner listed is one of those re-writes:
+
+- **No entry filter.** `RangeMenu` / `RANGE_DAYS` / the `inRange` machinery were private to the
+  supplier screen. The customer `.drawbar` was built with a search field and the mode switch and
+  nothing between them — no way to narrow a two-year book at all.
+- **No visible pagination.** `Pager` was private too. The customer drawer imported the page size,
+  sliced by it, then rendered a pager only `if (active.length > SUPPLIER_TAB_PAGE_SIZE)` — hiding
+  `Showing X–Y of N` on precisely the books small enough for a shopkeeper to want to count. The
+  supplier drawer states that line on every tab always.
+- **No reverse.** `ReverseAction` was private and had nothing to call: no reversal columns on
+  `customer_payments`, no endpoint, no `REVERSAL` kind. A customer payment entered by mistake could
+  not be corrected anywhere in the app.
+- **No Returns tab.** `DrawerTab` was three-wide against the supplier's four.
+- **Simple and Pro identical.** They differ on the desk, but the drawer chose its panel with
+  `mobile ? ledgerList : ledgerTable` and `ledgerList` read `mode` **nowhere** — so on the tier a
+  shopkeeper uses, the switcher changed nothing.
+- **`Advance` as a word where signs belong.** `balanceText` printed the word in the running-balance
+  COLUMN, under a `Balance` heading, beside a signed amount column.
+
+**Why:** none of the six is a decision anyone took. Each is a component that existed twenty feet away
+inside a 5,000-line screen file with no way to import it. Diagnosis recorded, then 358's precedent
+applied — when a parallel build fails you delete it and mount the original.
+
+### §1 — mount, don't mirror
+
+New `apps/web/components/pharmacy/LedgerDrawerKit.tsx`: `Pager` + `pageItems`, `RangeMenu` +
+`RANGE_DAYS` + `DAY_MS` + `rangeWords`/`rangeShort`, `RefCell`, `Sk` + `SKEL_ROWS`, `dtDate`,
+`ReverseAction` + `reversibleRow`, `DrawerTabs` + `DrawerTabSpec`, `cmp`. Every one lifted from
+`SuppliersClient` unchanged — same markup, class names, i18n keys, behaviour — so 250/265/270/279/
+314/319/324's suites measure identical output. `SuppliersClient` deletes its private copies and
+imports them back (keeping `reversible` and a thin `ReverseAction` under its own names for its four
+call sites). `CustomersClient` deletes its parallel `Pager`/`pageItems` and mounts the kit.
+
+`ReverseSupplierPayment.tsx` gains `ReversePayment` with a `party: 'supplier' | 'customer'` prop;
+`ReverseSupplierPayment` stays as a thin call-through so 270/277's guards and the two supplier call
+sites are untouched. `ReverseAction` is typed structurally (`ReversibleRow` + a `paymentSide`
+answer) rather than on either book's `LedgerRow` — that dependency is what kept it unshared.
+
+`Panel` gains opt-in `headIcon`: the drawer frame took `icon` and drew nothing (the sheet and dialog
+always did), so a record with a mark had one on the phone and none on the desk. Opt-in, so the four
+pre-existing drawers are byte-identical.
+
+### §2 — the reversal path (the schema check the spec asked for)
+
+Checked; it was needed. `CustomerPayment` gains 270 §1.2's four columns (`reversalOfId`,
+`reversalReason`, `reversedAt`, `reversedBy`) + `@@index([tenantId, reversalOfId])`; migration
+`20260831000000_customer_payment_reversal` is additive only — four nullable columns and one index,
+nothing dropped/renamed, no backfill, no default, RLS untouched.
+
+**The one thing that does NOT carry over from the supplier side:** a negative `customer_payments`
+row already means something here (334 §2 — a refund of an advance), so the SIGN classifies nothing.
+`reversalOfId` is the only thing that says "reversal", which also makes the reversal of a refund
+(a positive row) classify correctly for free.
+
+- `@mp/shared`: `CustomerLedgerKind` gains `REVERSAL`; `CustomerLedgerMovement` gains an optional
+  `entry?: 'REVERSAL'` the caller declares; new `isCustomerPaymentSide()` — the ONE answer to
+  "which rows are on the payment stream", now shared by the server and the drawer.
+- Repo: `findCustomerPayment`, `reverseCustomerPayment` (conditional stamp → one entry under a
+  race), `listCustomerSaleReturns`; `CUSTOMER_PAYMENT_SELECT` + `toCustomerPayment` extracted
+  because the table went from one read to four. Prisma + fake both.
+- Service: `reverseCustomerPayment` in 270's shape, refusal for refusal (a reversing entry cannot
+  itself be reversed; a second attempt is refused in a sentence naming who did it and when; the
+  race loser re-reads and says the same). No allocation re-plan — there is no customer-side
+  allocation table, a customer balance is one net figure (334 §2). `CustomerLedgerRowView` gains
+  `paymentId` + `reversedAt`; `CustomerLedgerView` gains `returns: CustomerReturnView[]`.
+- Controller: `POST customers/:id/payments/:paymentId/reverse`, same `PHARMACY_STOCK_ADJUST` key
+  and same body parser as the supplier route, `@Audited`.
+
+**Returns tab decision (recorded, not escalated):** the supplier tab reads the ledger's own credit
+notes because a purchase return posts one. A sale return posts no customer ledger row — its refund
+is already in the payment stream, or the sale never went on the tab — so this tab is the returns
+themselves, as the Sales tab is the sales themselves, with the **refund method** in the slot where
+the supplier tab prints its credit-note number. That is the spec's own wording for it.
+
+### §2 — the rest of the surface
+
+Drawer 700px; standing badge into the header via `headBadges`, mark via `headIcon`; four tabs on
+`DrawerTabs` with counts folded from the FILTERED arrays; the entry filter narrowing all four tabs
+while the closing row still folds the whole book (243 §5); pager + info line on every tab always;
+Sales status moved to its own column as a toned pill with a human word (`PARTIAL_RETURN` was being
+printed as stored); Sales/Payments/Returns signed and coloured on both tiers; phone Simple/Pro now
+differ (314 §2's `.mledrow` vs `.mledcard`); `moneySigned` in the ledger's three balance slots while
+227 §2.2's word survives in the list cell and the header figure, where it was aimed.
+
+CSS: `.dtbl--csales` 520→638 with a 118px status column; `.dtbl--cpay` gains a 52px action column
+and `has-act`; the Returns tab reuses `.dtbl--supret` unchanged.
+
+**248 §1, and the audit §2 asked for.** `customers` was missing from the `--mchrome` reservation, so
+the phone's first card rendered behind the glass — the same defect as 248 and 345 §3, on a sixth
+screen and a third separate report. Added the name; and since the pattern itself is the problem (the
+chrome is BUILT in TSX and its height DECLARED in CSS, joined only by a hand-maintained key list) a
+STRUCTURAL fallback now reads the chrome's own anatomy: a page chrome containing `.mchrome__srch` is
+117px, one without it is the 59px title row. Stated FIRST at equal specificity, so every named
+screen's computed value is byte-identical; the names stay, per 214 §1.
+
+**Back stack (312 §3's class).** View → Edit → Deactivate → back ×3 left the screen. Cause: the form
+was closed in the same commit the confirmation opened, and `history.back()` is asynchronous while
+`pushState` is not — the new entry landed before the old was consumed, so the counts stayed equal
+and the pairing did not. Fix is not more bookkeeping (203 §2: intent is declared, never inferred) —
+the form STAYS OPEN under its confirmation, and `setActive` closes both on the one completed action.
+
+### Suites
+
+New: `apps/api/src/pharmacy/customers-ledger-parity-363.spec.ts` (reverse end to end, refusals, the
+reversal of a refund, the Returns tab, and the byte-identical-money proof — a stream declared as
+reversals and the same stream declared as nothing produce identical rows but for the kind);
+`packages/ui/src/lib/customers-ledger-parity-363.spec.tsx` (98 structural assertions: the kit
+exists, both books import it, the customer drawer mounts each part, no parallel implementation
+survives, and every §2 surface).
+
+Seven existing suites had source-grep assertions that pointed at code this step MOVED; each was
+re-pointed at the kit with the reason written in, and what they assert is unchanged —
+`purchases-suppliers-mobile-r2`/`-r3`, `suppliers-drawer-and-mobile-r4`, `void-payment-reversal-270`,
+`drawer-tables-invoice-and-css-279`, `supplier-ledger-314`, `supplier-ledger-to-mockup-319`,
+`customers-ledger-334`, `customer-advance-balance`. Verified mechanically: every `toContain` in the
+touched suites (406) and in the new one (98) was resolved against its real target before commit.
+
+i18n: 22 new keys, EN + UR, additive only.
+
+### Gates
+
+`pnpm prisma generate` ✓ · `pnpm typecheck` 31/31 ✓ · `pnpm lint` 17/17 ✓ (the single remaining
+warning is a pre-existing unused eslint-disable in `doctor-portal.repositories.ts`, untouched here —
+confirmed by stashing). `pnpm test:unit` / `test:e2e` / `build` are the controller's, per AGENT.md.
+UI design self-check by inspection: every i18n key, pill class and `ledtag` variant referenced by the
+new markup verified present; every table's column widths verified declared for its new column count.

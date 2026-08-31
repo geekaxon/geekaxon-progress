@@ -7,12 +7,12 @@
 ## Current Status
 - **Project:** Marham Patti — multi-tenant white-label healthcare platform.
 - **Phase:** **PHASE 42** — money proof, Customers parity, Recent Sales.
-- **Last completed:** **362 — purchase-summary-truth** (owner re-reads PI-00017 and PI-00018).
-- **Next:** **363 — customers-ledger-parity** — specs/363-customers-ledger-parity.md
+- **Last completed:** **363 — customers-ledger-parity** (the customer book is the supplier's, mounted).
+- **Next:** **364 — customer-rules** — specs/364-customer-rules.md
 
 ### Recent steps
+- **363 — customers-ledger-parity** — DONE (2026-08-31) — the customer book mounts the supplier drawer's parts, and a payment can be undone.
 - **362 — purchase-summary-truth** — DONE (2026-08-31) — one payments figure over both kinds, each row's parts beneath it.
 - **361 — allocation-walk-and-reversals** — DONE (2026-08-31) — the walk runs to the end of the book; reversals unwind.
-- **360 — staging-reseed** — DONE (2026-08-30) — a reseed that refuses production by construction, and ships unrun.
 
 > Older steps and the standing notes in PROGRESS-HISTORY.md
