@@ -24159,3 +24159,85 @@ Then, in the app, run the credit reconciliation sweep (`POST` the purchases cred
 `pnpm lint` and `pnpm typecheck` run once at the end: clean (the single pre-existing warning in `doctor-portal.repositories.ts` is untouched and not mine). `pnpm test:unit` / `build` deliberately not run here — the controller runs them. Vendor untouched; no secret added; production never touched.
 
 **Note on PROGRESS.md:** trimmed back to the canonical three Recent-steps entries (the forward-looking AUTHORED lines for 362–367 were removed; the Group-order line already carries the sequence) and the now-retired 361 evidence bullet dropped. The file is 2.18 KB; the remainder above the 1.5 KB target is standing operator policy placed by the controller, not step detail, so it was left alone.
+
+## 362 — purchase-summary-truth (FIX) — DONE 2026-08-31
+**Branch:** `fix/362-purchase-summary-truth` (cut from `fix/361-allocation-walk-and-reversals` head).
+**Spec:** `/specs/362-purchase-summary-truth.md`. No CODEREF covers 362. Schema: none. RLS: unchanged. Display only.
+
+**The defect.** PI-00017 read `Grand total 1,500 · Credit applied − 271.22 · Amount paid Rs 0 · Balance 0`
+over an invoice two supplier-level payments (1,000 + 228.78) had closed. Every stored figure was
+correct; `Amount paid` counted INVOICE-level payments alone, so the row naming the owner's money
+said zero and the four figures could not be added by the person reading them (325 §1's calculator
+test). PI-00018 was the second half: two payment lines of the same kind, one carrying a method and
+an account and the second carrying neither, because the two payment shapes were composed by
+different code naming different fields.
+
+**Decisions recorded (no approval gate exists; these were taken and built).**
+1. **ONE `Payments applied` row over both payment kinds**, replacing `Amount paid` on the drawer,
+   the mobile sheet AND the A4 sheet. Its figure is `paid + Σ allocated` — `paid` taken as given
+   rather than re-summed from rows, so the column closes on exactly the balance `documentBalance`
+   already computes (money byte-identical, which §3 requires). Absent when zero, as `Returned` and
+   `Credit applied` are.
+2. **Each row's constituents moved out of the balance row and under their own row**, as a
+   full-width `--subs` sub-row: 317's credit lines and 353's payment lines both lived inside the
+   balance `<b>`, so five lines under one figure explained neither of the two rows above them.
+   New CSS: `.vtot__row--subs` / `.msum__row--subs` (block, no top padding, no hairline off their
+   own row, start-aligned per 358 §3). 354/358's `--bal .sub` rules are left in place unchanged.
+3. **Counts replace 317's single-source tail**: `(3 credit notes)` / `(2 payments)`, at every
+   number, through the shared `pluralCount`. The old "· RTN-1188 on PI-20461" named a source only
+   in the one case that needed no explaining.
+4. **ONE line composer for both payment shapes** — `appliedPaymentFields`: date · method · account
+   · reference, dropping only genuinely empty fields, with exactly one field flagged `source` (the
+   slip the desk typed, else the tender) as the ledger deep link's target. `appliedPaymentSource`
+   is gone. Credit lines drop the repeated `Credit applied` label and read `CN-7 · Rs 2,000.00`
+   beneath their own labelled row (spec §1's own shorthand).
+5. **357's "no aggregate on screen" is superseded, not reverted.** What 357 banned was an ANONYMOUS
+   aggregate; the row now carries its count and its constituents sit directly beneath it. Paper
+   keeps the aggregate alone — no link to follow, no room under a closed balance.
+6. **Server:** `AppliedPaymentView.account` (resolved to a NAME through `paymentAccounts`, null for
+   cash / pre-313 rows) and a new `PurchaseDetailView.invoicePayments` — this invoice's STANDING
+   payments in the same shape, so the one row can name every constituent of its figure. They are a
+   SEPARATE array from `appliedPayments` deliberately: folding them in would double-count the
+   invoice's own payments in every list, KPI and ageing read that sums it. Their `po:<id>` linkage
+   is not printed as a reference (270 §2).
+
+**Files.** `apps/api/src/pharmacy/pharmacy.service.ts` (AppliedPaymentView.account,
+`appliedPaymentByPurchase`/`appliedPaymentOfSupplier` account map, `invoicePayments` +
+`invoicePaymentLines`, one `paymentAccounts` read on the detail);
+`apps/web/components/pharmacy/DocumentReturns.tsx` (`foldAppliedPayments`, `AppliedPayments`,
+`showsAppliedPayments`, `appliedPaymentFields`, `creditNoteCountLabel`, `appliedPaymentCountLabel`,
+rewritten `AppliedCreditTotalRow` / `AppliedCreditLines` / `AppliedPaymentTotalRow` /
+`AppliedPaymentLines`); `apps/web/app/(app)/pharmacy/purchase/PharmacyPurchaseClient.tsx` (drawer,
+sheet and A4 totals blocks + `AppliedPayment.account` / `PurchaseDetail.invoicePayments`);
+`apps/web/app/globals.css` (the `--subs` sub-row); EN/UR (`docPaymentTotalsRow` → "Payments
+applied"; new `docCreditNoteCountOne/Other`, `docPaymentCountOne/Other`; retired the now-unused
+`docCreditFromOn` and `docCreditApplied` from both catalogues).
+
+**Tests.** New `packages/ui/src/lib/purchase-summary-truth-362.spec.ts` (the four rows, the fold,
+the constituents under their own rows, the composer's field order and single link target, the
+server's account + invoicePayments, the untouched balance, EN/UR). Updated where 362 supersedes an
+earlier assertion: `allocation-itemized-357.spec.ts` (the aggregate may return so long as its lines
+accompany it; the composer replaced `appliedPaymentSource`), `purchase-colour-truth-and-polish-325`
+and `invoice-cascade-283` (the paper's paid row is now `AppliedPaymentTotalRow`).
+
+**Gates.** `pnpm lint` clean (one pre-existing unrelated warning in doctor-portal.repositories.ts);
+`pnpm typecheck` clean. `pnpm test:unit` / `test:e2e` / `build` not run per the build-loop rule —
+the controller runs the full gates.
+
+**Note.** PROGRESS.md's two per-step standing notes were moved here to keep the tracker inside its
+size limit: **363 is a SECOND attempt at 334's instruction** — MOUNT the supplier ledger components
+with a customer source, and record what 334 built instead; **366 is ASSEMBLED, not built** — a
+component that exists elsewhere, written again, fails the spec.
+
+### Standing notes moved out of PROGRESS.md at step 362 (tracker size limit)
+Verbatim, so nothing is lost by the trim:
+- Group order: 362 → 363 → 364 → 365 → 366 → 367. One step, then stop at the checkpoint.
+- RULE: form dialogs 720px, view drawers 700px — two tokens.
+- RESEED (360) STAYS UNRUN until the allocation instruments PASS on real data.
+- BRANCH RULE: create and switch to the spec's own branch BEFORE any commit.
+- Numbering is continuous — never skip a number.
+- Sequence after this: Settings testing → Day-close → Accounting → Prints → Dashboard → audits → reseed.
+- Held for build: A4 sale invoice; thermal receipt; thermal statement.
+- Awaiting hardware: thermal printing — Goojprt PT-210, 18F0/2AF1, paced writes, FFE0 fallback, 58mm.
+- Before production: VAPID keys; blank VENDOR_BOOTSTRAP_*; fresh secrets; MFA_STAGING_RELAX=false;
+  SEED_DEMO and SCREENSHOT_TOKEN unset; reseed guard re-verified.
