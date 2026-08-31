@@ -24639,3 +24639,115 @@ untouched here). `pnpm typecheck` clean, 31/31. `@mp/ui` 179 suites / 4663 tests
   new-purchase-payment-polish-340, customers-merge-and-statement-335, return-drawer-round-3-351,
   customers-ledger-parity-363, dialogs-and-drawer-facts-354}.spec.*`,
   `apps/api/src/pharmacy/customers-merge-335.spec.ts`.
+
+---
+
+## 366 — recent-sales-to-mockup — DONE (2026-08-31)
+
+**Branch:** `fix/366-recent-sales-to-mockup` · **Spec:** `specs/366-recent-sales-to-mockup.md` · CODEREF: none covers 366.
+**Mockups:** `specs/mockups/pharmacy/recent-sales-desktop.html` (A list · B cards · C 700px drawer · D the other two
+states) and `recent-sales-mobile.html`.
+
+### The decision the whole step turned on
+
+The spec says the screen is **assembled, not built** — every part exists. That was only true once the SALE was stated
+as a **document**. 237 built this register before the document vocabulary existed, so a sale row carried `total`,
+`creditAmount` and four private words for how it settled (`Settled · Part udhaar · Udhaar · Returned`), and drew
+`Time · Invoice · Customer · Items · Total · Payment · Cashier · Counter`. 304's badge, 315's one filter predicate and
+the mockup's `Paid · Balance · Payment` columns all read facts the row simply did not have. Restating the sale as
+`total / paid / returnedValue / dueAt` made every one of those components mount unchanged.
+
+### What `paid` on a sale actually is (the money question)
+
+Two legs, neither invented:
+1. **the till leg** — `total − creditAmount`, which is the figure day-close has accrued as settled since 110;
+2. **what the customer's later payments have reached** — derived, because a `CustomerPayment` names no invoice and
+   this step changed no schema. It is derived by the walk the build already owns, `planCreditAllocation`
+   (317 §1 / 353 §1): invoices = the customer's udhaar sales, sources = their payments with no own invoice, oldest
+   open first, remainder held as an advance. 353 wrote that rule for suppliers in as many words; a customer's tab is
+   the same book facing the other way, so it is the same walk over different rows rather than a second attribution
+   rule that would eventually disagree with the first. Read in two batched queries per page.
+
+Two exclusions had to be added to that walk and both are recorded because both were found by a failing test:
+- a **reversed** payment settles nothing (363 §2) — its reversing row is negative and out by the sign test, and the
+  original leaves with it, so the pair enters and leaves the walk at zero;
+- the **void's own udhaar restore** (313 §4) is written on `customer_payments` and is NOT money a customer handed
+  over. Left in, it settled the customer's oldest open invoice and reported a completely different sale as paid. It
+  is recognised by `isSaleVoidCreditRestore` (new, declared beside the reference builder so writer and reader cannot
+  drift), and the voided sale leaves the invoice set with it (status read from `listCustomerSales`).
+
+`balance` is the ONE `documentBalance` every other document has used since 304 §3.3. **Money is byte-identical:** no
+stored figure changed; `paid + balance + returnedValue` closes on the sale's own total, asserted over every row.
+
+### `dueAt` is null, and honestly so
+
+A customer carries a udhaar switch and a limit (364 §1) and **no terms**. Nothing in the record can say when udhaar
+was meant to be back, so `dueAt` is null on every sale and the `Overdue` chip counts zero rather than counting a
+guess. The field and the chip exist because `documentPaymentState` reads the one and the mockup draws the other, and
+because the day customer terms arrive there is exactly one place to fill in. Recorded as a decision, not an oversight.
+
+### The defect found on the way
+
+`POST :id/void` was declared under `@Controller('pharmacy/pos')` while the drawer that is its only caller has posted
+to `/pharmacy/recent-sales/:id/void` since 313. **The one destructive correction a committed sale has answered 404 on
+every press.** Moved to the controller its own first sentence names ("from Recent Sales and nowhere else").
+
+### What is mounted (the §3 grep, enforced in `recent-sales-screen.spec.tsx`)
+
+304 §7 `DocumentNumber` / `DocumentReturnBadge` / `DocumentReturnSummary` / `ReturnedTotalRow` /
+`DocumentReturnsTable` / `DocumentReturnsList` · 358 §1 `DocumentFacts` · 359 §2 `SortHead` + `sortRows` +
+`useSortPref` · 305 §1 `rowOpenProps` · 315 §3 `DOCUMENT_LIST_FILTERS` + `documentMatchesFilter` (one predicate
+behind both the chip counts and the rows) · 326 §2 `posLineCalc` (computed server-side off the same
+`computePosLine` the counter ran, so a stored line and a live one say the same four numbers) · 350 §1 `VoidConfirm`
+· 259 §4 `MonthRangePicker` + `useMonthWindowPref` · 316 list prefs · 343 §2 `useSaleLive` · Purchases' `.icard`,
+`.vlines`, `.vtot`, `.pcard`, `.msum`, `.factrow` via the `.mp-pur2` scope.
+
+`VoidSaleDialog` (313's private confirmation, a `<ul>` of two consequences) is **deleted**. The sale joins 350's
+designed flow: `VoidDocumentKind` gains `'sale'`, `saleVoidPreview` + `GET :id/void-preview` state every consequence
+the void performs (stock back to its lots, udhaar off the tab with where the balance lands, the money out of the
+till, the reversing entry) and render the server's own refusal where it would refuse — already voided (by name and
+date) or a return standing against it (forward path: another return). No `selling-prices` row: that consequence is
+the purchase side's, and a sale sets no prices.
+
+The **void badge** moved into `DocumentReturns.tsx` as `DocumentVoidBadge` + `DocumentNumber voided` rather than
+being hand-rolled here — 304 §7's grep gate caught it, correctly: one badge, one file. The two marks are mutually
+exclusive by rule (a void is refused once any return exists, 304 §6), not by layout.
+
+### Files
+
+- `packages/shared/pharmacy-recent-sales.ts` — `RecentSaleDocumentFacts`, `recentSaleFilterFacts`,
+  `recentSalePaymentState`, `recentSaleBalance`, `recentSalesHeadline`, `isSaleVoidCreditRestore`.
+- `packages/shared/pharmacy-void.ts` — `'sale'` joins `VoidDocumentKind`.
+- `packages/shared/pharmacy-purchase-desk.ts` — `monthWindowInstants` (the window as two instants: Purchases
+  narrows a list it holds, Recent Sales is SERVED by range, so one control drives both readings).
+- `apps/api/pharmacy.service.ts` — the row's document half, `udhaarPaidBySale`, `saleVoidPreview`, detail `returns`
+  + `refunds`, and `SaleItemView` gains `batchNo` / `soldAsName` / `soldAsContains` / `calc`.
+- `apps/api/pharmacy.controller.ts` — `void-preview`, and the void route moved onto the recent-sales controller.
+- `apps/web/.../RecentSalesClient.tsx` — rebuilt to both mockups, desk and phone.
+- `apps/web/components/pharmacy/DocumentReturns.tsx`, `VoidConfirm.tsx` — the void badge and the sale's words.
+- `apps/web/app/globals.css` — only what a sale has and a purchase does not: `.vtot--sale` (colour follows
+  DIRECTION, not sentiment — a sale's grand total is money earned, so `--sale` undoes Purchases' amber),
+  `.payleg__kv` / `--in` / `--out` / `--void`, `.retbadge--void`, `.voidwrap` / `.voidwm`, `.vlines--sale`.
+- i18n EN+UR: 74 keys. **`Credit` appears in no `prs*` string this screen renders** — asserted.
+
+### Gates
+
+`pnpm typecheck` 31/31 · `pnpm lint` 17/17 (one pre-existing unrelated warning in `doctor-portal.repositories.ts`).
+Suites run directly rather than through the forbidden whole-suite command: `apps/api` 229 suites / 3042 tests green
+(includes the new `recent-sales-to-mockup-366.spec.ts`, 25 tests, and the untouched `recent-sales.spec.ts`);
+`packages/ui` 179 suites / 4671 tests green; `packages/i18n` 5/35 green. `packages/db` is 62-fail-to-run at HEAD and
+after, identically — those suites need a live database and were verified unchanged by stashing.
+
+Three older assertions were carried forward, not weakened: 359's sort-column list for this screen (the columns
+changed with the redesign; the rule that every data column sorts did not), 345's `?sale=` opener regex (the opener
+now passes the row beside the id so the header draws before the fetch lands), and 304's badge gate (satisfied by
+moving the void badge into the shared file rather than by exempting this screen).
+
+### Left standing, deliberately
+
+The retired `.mp-rsales` atoms from 237 (`.mthpill`, `.timecell`, `.invcell`, `.amtcell`, `.slines`, `.totbox`,
+`.payline`, `.drawmeta`, `.retnote`, `.salecard`, `.msale*`) are still DECLARED in `globals.css`. They are scoped to
+this screen alone and nothing mounts them; removing them is a safe follow-up, and doing it blind inside this step
+risked the styling of the parts that are still mounted (`.liveind`, `.custcell`, `.newflag`, `.msalelist`).
+
+WORK TYPE: FIX (branch fix/366-recent-sales-to-mockup)
