@@ -23907,3 +23907,120 @@ UPDATED, each with the reason written in place rather than the assertion quietly
 new i18n keys — two existing customer-pill values changed in both languages.
 
 **Deployment note:** none. Web + shared only.
+
+---
+
+## 359 — pulse-sort-and-print-parity — DONE (2026-08-31)
+
+**WORK TYPE:** FIX. **Branch:** `fix/359-pulse-sort-and-print-parity` (cut from staging @ a8105b5).
+**Schema:** none. **RLS:** unchanged. **Flags/permissions:** unchanged. **Endpoints:** none added;
+`PUT /me/preferences/ui` now also accepts `pref: "sort"`.
+
+### §1 The pulse fires for live events only — THE CAPTURE
+
+356 §2 stopped the hover trigger; the owner then reported the pulse on **page refresh** and on
+**list↔card switches**. Two symptoms, two causes, both in `apps/web/lib/live-list.ts`:
+
+1. **The refresh.** `useLiveOrder` passes `sameOrder` as `pinRowOrder`'s `seeded` flag (352 §5), and
+   `sameOrder` is TRUE from the first render onward — the reader's choices have not changed between a
+   screen's loading render (`rows = []`) and its first data render. So every page load ran: render 1
+   seeds an EMPTY pin; render 2 arrives with 300 rows, none of them in the pin, i.e. 300 ARRIVALS,
+   and `pinRowOrder` marked all of them. The mark was deriving from the data being new to the pin —
+   the exact cause class 356 §2 named and did not reach.
+2. **The view switch.** Marks accumulate for the life of the pin (deliberately). The wash is a CSS
+   `animation` on the marked node, and list and card views are DIFFERENT ELEMENTS: switching
+   remounts them and a fresh mount replays keyframes. Every row ever marked pulsed again on every
+   switch.
+
+**The rule now:** a mark is created only when a bus event has arrived since the pin last advanced,
+and it wears `.is-live-marked` only while fresh. `useLiveSignal()` is a per-screen counter (React
+state — zero on every mount and every page load, which is the fact the pulse means); the four desk
+lists bump it inside their own `useDeskLive` handler before re-reading. `useLiveOrder` returns
+`marked` (accumulated, for the accessible name — 329 §3, never colour alone) and `pulsing` (the
+subset inside `LIVE_PULSE_MS` = 2400ms, cleared by a timer, and what the screens put the class on).
+**Judgement call recorded:** `liveSignal` is read inside the memo but is deliberately NOT one of its
+dependencies. An event and the re-read it causes are two renders; if the counter re-ran the memo on
+its own, the pin would advance against the OLD rows, consume the counter, and the re-read that
+followed would find nothing to prove it was live — the pulse would be swallowed by its own trigger.
+A screen that passes no signal never marks: forgetting to wire it is calm, not noisy.
+
+### §2 Sortable headings, the rule
+
+`apps/web/lib/table-sort.tsx` is now the ONE `.sorth` button in the app; `sortRows`,
+`compareCellValues`, `nextSortChoice`, `readSortValue`/`encodeSortValue` are in
+`packages/shared/src/user-ui-prefs.ts` (pure, so they are unit-tested without a DOM). Five copies of
+the same button are gone: the Suppliers drawer's (250 §1), Customers' own, Returns' inline
+`sortHead`, Inventory's `SortTh` and the purchase-detail's. `UI_PREF_KEYS` gains `sort`, stored as
+`<column>:<asc|desc>` and validated **by shape** (`UI_PREF_SORT_PATTERN`) rather than by an enum of
+columns — a shared package that had to be edited whenever a table grew a column would break stored
+preferences on a rename. The stored column is checked against the screen's live column set on read.
+
+Converted (13 tables): Inventory catalogue · Low stock · Near expiry · Suppliers · Purchases ·
+Returns (incl. `Reason`, which drew a heading and did nothing) · Customers (incl. Phone, Address,
+Status) · Recent sales · Accounts cash-book entries · Day-close recent closes · Admin audit log ·
+the two Suppliers-drawer tabs. Every default is the order that screen already arrived in, so nobody
+who never presses a heading sees a change. `ACTIONS` is never a `SortHead`. The sort joins each
+list's `resetKey`, so a re-sort releases the live pin.
+
+The `.sorth` CSS reset is now **scope-free**: 352 §1 hoisted it from `.mp-pur2` to `.mp-inv2` +
+`.mp-pur2` because Returns wore neither of the first; stock alerts, Recent sales, Accounts, Day
+close and the audit explorer wear neither of the second. `cursor`/`hover` are declared on
+`button.sorth` specifically, because `DocumentReturns` wears `.sorth.is-desc` on a `<span>` to mark
+which column a printed block is ordered by, and a document must not offer a press it will not honour.
+
+**Audit recorded:** `docs/359-sortable-columns-audit.md` — every `<thead>` in `apps/web`, classified.
+Six classes: browsable registers (sort), printed documents (order is the document's), entry-form line
+editors (order is the typing order), the FEFO batch table (the order IS the answer, 215 §2.4),
+summary/report blocks (already ranked by their own measure), and settings/admin config tables. That
+last class is recorded **OPEN**: the hand-rolled settings sections are a dozen rows apiece and do not
+sort; the ones on the `@mp/ui` `DataList` kit already sort per column via the kit's own `sortValue`.
+That boundary is my call and it is stated in the doc rather than left implicit.
+
+### §3 The draft toast's conditions — THE CAPTURE
+
+Not a race (the draft is read synchronously from `localStorage` inside a mount effect, and
+`sessionUserId()` is synchronous by construction) and not a session flag (nothing gates the restore
+on one). **It is the dedupe.** 349 §2's `announcedDrafts` is module scope, keyed on the draft's
+`cid`, and its own comment says it "must NOT outlive the page load" — a sentence that is true in a
+server-rendered app and false here, because `/pharmacy/purchase/new` is reached by CLIENT-SIDE
+NAVIGATION. Purchases → New purchase → back → New purchase is ONE page load and TWO openings, and
+the second opening found its `cid` already recorded and said nothing. So: first open of a tab
+announced, every later one was silent — "sometimes it appears".
+
+`endPurchaseEntrySession()` empties the set, called from the entry ROUTE's **unmount**. On unmount
+deliberately: React runs effects child-first, so clearing on mount would run after the desk entry
+had already announced and would hand the tier flip a cleared set — two toasts, the defect 349 §2
+fixed. The bar was never guarded and is unchanged. Ten opens with a draft → ten bars, ten toasts.
+
+### §4 The debit note's spacing — THE CAPTURE
+
+288 §2's fix has TWO halves and 356 §3 took only the first. The paginator leaves under one row of
+residue per page; `.tbl--fill` gives that residue to the table so the last row's rule lands on the
+well's floor. The debit note had no `fill` at all, so the table kept its natural height while
+`.contline.pushdown` stayed pinned to the floor and every pixel of residue collected between them —
+the gap the owner measured on CN-17 against PI-00012. Page 2's whitespace is the same omission from
+the other end: `capsFrom` derives its caps from sheets rendered WITHOUT the fill, so the last page
+was handed a different row count than the invoice's would be. Fix: `fill={settled}` on the sheet and
+`fill && !last` on the table — the invoice's own expressions, at the `.mp-pur2 .docsheet` scope both
+documents already share. No new constant and no new stylesheet; 347 §1's one-renderer discipline
+extended from the render path to the page geometry. Tied to SETTLED because `.tbl--fill` stretches
+rows: a table filling while the measuring loop is still reading row heights would measure the stretch.
+
+### Files
+
+`packages/shared/src/user-ui-prefs.ts` · `apps/web/lib/table-sort.tsx` (new) ·
+`apps/web/lib/live-list.ts` · `apps/web/app/globals.css` ·
+`apps/web/components/pharmacy/DebitNoteDocument.tsx` ·
+Inventory / StockAlerts / Suppliers / Purchases / NewPurchase route / Returns / Customers /
+RecentSales / Accounts / DayClose / AuditExplorer clients ·
+`docs/359-sortable-columns-audit.md` (new) ·
+`packages/ui/src/lib/pulse-sort-and-print-parity-359.spec.tsx` (new, 31 tests) ·
+prior-step specs updated where 359 supersedes them (299, 305, 316, 320, 329, 334, 339, 349, 352,
+356, 358, alerts-polish, suppliers-drawer-r4).
+
+### Gates
+
+`pnpm lint` and `pnpm typecheck` clean (one pre-existing unrelated warning in
+`doctor-portal.repositories.ts`). Full unit suites verified green locally rather than left to the
+controller, because this step edits 14 prior-step spec files: `@mp/ui` 175 suites / 4570 tests,
+`@mp/api` 225 suites / 2982 tests, `@mp/db` 72 suites / 554 tests.

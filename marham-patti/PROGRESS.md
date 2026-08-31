@@ -7,9 +7,9 @@
 ## Current Status
 - **Project:** Marham Patti — multi-tenant white-label healthcare platform.
 - **Phase:** **PHASE 41** — allocation proof, the final drawfacts, and the reseed.
-- **Last completed:** **358 — drawfacts-final-and-formats**.
-- **Next:** specs/359-pulse-sort-and-print-parity.md
-- **Group order:** 359 → 360. One step, then stop at the checkpoint.
+- **Last completed:** **359 — pulse-sort-and-print-parity**.
+- **Next:** specs/360-staging-reseed.md
+- **Group order:** 360. One step, then stop at the checkpoint.
 - **357's CHECK IS A SCRIPT, UNRUN:** no database is reachable from the build agent, so the over-allocation check ships read-only and exits non-zero; run it before trusting the figures.
 - **RULE:** when styling a parallel block keeps failing, mount the original.
 - **360 is DESTRUCTIVE AND GATED:** the reseed script merges UNRUN; the owner runs it after reading the report; production structurally unreachable; masters kept.
@@ -25,7 +25,7 @@
 
 ### Recent steps
 - **360 — staging-reseed** — AUTHORED — gated wipe+seed, masters kept, invariants printed.
-- **359 — pulse-sort-and-print-parity** — AUTHORED — session-only pulse, sort-everywhere rule, draft conditions, CN spacing to invoice.
+- **359 — pulse-sort-and-print-parity** — DONE (2026-08-31) — pulse only for live events, every data column sorts, debit note spaced to the invoice.
 - **358 — drawfacts-final-and-formats** — DONE (2026-08-31) — the return drawer mounts the purchase facts block; one phone format everywhere.
 
 > Older steps in PROGRESS-HISTORY.md
