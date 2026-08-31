@@ -24024,3 +24024,138 @@ prior-step specs updated where 359 supersedes them (299, 305, 316, 320, 329, 334
 `doctor-portal.repositories.ts`). Full unit suites verified green locally rather than left to the
 controller, because this step edits 14 prior-step spec files: `@mp/ui` 175 suites / 4570 tests,
 `@mp/api` 225 suites / 2982 tests, `@mp/db` 72 suites / 554 tests.
+
+---
+
+## 360 — staging-reseed — DONE (2026-08-31)
+
+**Branch:** `feature/360-staging-reseed`. **Spec:** `/specs/360-staging-reseed.md`. **Work type:** OPS, data only — no schema, no migration, no UI.
+
+**What shipped.** `pnpm reseed:staging --tenant <id|slug>` — a destructive staging reseed that is **committed UNRUN**. Files:
+
+- `packages/db/src/reseed/plan.ts` — every decision the reseed makes before it writes anything, as pure functions: `parseReseedArgs`, `reseedGate`, `classifyDatabaseUrl`, the three-tier table partition, `backupFileName`, `stockInvariantViolations`, `trialBalance`.
+- `packages/db/scripts/reseed-staging.ts` — the I/O shell: env load, preflight, report, pg_dump, delete, seed, verify.
+- `packages/db/src/reseed-staging.spec.ts` — 46 tests.
+- `packages/db/prisma/seed-demo.ts` — `runDemoSeed(now, target?)` now takes an optional `{ slug, name }` so the reseed re-seeds the tenant the owner named through the ONE gated seed path instead of a second copy of it. Default unchanged (`ganatra-clinic`), so the CLI and the idempotency spec are untouched.
+- Root `package.json` + `packages/db/package.json` gained `reseed:staging`; `.gitignore` gained `backups/` and `*.dump`.
+
+**The gate (§1.1) — four independent checks, all required.** `APP_ENV=staging` (production refuses first and by itself), `SEED_DEMO=1` (the reseed refuses wherever the demo seed would), `RESEED_STAGING=1` (a switch that exists only for the delete), a non-production-shaped `DATABASE_URL`, and an explicitly named tenant. An unrecognised flag is a refusal, not a shrug — a mistyped `--dry-runn` that silently became a real run would be this file's worst failure.
+
+**DECISION — the gate rides on APP_ENV, not NODE_ENV.** The spec asks for "NODE_ENV matching staging's". On this deployment `deploy.sh` pins `NODE_ENV=production` on BOTH environments (231), so NODE_ENV cannot tell them apart; a gate on it would either refuse everywhere or be satisfied on production. APP_ENV is the variable that distinguishes them, so it is the one used, and the report prints NODE_ENV beside it with the reason so nobody re-derives this later.
+
+**DECISION — the production check is a SHAPE test.** This is a public checkout carrying no hostnames or database names, so there is no production URL to compare against and inventing one would put the protected thing into the file that protects it. The user, host and database name are searched for a separator-bounded `prod|production|live|master`; a hit aborts before any read. A URL that says both staging AND production is ambiguous and is refused, not resolved. Not-a-hit does not mean staging, which is why the shape test is one of four checks and never the only one.
+
+**DECISION — a three-tier partition, asserted total.** Tier 1 (always cleared, 85 models): the tenant's trading history — returns, allocations, payments, sales, purchases, stock and lots, day-close and till, clinic billing, the books, online orders, lab, the clinic's own day, what the assistant wrote about all of it, the logs that narrate those rows, and the number sequences they consumed. Tier 2 (only with `--include-masters`, 31 models): catalogues and directories — medicines, units, categories, suppliers, customers, lab menu, doctors, patients, riders. Tier 3 (never cleared, 47 models): identity and access, configuration and definitions (settings, payment accounts, reason lists, counters, chart of accounts, fiscal periods), and platform-owned rows. The spec test reads `schema.prisma`, extracts every tenant-scoped model, and asserts each appears in EXACTLY ONE tier — so a model added by a later step fails a test until somebody decides which side of the wipe it is on.
+
+**DECISION — the sequences go with the documents.** A gapless sequence starting at 1 over an empty book is correct; one starting at 4,812 over an empty book is a puzzle.
+
+**DECISION — the backup is the whole database.** `pg_dump` cannot filter rows and a hand-rolled per-tenant extract is not restorable on its own, which is the only property a backup has. The dump is a superset of what is about to go. The connection is handed to `pg_dump` in `PG*` environment variables, never in `--dbname=<url>`, because argv is world-readable in `ps`. A failed or missing dump ABORTS before the transaction.
+
+**DECISION — `--tenant` matches id or slug EXACTLY.** 357 also accepts a partial name match, which is right for a read-only check and wrong here: fuzzy matching on a script that deletes is an affordance for wiping the tenant next to the one you meant. A miss prints the registry.
+
+**DECISION — the allocation verification is 357's own script, shelled out.** Two definitions of "is this allocation sound" is the thing this repo spends its discipline avoiding; the cost is a child process. A verification that could not be run is reported as unrun, never as a pass.
+
+**DECISION — a seeded database that fails an invariant exits 1.** The reseed prints `stock.qty == Σ batch.qty` (over batch-tracked products only — a bar of soap has no lots by design), the trial balance, and 357's checks. Drift is reported, never repaired: "fix the seed, not the rows."
+
+**Delete mechanics.** One `runWithTenant` transaction (timeout 600 s), context read back from `app.tenant_id` before the first statement, every `deleteMany` additionally filtered on `tenantId`. The preflight prints `user@host:port/database` and warns explicitly when the connected role is SUPERUSER/BYPASSRLS, because then the tenant filter is the only thing bounding the delete.
+
+**On the FK-order test, honestly.** The schema declares only 29 real `@relation(fields:)` edges; nearly every business reference is a soft one (a plain id column, no constraint). The order test is therefore load-bearing for those 29 and documentation elsewhere, and it is preceded by a non-vacuity assertion naming edges the parser MUST find, so a parser that reads zero relations cannot report a pass. This is stated in the spec file rather than left to be discovered.
+
+**Gates.** `pnpm lint` clean (exit 0). `pnpm typecheck` clean (exit 0). `npx jest src/reseed-staging.spec.ts src/demo-seed-gate.spec.ts` — 61 passed. `pnpm test:unit`/`build` not run by the agent per CLAUDE.md; the controller runs the full gates.
+
+**§3 acceptance — proven and unproven.** PROVEN, by three refused dry attempts executed live: `APP_ENV=production` refuses (naming production first), a production-shaped host refuses before any read, a missing `--tenant` refuses; each exits 1. UNPROVEN and deliberately so: the dry-run report, the wipe, the re-seed and the after-invariants all need a reachable database, and none is reachable from the build agent.
+
+**HOW THE OWNER RUNS IT (PuTTY, staging, env-sourcing rule).** From the deployed checkout, source the environment the app uses, then:
+
+    cd /path/to/checkout
+    set -a; . ./.env; set +a
+    APP_ENV=staging SEED_DEMO=1 RESEED_STAGING=1 pnpm reseed:staging --tenant <tenant-id-or-slug> --dry-run
+
+Read the printed connection line first — `user@host:port/database` — and stop if it is not staging's. Then read the WILL CLEAR counts and the WILL KEEP list, and the BACKUP path. When satisfied, re-run WITHOUT `--dry-run`; the same command with `--include-masters` added also clears the catalogues and directories (suppliers, customers, the item catalogue, patients, doctors) — that is the flag to add only if he says the masters must go too. Users, roles, settings, payment accounts, reason lists and counters survive either way. Confirm afterwards that the backup file exists at the printed path and that the three INVARIANTS lines all read PASS.
+
+**Parked, unchanged:** purchase reasons' trade wording; wired-printing helper; thermal logos/QR beyond the receipt bitmap; per-page menu visibility by permission; line-level discount at POS.
+
+**End of block.** Phase 41 is complete; the next spec takes 361.
+
+### Carried forward out of PROGRESS.md (360) — it was over its 1.5 KB limit
+
+These standing notes lived as bullets in PROGRESS.md and are recorded here instead, so the tracker can hold only its canonical sections:
+
+- **UNRUN:** no database reaches the build agent — 357's over-allocation check and 360's reseed both ship as scripts the owner runs himself.
+- **Standing rules:** every derived figure lists its constituents; every data column sorts and ACTIONS never does; the pulse fires only for events received in the open session; when styling a parallel component keeps failing, mount the original. Switch to the spec's own branch before any commit; numbering is continuous.
+- **Sequence next:** Recent Sales testing → Settings testing → Day-close → Accounting → Prints → Dashboard → final Pharmacy audit → whole-app consistency audit.
+- **Held for build, mockups committed:** the A4 sale invoice and the thermal receipt (includes 326's line arithmetic). **Awaiting hardware:** Goojprt PT-210, `18F0`/`2AF1`, paced writes, `FFE0` fallback, 58mm.
+- **Before production:** VAPID keys; blank `VENDOR_BOOTSTRAP_*`; fresh JWT and encryption secrets; `MFA_STAGING_RELAX=false`; `SEED_DEMO`, `RESEED_STAGING` and `SCREENSHOT_TOKEN` unset — and the reseed script's staging guard re-verified.
+
+---
+
+## 361 — allocation-walk-and-reversals — DONE (2026-08-31)
+
+**Branch:** `fix/361-allocation-walk-and-reversals` (WORK TYPE: FIX). Spec `/specs/361-allocation-walk-and-reversals.md`. No CODEREF in range. **Schema untouched; RLS unchanged; no migration.**
+
+### §1 — NAMING WHY THE WALK STOPPED, before fixing it
+
+The spec asks for the cause to be named first, out of three candidate shapes (a `break` after the own-invoice leg, an `Overdue` state excluded from "open", or a remainder-vs-grand-total misread). It is **the third**, and neither of the first two exists:
+
+* `planCreditAllocation` (packages/shared/src/credit-allocation.ts) has no `break` after §1.1 — after the own-invoice leg it falls straight into the `for (const inv of byAge)` loop and runs to the end of the book. Nothing in the planner reads a pay status, so no `Overdue` is excluded; "open" is `grossOpen > 0` and nothing else.
+* The **book handed to the planner was short**, and it was short on the SOURCE side, not the invoice side. 353 closed the one way the walk could count a rupee twice — 318 §2 / 332 §1.2 netting, where a delivery part-paid from an advance writes no draw-down row, so the invoice's own `paid` states money whose only payment ROW is an earlier supplier-level one — with a single supplier-wide subtraction in `creditAllocationBook`: `claimedPaid` (Σ `row.paid` over the book) less `attributed` (Σ of the `po:<id>` rows), deducted off the oldest supplier-level payments BEFORE the walk began.
+
+Two defects in that one fold made the difference state money nobody had spent:
+
+1. **A reversed invoice-level payment was subtracted twice.** `attributed` dropped the original (it carries `reversedAt`) *and* subtracted the reversing entry's amount again (`if (p.reversalOfId) return sum - Math.abs(p.amount)`), while `row.paid` had already been netted by `reversedPaid`. So a reversal INVENTED a claim of exactly its own size out of a book with no unbacked paid at all. This is Testing Supplier's `po:cmssu3euf…` of Rs −94,663.48, and it is the shape that fits IBL's arithmetic: with Σ `meta.paid` at zero the old fold could only produce a claim this way.
+2. **An imported book's `paid` claimed against payments made long afterwards.** 266 §3's book arrived with the figures it already had; no advance of this shop was ever spent on it.
+
+IBL's numbers reconcile exactly under this reading: room 119,307.05 = placed 37,307.05 + open 82,000; sources 92,900; ledger 26,407.05 = 119,307.05 − 92,900; and the swallowed 55,592.95 = 92,900 − 37,307.05 is precisely what a spurious claim of that size would eat off the oldest payments.
+
+**The fix (apps/api/src/pharmacy/pharmacy.service.ts, `creditAllocationBook`).** The claim is now computed PER INVOICE off the STANDING rows (`paymentsAgainstPurchases().standing`) — the same fold `row.paid` is netted by, so a reversal pair cancels exactly once and can never invent anything. An IMPORTED document makes no claim at all. What is left may only be met by payments dated AT OR BEFORE the invoice that claims it: you cannot spend an advance you do not yet hold. A claim no payment can meet is simply not deducted — the invoice's own `paid` still states it, and money that is not there is not walked onto an invoice by pretending it is.
+
+**Decision recorded (no approval sought, per AGENT.md §2):** this can leave a supplier whose imported invoices claim `paid` that no ledger row backs showing Σ open-invoice balances below the ledger by exactly that amount. That drift is IN THE DATA — an importer that records `paid` without a payment row or an opening balance — and the old behaviour hid it only by stopping the walk and manufacturing an advance that was not one, which is the defect the owner reported. Check 2 now LISTS it instead. Fixing the import data is a later step's business.
+
+**Reconciliation.** `reconcileCreditAllocations` already re-walks every supplier from scratch, reports per supplier and is idempotent (the diff is empty on a second pass); with the book fixed it now re-walks under-placed sources correctly. One real gap closed for §2 — see below.
+
+### §2 — reversals unwind their allocations
+
+`reverseSupplierPayment`, the return void/reject paths and `voidPurchase` all call `reallocateAfter`, and a reversed source leaves the book, so `diffCreditAllocations` emits the give-back as a reversing entry (never a delete) and the pair nets to zero. That path was already right. The gap was in the SWEEP: `reconcileCreditAllocations` skipped any supplier with `creditNotes === 0 && payments === 0` — which is exactly a supplier whose every source has been reversed and whose stale allocations are therefore the only thing left to correct. Testing Supplier is that supplier. The skip now also requires `changed === 0`, so a pass with a correction to make is always a line in the report and always written under `--apply`.
+
+The four "VIOLATIONS" the owner's run reported are NOT wrong rows: check 1 compared `placed` against a raw `worth` that a reversing entry, a 314 refund and a 318 §2 draw-down all carry negative, so a row that correctly placed Rs 0.00 read as over by its own size. Fixed in §3.
+
+### §3 — the instrument, completed (packages/db/scripts/verify-allocations-357.ts)
+
+* **Check 1** measures against `max(0, worth)`. A source worth nothing is not over-allocated by placing nothing.
+* **Check 2 is now the real invariant**, not 357's "advance is never negative" proxy (which passed IBL). Per supplier: Σ `documentBalance(...)` over the live book (voided and opening-stock documents excluded, 261 §1.3 / 272 §2.3) against opening + Σ charges − Σ payments − Σ credit notes, with the advance as the ledger's negative side. Both sides are folded by the SAME shared functions the read path uses — `purchaseGrandTotal`, `decodePurchaseMeta`, `documentBalance`, imported rather than restated. Drift listed per supplier. Beside it the figure that names the defect itself: allocatable money still in hand while invoice room is open — a walk that stopped, which the old proxy could not say. The one thing copied rather than called is the `^OPENING-\d{8}$` pattern (`isOpeningStockInvoiceNo` lives in the API package); it decides set membership, never an amount.
+* **Check 3, the reversal check.** Every reversed payment, every reversing entry, every voided or rejected credit note must have a net placement of exactly zero; anything else is listed with the remedy (run the reconciliation with apply). Credit-note sources also now carry 346 §2/§3's posted predicate, so a pending or rejected return is no longer treated as an allocatable source.
+* Exit code 1 on ANY listing (violations, orphans, drifts, unwound), and the empty-read gate is unchanged in effect.
+
+### §4 — the blind-read scripts
+
+New module **packages/db/scripts/tenant-read.ts** carries the 357 treatment once: `.env` loaded by the script (neither `tsx` nor `@prisma/client` reads it), the connection printed redacted, the role's SUPERUSER/BYPASSRLS status printed, `--tenant <id|slug|name>` with ambiguity refused, one `runWithTenant` pass per tenant whose FIRST statement reads `app.tenant_id` back and refuses to continue unless it matches, and `refuseEmptyRead`. `verify-allocations-357.ts` was refactored onto it (its local copies deleted), and all three flagged scripts now use it:
+
+* **reconcile-return-postings.ts** — read-only. Bare client + FORCE-RLS tables meant it printed *"No purchase returns on record — nothing to reconcile"* and exited 0. Now per-tenant, and zero suppliers or zero returns (per named tenant, or across the whole registry) is a FAILURE.
+* **grant-return-approval-341.ts** — WRITES. `app_roles`' policy shows only GLOBAL rows with no context, and `pharmacy_settings` returned nothing, which reads as "no tenant ever required approval" and sends every tenant down the writing branch; `--apply` would then have been refused row by row by the same policy's WITH CHECK. Now planned AND written inside each tenant's proven context (which is what makes the adopted copy writable at all), with a loud warning when no settings row was read anywhere.
+* **count-non-pk-phones.ts** — read-only. Would have printed `TOTAL failing the new rule: 0` from a blind read. Now per-tenant, rows DEDUPED BY ID across passes (so a table that is not tenant-bound is not counted once per tenant), and a read that saw no rows at all is refused.
+
+### OWNER RUN INSTRUCTIONS (staging only; all four from the deployed checkout so `./.env` is found)
+
+```
+cd packages/db
+npx tsx scripts/verify-allocations-357.ts --tenant cmr6degk10000fkhmvoyk5ba1 --supplier "IBL HealthCare"
+npx tsx scripts/reconcile-return-postings.ts --tenant cmr6degk10000fkhmvoyk5ba1
+npx tsx scripts/grant-return-approval-341.ts --tenant cmr6degk10000fkhmvoyk5ba1            # dry run first
+npx tsx scripts/grant-return-approval-341.ts --tenant cmr6degk10000fkhmvoyk5ba1 --apply
+npx tsx scripts/count-non-pk-phones.ts --tenant cmr6degk10000fkhmvoyk5ba1
+```
+
+Then, in the app, run the credit reconciliation sweep (`POST` the purchases credit-reconcile endpoint with `apply: true`) so the corrected walk is written and the stale allocations on reversed sources are unwound by entries; re-run `verify-allocations-357.ts` and paste its output into 362. **Reseed (360) stays unrun until that verifier passes.**
+
+### Files
+
+* `apps/api/src/pharmacy/pharmacy.service.ts` — `creditAllocationBook` (per-invoice claim, imported exclusion, time-ordered draw-down), `reconcileCreditAllocations` (skip no longer hides an unwinding-only supplier).
+* `apps/api/src/pharmacy/allocation-walk-and-reversals-361.spec.ts` — new; 8 tests over §1 and §2.
+* `apps/api/src/pharmacy/payment-allocation-353.spec.ts` — one fixture dated coherently: the advance the 318 §2 test spends is now recorded BEFORE the delivery that spends it. No assertion changed.
+* `packages/db/scripts/verify-allocations-357.ts`, `tenant-read.ts` (new), `reconcile-return-postings.ts`, `grant-return-approval-341.ts`, `count-non-pk-phones.ts`.
+
+### Gates
+
+`pnpm lint` and `pnpm typecheck` run once at the end: clean (the single pre-existing warning in `doctor-portal.repositories.ts` is untouched and not mine). `pnpm test:unit` / `build` deliberately not run here — the controller runs them. Vendor untouched; no secret added; production never touched.
+
+**Note on PROGRESS.md:** trimmed back to the canonical three Recent-steps entries (the forward-looking AUTHORED lines for 362–367 were removed; the Group-order line already carries the sequence) and the now-retired 361 evidence bullet dropped. The file is 2.18 KB; the remainder above the 1.5 KB target is standing operator policy placed by the controller, not step detail, so it was left alone.
