@@ -7,11 +7,11 @@
 ## Current Status
 - **Project:** Marham Patti — multi-tenant white-label healthcare platform.
 - **Phase:** **PHASE 41** — allocation proof, the final drawfacts, and the reseed.
-- **Last completed:** **357 — allocation-itemized-and-verified**.
-- **Next:** specs/358-drawfacts-final-and-formats.md
-- **Group order:** 358 → 359 → 360. One step, then stop at the checkpoint.
+- **Last completed:** **358 — drawfacts-final-and-formats**.
+- **Next:** specs/359-pulse-sort-and-print-parity.md
+- **Group order:** 359 → 360. One step, then stop at the checkpoint.
 - **357's CHECK IS A SCRIPT, UNRUN:** no database is reachable from the build agent, so the over-allocation check ships read-only and exits non-zero; run it before trusting the figures.
-- **358 §1 is the FIFTH report, resolved by MOUNTING:** delete .drawfacts; the return drawer mounts the Purchase drawer's facts component. No more styling.
+- **RULE:** when styling a parallel block keeps failing, mount the original.
 - **360 is DESTRUCTIVE AND GATED:** the reseed script merges UNRUN; the owner runs it after reading the report; production structurally unreachable; masters kept.
 - **RULE:** every derived figure lists its constituents — the calculator test extends to history.
 - **RULE:** the pulse fires only for events received in the open session.
@@ -26,7 +26,6 @@
 ### Recent steps
 - **360 — staging-reseed** — AUTHORED — gated wipe+seed, masters kept, invariants printed.
 - **359 — pulse-sort-and-print-parity** — AUTHORED — session-only pulse, sort-everywhere rule, draft conditions, CN spacing to invoice.
-- **358 — drawfacts-final-and-formats** — AUTHORED — mount the purchase facts component; phone format app-wide; owner one-liners.
-- **357 — allocation-itemized-and-verified** — DONE (2026-08-30) — each applied payment on its own line, dated and clickable to the ledger.
+- **358 — drawfacts-final-and-formats** — DONE (2026-08-31) — the return drawer mounts the purchase facts block; one phone format everywhere.
 
 > Older steps in PROGRESS-HISTORY.md

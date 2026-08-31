@@ -23776,3 +23776,134 @@ NOT DONE, flagged: the three sibling maintenance scripts (`count-non-pk-phones.t
 `reconcile-return-postings.ts`, `grant-return-approval-341.ts`) each open a bare `PrismaClient` with no
 tenant context and no `.env` load — the exact bug corrected here. Their zero-row reports are not to be
 trusted until they get the same treatment. Out of scope for this correction.
+
+---
+
+## 358 — drawfacts-final-and-formats — DONE (2026-08-31)
+
+**WORK TYPE:** FIX · branch `fix/358-drawfacts-final-and-formats` (cut from the 357 head).
+**Schema:** none. **RLS:** unchanged. **Migrations:** none.
+
+### §1 — the facts block, resolved by MOUNTING (the fifth report)
+
+**The decision, stated first:** four specs styled a PARALLEL block and the owner kept sending
+screenshots. 341 built `.drawfacts` "on the View Purchase pattern" — meaning a second
+implementation built to RESEMBLE the Purchase drawer's `.factrow`, not to be it. 345 re-ordered
+it, 351 re-ordered it again and stripped the header duplicates off it, and 354 found a genuinely
+real cause (`repeat(auto-fit,minmax(132px,1fr))` laying four facts in one row inside a 700px
+drawer), fixed the grid, and wrote down that three specs had re-asked for a block that already
+existed. The fifth screenshot arrived against the corrected grid.
+
+The lesson recorded, and it is the deliverable: **the right grid on the wrong block is still the
+wrong block.** Two implementations of one thing disagree again — at the next width, on the next
+surface, for the next reason. So the resolution stopped being CSS.
+
+- NEW `apps/web/components/pharmacy/DocumentFacts.tsx` — the Purchase View drawer's own facts
+  grid, extracted. `variant: 'drawer' | 'sheet'` renders `.factrow` / `.mfacts`, the two
+  vocabularies that block has always worn; a third class name would have been a third
+  implementation. A string `value` takes the block's `<b>` (and supplies its own `title`, since
+  every cell ellipses); a node is mounted as given, which is how the supplier `.who` lockup and
+  the loading shimmers ride in without the component knowing about them.
+- FOUR MOUNTS, ONE COMPONENT: the Purchase drawer and its phone sheet (the reference surfaces —
+  they were changed too, deliberately, so nothing is "the copy"), and the Returns drawer and its
+  sheet.
+- `returnFacts()` in `ReturnsClient.tsx` builds the return's array ONCE for both surfaces, in the
+  reference's order translated: `SUPPLIER · DATE · METHOD · RECORDED BY` → `Items returned ·
+  Return date · Refund method (or the credit note) · Processed by`. Two surfaces building two
+  arrays is the parallel-implementation problem one size smaller.
+- DELETED: `.drawfacts` / `.drawfact` markup, the local `Fact` component, and every declaration —
+  the 341 box, 354's `repeat(2,1fr)` correction, 351's `margin-top:0` cancellation, and the
+  `flex:none` and `.is-voided` list entries (those two moved to `.factrow`). The class name is
+  gone from the repo's source and CSS entirely, comments included: a name nothing renders is a
+  name a later spec can be talked into styling again.
+- `.mp-pur2 .factrow` became `.mp-pur2 .factrow, .mp-ret .factrow` — every declaration in the
+  family, so there is no half-shared block. That selector edit IS the fix; nothing was
+  re-declared under a second scope.
+- 354 §3's mobile removals carry over by construction: the sheet states four facts, so there is
+  no supplier row to remove and no header date/user line to repeat.
+
+### §2 — one phone formatter, everywhere
+
+`formatPkPhone()` added to `packages/shared/src/phone-pk.ts`, beside the 274 §2 parser it reuses.
+Mobiles `0321-1288552`, landlines `021-35678901`, `+92`/`0092`/bare-`92` all rendering with the
+leading `0` a shopkeeper dials. **An unparseable value returns trimmed and AS ENTERED** — a
+legacy row holding a foreign number or "ext. 214, ask for Rafeeq" is still the only contact the
+shop has, and a formatter that blanked it would lose the number to make a dash line up. `null` /
+empty returns `''`, because what an absent phone looks like is the caller's layout decision.
+
+The split point is now `pkPhoneParts()`, shared with `pkPhoneVariants()` so a stored spelling and
+a rendered one cannot disagree about where the dash goes. It gained a real correction: the old
+length-based rule (`nsn.length - 8 + 1`) assumed an eight-digit subscriber number and turned
+Islamabad's `051 1234567` into `05-11234567`. Pakistan's subscriber part is seven digits in some
+cities and eight in others, so the length cannot tell you where the area code ends — a closed
+table of the two-digit area codes can, and everything not in it takes a three-digit one
+(`0244-1234567`). Verified against both of the spec's example inputs and the landline forms.
+
+**THE AUDIT, recorded.** Every rendering below now goes through the one function; `tel:` hrefs
+keep the stored canonical value, because a dial target is not a display.
+Customers (desk cell, both phone cards, record-sheet subtitle, search haystack) · Suppliers (desk
+cell, phone card, both `tel:` labels, search haystack) · POS (picked-customer line ×2, the
+over-limit standing row, the picker, both duplicate-customer dialogues) · Purchases (the store's
+own number on the printed document, the supplier picker ×2) · Customer statement (subtitle and
+the identity block) · Merge customers (the candidate rows and the comparison table) · Patients
+(list and record) · Directory (match card) · Purchase ledger · Users (both identity lines) ·
+Doctor queue · Lab / Vitals / Consultation print sheets · Platform and patient profiles.
+The search haystacks take BOTH forms, so a search for what is on screen finds the row.
+
+### §3 — the owner's inspected items
+
+1. **Applied credit / applied payment lines left-align** (owner reversal). 354 §3 and 357 §2
+   right-aligned them when they were TAILS of the balance figure; 357 §1 then put each applied
+   payment on its own dated, linked row, and a stack of rows is a LIST — a list reads down its
+   leading edge. `width:max-content` was deleted with the alignment it served (a start-aligned
+   line does not wrap against its neighbour). **The balance FIGURE does not move** —
+   `.msum__row--bal b` stays end-aligned; the reversal is about the lines underneath it.
+2. **`.mp-mobile .sheet--full .selsheet__list` negative side margins removed.** The `-4px`
+   widened the scrolling list past the frame to buy back the rows' inset — but the list is the
+   scroll container, `overflow-y:auto` clips on both axes, and every row corner and focus ring
+   was being cut against an edge the margin had put 4px inside the row.
+3. **New Purchase mobile: the gap after `Balance`, measured.** 11px of bar padding + 14px of
+   float above a 64px action bar = 25px, against the 9px separating `Balance` from the figures
+   above it — so the bar read as two bars. Now 9px + 8px = 17px, with `.pentry--pay`'s scroll
+   reservation following down 8px so it does not reserve for a bar that is no longer that tall.
+4. **`RETURNS_PAGE_SIZES` gains 500**, for parity with Purchases.
+5. **Customer pills:** `All customers` → `All`, `Owing` → `Baqaya` (en and ur; 316's rule
+   reaching the pills). Both keys feed the pills and nothing else, verified.
+6. **Customer table headings / ACTIONS — and the audit's question answered honestly.** Traced
+   through the cascade, Customers RESOLVES both rules today, and the honest finding is that it
+   does so by accident of its class list: `.mp-pur2` is on that screen's root only because the
+   desk borrowed the Purchases drawer's components, and it is `.mp-pur2 .rowacts` that gives the
+   cluster a flex box for 356's centring to act on. So `.rowacts` gains a KIT-scope declaration
+   (identical to `.mp-pur2`'s — nothing moves where both applied) and the capitalisation is
+   stated positively rather than left to inherit through a `<button>` the kit's reset may not
+   reach, since Customers renders its own `SortHead`.
+   **A REAL DEFECT FELL OUT OF THAT TRACE:** 356's `.tbl-actions .rowactions { justify-content:
+   center }` has never taken. `.mp-inv2 .rowactions` is `inline-flex` — a shrink-to-fit box with
+   no free space for `justify-content` to distribute — so the box's position stayed the cell's
+   `text-align:right`. Returns, Inventory and Recent Sales have drawn a centred heading over
+   end-aligned icons since 356 shipped. The rule now carries `display:flex` so the cluster fills
+   the cell before it is asked to centre inside it.
+
+### Tests
+
+NEW `packages/ui/src/lib/drawfacts-final-and-formats-358.spec.ts` — the mounting (both surfaces,
+the shared builder, the fact ORDER, the one shared declaration list, the parallel class gone from
+every file), the formatter as behaviour (both spec examples, every written form, landlines, the
+as-entered fallback, and that display and lookup share one split), and each §3 item as the
+declaration that produces it.
+
+UPDATED, each with the reason written in place rather than the assertion quietly swapped:
+`return-drawer-round-3-351` (order and facts read from the mount and the builder),
+`returns-page-close-345` (the drawer read as the sequence document→facts twice),
+`dialogs-and-drawer-facts-354` (§2's diagnosis kept, its fix superseded; §3's sizing reversed),
+`allocation-itemized-357` (the generic `.sub` selector is still the point),
+`alignment-and-print-sweep-356` (356's half kept, its miss named),
+`inventory-mobile-to-mockup` (the POS meta segment is still non-breaking, now formatted).
+
+### Gates
+
+`pnpm lint` — clean (including the four design-drift checks). `pnpm typecheck` — clean, 31 tasks.
+`pnpm test:unit` NOT run here (controller gate). Vendor untouched. No schema, no migration, no
+new i18n keys — two existing customer-pill values changed in both languages.
+
+**Deployment note:** none. Web + shared only.
