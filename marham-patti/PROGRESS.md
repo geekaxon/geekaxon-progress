@@ -10,7 +10,7 @@
 - **Last completed:** **373 — customers-close**.
 - **Next:** none — awaiting next spec block `[HUMAN_REQUIRED]`
 - **Group order:** block complete. Production is LIVE.
-- **OWNER ACTION:** reconcile with apply=true on staging, then the instrument; the reseed waits on it reading clean.
+- **OWNER ACTION:** re-run the reseed with the pre-wipe dump and `--retry`; masters stay, seeded payments are placed.
 - **RULES:** branch before any commit; numbering is continuous — the next spec takes 374.
 - **Sequence:** reseed → Settings → Day-close → Accounting → Prints → Dashboard → audits.
 - **Before production:** blank the vendor bootstrap vars after first login + restart. Held: A4 invoice, thermal receipt.

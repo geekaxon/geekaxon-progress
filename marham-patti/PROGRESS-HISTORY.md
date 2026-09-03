@@ -25543,3 +25543,69 @@ so the script itself was typechecked separately with `tsc --noEmit --strict` —
       --tenant <id|slug> --backup-done /root/reseed-<stamp>.dump
 
 within the hour that dump was taken.
+
+## FIX — reseed 360: the seed is master-aware, its payments are placed, and a failed seed is re-runnable (2026-09-03)
+
+**Branch:** `fix/reseed-master-aware-and-walk` → staging.
+**Reported from staging.** The 360 reseed deleted cleanly (masters kept — 171 medicines, 452 ProductUnits
+survived by design) and then the seed died: `P2002` at `prisma/seed-demo.ts:465`, `tx.productUnit.upsert`.
+357's verifier, run over seeded data, separately reported *"the walk stopped short"*.
+
+### 1. The cause, and why it was invisible
+The wipe keeps the catalogue and the re-seed writes over it, so every master write has to be able to find
+the row that SURVIVED. Parts of the seeder still addressed a master by the deterministic id it would have
+minted on an empty database (`d_unit_<medicine>-<level>`, `d_med_<key>`), while the kept row holds the same
+NATURAL key under a cuid — from the 192 §4 catalogue pass, from an import, or from a human at the product
+screen. An id-keyed upsert cannot see that row, takes the CREATE path, and lands on
+`product_units_medicine_id_level_key` (or, one field along, on `product_units_tenant_id_barcode_key`).
+
+It was invisible because **nothing typechecked the seeder**. `packages/db/tsconfig.json` includes `src` and
+only `src` — its `rootDir` is inferred from that and `dist/index.js` is what `main` points at — so
+`prisma/seed-demo.ts` and everything in `scripts/` (the demo seed, the reseed, the 357 verifier) were checked
+by no gate at all. `scripts/verify-allocations-357.ts` had been importing `@mp/shared` across a dependency
+`@mp/db` does not declare, and nothing could say so.
+
+### 2. What was built
+* **`src/demo/adopt.ts` (new, pure)** — `planUnitWrite` and `pickKeptMedicine`: which row a unit/medicine IS
+  and what it may carry. A unit is its `(medicineId, level)` slot; a medicine is its barcode, failing that its
+  brand with strength and form. Adoption never re-stamps a barcode — the shop owns what a scanner resolves to.
+* **`prisma/seed-demo.ts`** — one master-aware `writeProductUnit` now serves all three unit passes (188 §1.3
+  hand-built, 192 §4 catalogue, 245 §2 purchase book); `writeMedicine` + `persistMedicines` adopt the kept
+  catalogue and publish a `medicineId` remap that every later plan table follows (it is a hard FK in a dozen
+  tables). `upsertStock` moved onto its real `(tenantId, branchId, medicineId)` unique for the same reason.
+  Without the medicine half, a reseed that keeps 171 medicines would have inserted 171 more beside them.
+* **The walk, in the seed.** `@mp/shared` is now a declared dependency of `@mp/db`, and
+  `buildPurchaseBook` runs the IMPORTED `planCreditAllocation` — the same planner the API's `reallocateAfter`
+  runs — over the book it just built, emitting `CreditAllocation` rows for every supplier-level payment
+  (`d_sp_1`/`CHQ-00451` on Muller, `open:zafa`). Invoice-level `po:<id>` payments are excluded: they already
+  name the document they settle. Ageing (`overdue`, `dueThisWeek`) is now counted AFTER the walk, so the
+  fact and the desk draw the same figure. Balances are byte-identical — allocation is attribution, not money.
+  `creditAllocation` joins `DEMO_TENANT_TABLE_ORDER` after `supplierPayment`.
+* **`--retry` on the reseed.** The delete was always re-runnable (§1.4's list is FK-safe and covers every
+  table the seed writes); the promise in front of it was not. `--backup-done` insists the dump is under 60
+  minutes old, and after a failed seed the only file that is still a rollback — the pre-wipe dump — is hours
+  old, while a fresh dump of the half-wiped database would pass and restore the damage. `--retry` waives the
+  AGE and nothing else, is refused without `--backup-done`, and the seed failure path now prints the exact
+  retry command instead of a bare stack trace over a just-emptied tenant.
+* **`tsconfig.tools.json` (new)** — `src` + `prisma` + `scripts`, `--noEmit`, run by `pnpm typecheck` beside
+  the build config. No effect on emit or on where `main` resolves. This is the gate that was missing.
+
+### 3. Decisions worth keeping
+* **The walk lives in the seed, not in a post-seed script.** The seed authored the data, so it needs no
+  reconstruction heuristics to know which payments are supplier-level; and it runs the shared planner rather
+  than a seeder's idea of the same rule, which is the property that mattered.
+* **An adopted row keeps its barcode and its id.** The reseed exists to replace trading history, not to
+  re-stamp a catalogue the owner asked to keep.
+
+### 4. Gates
+`pnpm lint` clean. `pnpm typecheck` clean, and now covers `prisma/` and `scripts/` for the first time.
+`packages/db` jest suite green — 99 tests across the three touched specs, including
+`src/demo/adopt.spec.ts` (every collision shape the reseed hit) and a new `360 §1.4` block in
+`src/demo/purchase-book.spec.ts` that asks the plan 357's own question: no supplier may hold allocatable
+money while its invoices still have room.
+
+### 5. Owner action
+Re-run the reseed naming the dump taken BEFORE the failed attempt:
+`... --tenant <id> --backup-done /root/reseed-<ts>.dump --retry`. Masters stay kept; a second pass clears the
+half-seeded rows with the rest. Note `pnpm install` on staging is needed once, for the new `@mp/shared`
+dependency of `@mp/db`.
