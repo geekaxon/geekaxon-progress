@@ -6,13 +6,18 @@
 
 ## Current Status
 - **Project:** Marham Patti — multi-tenant white-label healthcare platform.
-- **Phase:** **PHASE 42** — money proof, Customers parity, Recent Sales.
-- **Last completed:** **366 — recent-sales-to-mockup** (the sales register reads as a document, assembled from parts the build already owned).
-- **Next:** **367 — recent-sales-close** — specs/367-recent-sales-close.md
+- **Phase:** **PHASE 43** — the walk, the runbook, returns and customers close.
+- **Last completed:** **368 — allocation-walk-source**.
+- **Next:** **369 — release-runbook** — specs/369-release-runbook.md
+- **Group order:** 369 → 370 → 371 → 372 → 373. One step, then stop. Production is LIVE on `release`.
+- **OWNER ACTION before the reseed:** run the reconciliation with apply=true on staging, then the instrument; RESEED (360) stays unrun until it reads clean.
+- **RULES:** branch first, before any commit; numbering is continuous.
+- **Sequence after this:** reseed → Settings testing → Day-close → Accounting → Prints → Dashboard → audits.
+- **Before production:** blank VENDOR_BOOTSTRAP_* after first vendor login + restart. Held for build: A4 invoice, thermal receipt + statement; hardware pending.
 
 ### Recent steps
-- **366 — recent-sales-to-mockup** — DONE (2026-08-31) — a sale is a document now, so the badge, the chips and the void flow all mounted.
-- **365 — dialog-rule-and-statement** — DONE (2026-08-31) — every dialog and drawer took one width, and the statement became a printable sheet.
-- **364 — customer-rules** — DONE (2026-08-31) — udhaar became a switch and a limit, and deactivating is one flow again.
+- **368 — allocation-walk-source** — DONE (2026-09-03) — a new delivery now runs the walk; an opening balance is not drift.
+- **367 — recent-sales-close** — DONE (2026-09-02) — the standing rules, walked over the sales register.
+- **366 — sales-register** — DONE (2026-09-02) — the sales register is a document, assembled from parts.
 
-> Older steps and the standing notes in PROGRESS-HISTORY.md
+> Older steps in PROGRESS-HISTORY.md

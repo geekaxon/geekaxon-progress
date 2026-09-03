@@ -24751,3 +24751,319 @@ this screen alone and nothing mounts them; removing them is a safe follow-up, an
 risked the styling of the parts that are still mounted (`.liveind`, `.custcell`, `.newflag`, `.msalelist`).
 
 WORK TYPE: FIX (branch fix/366-recent-sales-to-mockup)
+
+---
+
+## 367 — recent-sales-close — DONE (2026-08-31)
+
+**WORK TYPE:** FIX · **Branch:** `fix/367-recent-sales-close` · **Spec:** `specs/367-recent-sales-close.md`
+**Schema:** none. **RLS:** unchanged. **Migrations:** none. **Flags:** unchanged (`pharmacy.pos`).
+**Permissions:** no new keys. **Gates run by the agent:** `pnpm lint` (0 errors) and `pnpm typecheck` (31/31)
+— plus the new and adjacent suites run file-by-file (see "Suites" below); the controller runs the full gates.
+
+### The pass, surface by surface
+
+§1 asked for the standing rules to be walked over a screen 237 built before most of them existed. Nine
+rules, four surfaces (list, cards, drawer/sheet, print) plus void and the return shortcut. **Six gaps were
+real, and every one had the same shape: the screen mounted the right component against a rule it could not
+actually satisfy.** The rest are recorded below as verified rather than assumed.
+
+**1. REALTIME (343 §2) — FIXED. The register only ever heard a sale being RUNG.**
+`useSaleLive` filtered the stream to `sale.completed` and dropped everything else, so a VOID, a RETURN taken
+against a sale at the returns desk, and a customer PAYMENT reaching their tab all moved the row's Paid, its
+Balance, its settlement pill and three of the four KPI tiles — silently, on every screen except the one that
+pressed the button. That is the exact deafness 343 §1 found on five other surfaces.
+*The fix:* a SECOND envelope on the SAME spec-112 scope — `sale.changed { saleId, reason, at }` — carrying
+**no figure** on purpose (what a payment settles is a WALK over the customer's open invoices, 366 §1; a number
+on the wire would be that walk re-run by the receiver, a second arithmetic for money to drift down). The bus's
+sale scope widens to `SaleLiveEvent`; `RecentSalesRealtimeStream` maps `event.type` instead of stamping every
+frame `sale.completed` (that hard-coded label is what would have made a void arrive dressed as a new sale).
+Raised from `voidSale`, from `publishReturnRecorded` (the ONE helper every sale-return path already calls — so
+approve/reject/void carry it with no fifth call site to forget), and from `recordCustomerPayment`.
+`useSaleLive` gains a coalesced `onChange` (one re-read per burst — a void raises three frames across three
+scopes in the same millisecond) and no longer names the envelopes it will accept: `sale.completed` is PAINTED
+(it carries the row; the counter sees a colleague's sale without a round trip), everything else re-reads.
+A drawer standing open on the sale that moved is re-read with the list.
+
+**2. THE 306 KEYBOARD PRESET — FIXED. It was never mounted.**
+The screen has carried `data-list-search` — the marker `F2` and `↓` look for — since 366, with nothing
+registering handlers. Every key the shortcut overlay advertised for this page did nothing: F2 did not reach the
+search, ↓ did not walk the rows, Alt+N did not start a sale, Esc did not clear. One `useListKeyboard` call now,
+desktop-only, the same one Inventory/Purchases/Suppliers/Customers make. `onCreate` → POS. **No second action:**
+`ListSecondAction` names the three this build has; a sale's second act is a RETURN — a different document on a
+different screen — and inventing a fourth key to reach it is exactly the private shortcut §2.2 forbids. Enter
+stays wired by `rowOpenProps` (305 §1.5), not a second time here.
+
+**3. NAMES — `Full Name (Role)` — FIXED on the row, and on the paper.**
+The drawer's `Sold by` fact rendered `<PersonName role={null}>` and the card footer `personCredit({role:null})`
+— the right component, against a row that never carried the second half. `findStaffNames` has read the role
+since 311; only the fold dropped it. `RecentSaleRowView` now states `cashierRole` and `voidedByRole`, already
+turned into words, and both surfaces plus the two void sentences read them.
+**And the printed slip stopped carrying a cuid.** `buildReceipt` has passed `c.sale.cashierId` into the
+receipt's `cashier` field since 102, so every sale slip and every reprint has printed `Cashier  u_ayesha…`
+into a customer's hand. 270 §2 forbade an internal id reaching a user and 307/311 chased the same defect
+across three screens — the paper was never one of them, **because the only thing that could turn an actor into
+words lived in a `'use client'` module.** So `roleWords` and the one-string `personCredit` MOVED into
+`@mp/shared/actor-names.ts` (as `roleWords` / `creditPerson`), beside the `formatPersonIdentity` they feed;
+`PersonName.tsx` re-exports them under their original names, so every call site and 311's own suite are
+unchanged. The rule moved, not the vocabulary — a second copy would have been the thing 311 was written to stop.
+
+**4. COLOUR (328) — FIXED, and proven through the cascade rather than by substring.**
+`.bal--settled/--owed/--overdue` were applied in the table cell and dropped in BOTH card tiers, though the
+sheet has inked `.icard__bal b.bal--*` and `.pcard__bal b.bal--*` all along. An OVERDUE sale therefore read
+exactly like a settled one the moment a user switched to card view, or picked up a phone — the same row, two
+colours, which is what 328 §1 says a colour rule may not do. One `balanceTone(row)` reader now, three call
+sites, and every claim in the suite is made through 283's `winningDeclaration` (a rule that is in the sheet
+and LOSING is precisely the assertion that passed for 319/320 while the screen was wrong). A voided sale gets
+no tone, because it has no balance: the cells print `—`, never `Rs 0`, which would read as settled.
+
+**5. SKELETONS (303 §4) — FIXED in the drawer's money.**
+Only the items table shimmered. While the detail fetch was in flight the drawer rendered `Subtotal Rs 0.00`,
+a grand total off the row, `Payment · 0 legs`, and the honest-but-false footnote *"this sale predates the
+stored tender split"* — about a sale that might have four legs. A fabricated figure, in the one place on this
+screen a reader goes to check money, against 212's rule that a figure nobody has is never a number. The totals
+block and the payment board now shimmer, and the heading loses its count until the count exists
+(`prsSectionPayment`, already in both catalogues).
+
+**6. PRINT (347 §1) — FIXED. The client stopped asserting a paper size.**
+Recent Sales posted `/reprint?width=80`. The tenant states the roll once in Settings (`StoreProfile.
+receiptWidth`, 220 §3) and the POS honours it because it reprints the receipt it is holding; Recent Sales holds
+none and was guessing — so a 58mm shop's reprint came back laid out for paper it does not own, and the
+"one renderer" claim was true of the code and false of the paper. An unstated width now means "the roll this
+shop runs", resolved server-side off the SAME resolved brand the letterhead comes from, on both the Recent
+Sales reprint and the print-only receipt. A caller that DOES state one still wins. Mobile and desktop press the
+same function, which takes no surface argument — there is no path by which a phone could ask for a different
+document.
+
+**Phones (358 §2) — FIXED.** The customer cell printed the STORED string beside a customer book that formats
+the same number through `formatPkPhone`. Now formatted, and searchable however it is typed: the stored form,
+the formatted reading, or bare digits via `normalizePkPhone` (guarded on non-empty digits — `''.includes('')`
+is true, which would have matched every row the moment a user typed a letter).
+
+### Verified, not changed
+
+- **row-open (305 §1)** — one shared implementation, three mounts, controls excluded by the module walking up
+  from the target (no `stopPropagation` anywhere), accessible name spells the invoice, never an id.
+- **personalization (316)** — view, sort, hidden columns, page size and month window, all on the ONE
+  `mp.datalist.*` key `pharmacy.recentSales`.
+- **permissions (313 §3)** — proven server-side by calling the endpoint, not by observing a missing button.
+  `pharmacy.sale.void` is its own `@RequirePermission` and the record refuses a second void by name and refuses
+  outright once any return stands. `sales.history.view` decides the range and a windowed caller asking for last
+  month is REFUSED with the rule named, never quietly trimmed. `pharmacy.print.only` is its own controller, and
+  its picker reads through the SAME `recentSaleRows` assembly — asserted byte-identical to the register's row,
+  so a name cannot differ between the two screens.
+- **alignment/headings (352/356)** — the mockup's own eight headings; Date/Items/Total/Paid/Balance numeric,
+  Invoice/Customer/Payment textual, ACTIONS centred and unsortable.
+- **rule 7** — nothing renders an id on any tier.
+- **§2 sweep** — all 120 quoted keys this screen names exist in EN and UR; `Credit` appears in none of them
+  outside the tender-method labels (a sale's credit leg is a tender). The deployed-page half of §2 could not be
+  walked from here — no staging access in this session — so the sweep was made against the catalogues and the
+  live source instead, and that limit is recorded rather than papered over.
+
+### Judgement calls (recorded, not escalated)
+
+- **A second envelope, not a second stream.** `useDeskLive` already coalesces a whole scope and would have been
+  the cheaper mount — but the desk stream is gated on the purchase keys and Recent Sales on `sales.recent.view`.
+  Subscribing would have handed one grant's traffic to the other, which is the exact boundary 237 §2 draws.
+  So the sale scope grew an envelope instead.
+- **`sale.changed` carries no figure**, and `saleId` is null for a payment. A customer's payments name no
+  invoice (107); which sales one settles is derived. A frame that asserted it would be the allocation walk
+  re-run on the wire.
+- **`roleWords` moved rather than being duplicated server-side.** A copy in the API would have been a second
+  implementation of "how a person is credited" — 311's finding, one rung down.
+- **The reprint width is resolved, not defaulted.** Falling back to 80 on an unreadable brand is the store
+  profile's own default, so a brand read failure degrades to today's behaviour rather than to no paper.
+
+### Files
+
+`packages/shared/src/actor-names.ts` (roleWords + creditPerson) · `packages/shared/src/pharmacy-recent-sales.ts`
+(`SALE_CHANGED`, `SaleChangedEvent`, `saleChangedEvent`, `SaleLiveEvent`, `isSaleLiveEvent`) ·
+`apps/api/src/notifications/notifications.realtime.bus.ts` · `apps/api/src/pharmacy/pharmacy.sale-events.ts` ·
+`apps/api/src/pharmacy/pharmacy.service.ts` (publishSaleChanged, cashier/void roles, receipt cashier,
+tenantReceiptWidth) · `apps/api/src/pharmacy/pharmacy.controller.ts` (both reprint routes) ·
+`apps/web/lib/stock-live.ts` (`onChange`) · `apps/web/components/pharmacy/PersonName.tsx` (re-export) ·
+`apps/web/app/(app)/pharmacy/recent-sales/RecentSalesClient.tsx`.
+**Tests:** `apps/api/src/pharmacy/recent-sales-close-367.spec.ts` (21) ·
+`packages/ui/src/lib/recent-sales-close-367.spec.tsx` (36). Two prior-step assertions were superseded and
+updated in place with the reason stated: `recent-sales-screen.spec.tsx` (the client no longer states a roll)
+and `names-and-identity-311.spec.tsx` (`personCredit` is now the shared re-export).
+**Suites run file-by-file, all green:** 367 ×2, 366, 359, 356, 345, 343, 341, 339, 335, 334, 328, 322, 321,
+313, 312, 311, 310, 305 ×2, 299, 291, 286, 284, 282, 270, dayclose, recent-sales, notifications.realtime,
+platform-notifications, pos-credit-attribution ×2, approval-rejection-void-346, both e2e suites, round-4,
+i18n parity — 200 + 328 + 120 + 60 + 64 + 172 + 35 assertions across them.
+
+### i18n
+
+No new keys. `prsSectionPayment` (the count-less payment heading the loading board needed) already existed in
+EN and UR.
+
+
+## 368 — allocation-walk-source (FIX, branch `fix/368-allocation-walk-source`) — §1 THE READ, recorded before any change
+
+Third attempt on the walk that still stops short. 330's treatment: read the source before touching it.
+
+### §1.1 — The file and the function that allocates
+
+Four things, in one chain:
+
+- `packages/shared/src/credit-allocation.ts` → `planCreditAllocation()` — the PURE walk. The loop, verbatim:
+
+      for (const credit of [...input.credits].sort(order)) {
+        let left = Math.max(0, money(credit.amount));
+        if (left <= CREDIT_ALLOCATION_EPSILON) continue;
+        if (credit.ownInvoiceId !== null && room.has(credit.ownInvoiceId)) {
+          left = money(left - place(credit.id, credit.ownInvoiceId, left));
+        }
+        for (const inv of byAge) {                                   // §1.2
+          if (left <= CREDIT_ALLOCATION_EPSILON) break;
+          if (inv.id === credit.ownInvoiceId) continue;
+          left = money(left - place(credit.id, inv.id, left));
+        }
+        if (left > CREDIT_ALLOCATION_EPSILON) remainders.push({ creditNoteId: credit.id, amount: left });
+      }
+
+  The only `break` is "the source is exhausted". There is no filter, no page and no early exit on
+  the invoice side: this loop cannot stop short. 344 and 361 both said so and both were right.
+
+- `apps/api/src/pharmacy/pharmacy.service.ts` → `creditAllocationBook()` — builds the `{invoices, credits}`
+  the walk is planned over.
+- `apps/api/src/pharmacy/pharmacy.service.ts` → `allocateSupplierCredit()` — reads the supplier's book
+  entire, plans, diffs against the stored rows, writes the difference. The single entry point.
+- `apps/api/src/pharmacy/pharmacy.service.ts` → `reallocateAfter()` — the fire-and-forget wrapper every
+  WRITE path calls; and `reconcileCreditAllocations()` — the sweep, which calls the same
+  `allocateSupplierCredit`.
+
+So live posting and the reconciliation already share ONE function. They do not diverge in the code
+they run. They diverge in WHEN they run — which is the whole of §1.2.
+
+### §1.2 — IBL HealthCare, traced by hand, to the halting line
+
+Owner's post-361 run: *IBL HealthCare — sources Rs 119,307.05, placed Rs 37,307.05*, i.e. Rs 82,000.00
+unplaced, beside roughly Rs 82,000 of open invoices. Pre-361 the same shop read *sources Rs 92,900.00,
+placed Rs 37,307.05, advance Rs 55,592.95*. **`placed` is the same figure in both runs.** 361 changed
+the book and moved nothing.
+
+The instrument's `placed` is read off the STORED `credit_allocations` rows — not off a fresh plan. So
+the question is not "what would the walk place today", it is "when was the walk last run, and over
+what book". Working that backwards against the loop:
+
+1. The supplier's book is walked oldest-open-first. Placement reached IBL-9108 and stopped there.
+2. Everything IBL-9108 and older was open at the moment the walk last ran; everything after it was
+   not yet in the book — those invoices had not been delivered yet.
+3. Rs 37,307.05 was all the room that existed at that moment. The remaining Rs 82,000 became `advance`,
+   correctly, and the rows were written.
+4. Later deliveries then landed — IBL's Rs 82,000 of open invoices — and **nothing re-ran the walk**,
+   so the stored rows still say what they said in step 3.
+
+The halting line is therefore not a predicate inside the walk. It is the absence of a call. Grep for
+the trigger and the whole set is six sites: `recordSupplierPayment`, `reverseSupplierPayment`,
+`voidPurchase`, `createPurchaseReturn`, `approvePurchaseReturn`, `voidPurchaseReturn`. Every one of
+them is an event about MONEY or about a CREDIT NOTE. **`createPurchase` — the one event that creates
+INVOICE ROOM — does not call `reallocateAfter` and never has.** A supplier holding an advance that
+takes a new delivery on credit keeps the advance and the invoice reads `Unpaid`, indefinitely, until
+some unrelated payment or return happens to fire the walk again.
+
+That is exactly the shape the owner photographed on four suppliers and exactly why the figure never
+moves between runs.
+
+### §1.3 — What 344 and 361 changed, and why neither reached it
+
+- **344** (`d8c5d13`, "the credit walk was reading a page, not a book"): replaced
+  `listPurchases(tenant, 1000)` / `listPurchaseReturns(tenant, LEDGER_RETURN_SCAN)` — tenant-wide,
+  newest-first pages — with `listSupplierPurchases` / `listSupplierPurchaseReturns`. It fixed WHAT the
+  walk reads.
+- **361** (`0847b19`, "the walk runs to the end of the book"): rewrote 353's double-count guard from one
+  supplier-wide subtraction into a per-invoice claim, read off the STANDING `po:<id>` rows, none from an
+  imported document, payable only out of money the supplier already held when the charge landed. It
+  fixed WHICH SOURCES the walk is handed.
+- Both are corrections to the BOOK. Neither touched the TRIGGER SET, and the trigger set is where the
+  defect is. 361's own suite proves this by omission: every one of its seven cases ends on a payment,
+  a reversal or a return — the events that already fire the walk. Not one of them posts a PURCHASE
+  after the money is already in the book, which is the ordering staging actually has.
+- The re-check also confirms the importer is not the imported-claim case 361 wrote for:
+  `purchase.importer.ts` calls `createPurchase` with `amountPaid`, and `createPurchase` writes a real
+  `po:<id>` payment row for it, so an imported invoice's `paid` is backed and claims nothing either
+  way. 361's `imported` rule is harmless and stays; it was never the halting line.
+
+### §1.4 — And what §3's "drift" actually was
+
+Derived from the same folds: `ledger = Σ open + openingBalance + Σ unbacked-paid − unplaced`. The
+instrument was testing `open − advance − ledger == 0` with `advance = max(0, −ledger)`, which carries
+neither the opening balance nor 318 §2's netting — so a supplier whose baqaya was entered at creation
+(no invoice behind it, real money) reads as drift, and a delivery part-paid from an advance reads as
+both drift and a stopped walk. Ferozsons, Ganatra Distributors, Hilton, Macter and Premier are the
+first kind.
+
+## 368 — allocation-walk-source — §2/§3 THE FIX (branch `fix/368-allocation-walk-source`)
+
+### §2 — one walk, and it runs when the ROOM appears
+
+- `apps/api/src/pharmacy/pharmacy.service.ts` → `createPurchase()` now ends with
+  `await this.reallocateAfter(tenantId, actorId, supplier.id, now)`, after the document's own inline
+  `po:<id>` payment rows are written and before the `publishPurchaseChange`. It is the SAME
+  `reallocateAfter` → `allocateSupplierCredit` → `planCreditAllocation` chain every other trigger and
+  the reconciliation use — one walk, one function, by grep. The trigger set is now seven and covers
+  both halves of the rule: the events that create MONEY (payment, payment reversal, return posting,
+  return approval, return void, purchase void) and, for the first time, the event that creates
+  INVOICE ROOM.
+- Deliberately UNCONDITIONAL, including for `imported: true`. A filter here is how 353 and 361 each
+  ended up with a second answer, and an imported book needs the shop's standing advances placed onto
+  it as much as a typed one does. The cost is one supplier-scoped re-plan per imported invoice; the
+  book is bounded by the supplier's own trade and the plan is diffed, so a delivery into a supplier
+  with no standing source writes nothing.
+- Idempotent by construction — the plan is recomputed from scratch and only the diff is written — and
+  proved: after a delivery posts, `reconcileCreditAllocations(apply: true)` reports `written: 0` and
+  no corrections for that supplier.
+
+### §2/§3 — the netting arithmetic moved to `@mp/shared`, so there is one of it
+
+- `packages/shared/src/credit-allocation.ts` gains `spendNettedAdvance(claims, sources)` with
+  `NettedAdvanceClaim` / `ClaimableSource`. The rules are 361's, unchanged: oldest claim first, out
+  of the oldest money, and only out of money the supplier already held when the charge landed; what
+  no source can meet is simply not deducted.
+- `creditAllocationBook` calls it instead of carrying the loop inline. 357's verifier calls the same
+  function, which is what §3 needs: the verifier has to measure what a source still has IN HAND, and
+  it can only do that by spending the claims exactly as the walk spends them.
+
+### §3 — the instrument distinguishes an opening balance
+
+`packages/db/scripts/verify-allocations-357.ts`:
+
+- Check 2 is now the identity `Σ open + opening balance − in hand == ledger` rather than 361's proxy
+  `open − max(0, −ledger) − ledger`. `opening` is `supplier.openingBalance` in its OWN column and is
+  never drift; `in hand` is the allocatable sources' worth LESS what 318 §2's netting already spent
+  (via `spendNettedAdvance`) LESS what is placed.
+- "The walk stopped short" now fires only on `in hand > 0 AND open > 0` — money in hand with nothing
+  open is an advance (310 §1), and a supplier whose whole baqaya is an opening balance has no
+  invoice to place anything on. Ferozsons, Ganatra Distributors, Hilton, Macter and Premier pass.
+- The `--supplier` listing prints `sources / placed / in hand / opening balance`.
+- Still read-only, still refuses an empty read, still exits 1 on any violation.
+
+### Tests
+
+`apps/api/src/pharmacy/allocation-walk-source-368.spec.ts`, 9 cases — every one in the ordering
+staging actually has, MONEY FIRST and DELIVERY AFTERWARDS, which is the ordering 361's seven cases
+never once wrote: an advance reaching a delivery posted after it; a second delivery taking the
+remainder; a credit note held as an advance reaching a later delivery; the reconciliation finding
+nothing to say after a posting (one walk); an ordinary delivery into a settled supplier writing no
+row at all; 318 §2 re-proved (a delivery part-paid from an advance is NOT relieved a second time now
+that the re-plan runs on the document itself); and three unit cases on `spendNettedAdvance`.
+
+### Gates
+
+`pnpm lint` clean (one pre-existing unrelated warning in `doctor-portal.repositories.ts`).
+`pnpm typecheck` clean, 31/31. Targeted `jest src/pharmacy`: **100 suites, 1612 tests, all pass** —
+no regression from the new trigger. Full `pnpm test:unit` / `pnpm build` left to the controller per
+CLAUDE.md. Vendor console untouched; no schema change; RLS unchanged.
+
+### Notes
+
+- The §1 commit swept in the controller's uncommitted working-tree state (the 368–373 specs,
+  ARCHITECTURE.md, PROGRESS.md, the customer-mobile mockup). Left as committed rather than rewritten.
+- §4's acceptance is owner-run on staging: re-run
+  `cd packages/db && npx tsx scripts/verify-allocations-357.ts --supplier "IBL HealthCare"` and paste
+  the output into 369. The stored rows on staging are still the STOPPED ones — this step fixes the
+  trigger, it does not retro-walk history. **Run `reconcileCreditAllocations` with `apply: true` once
+  on staging before reading the instrument**, then the reseed (360) may follow.
+
+- 368 gate fix (2026-09-03): 357 source-assertion spec still asserted 361 §3's check-2 form (`advance = max(0, -ledger)`); updated it to 368 §3's identity — `open + opening - unplaced - ledger` plus the `stopped` guard. lint + typecheck pass.
