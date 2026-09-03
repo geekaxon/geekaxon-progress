@@ -25091,3 +25091,117 @@ CLAUDE.md. Vendor console untouched; no schema change; RLS unchanged.
 **Tests.** `packages/db/src/release-runbook.spec.ts` (34 cases): executes check-env.sh against fixtures for each of the four bites, all four in one file, the clean file, comments/blank lines, whitespace-only URL values, the values-never-printed rule and the missing-.env exit 2; executes rehearse-release.sh against every refusal (prod/production/live db names, APP_ENV, PM2_SUFFIX, non-scratch name, scratch == live db, non-identifier names) with no database in reach, proves it gets PAST the guards on a staging URL (then asks for a real backup), and asserts the stage list and the summary; asserts the runbook's steps appear in order, that deploy.sh really does refuse `production`, and the placeholder discipline.
 
 **Gates.** `pnpm lint` clean; `pnpm typecheck` clean; the new spec file run alone: 34 passed. Full `test:unit`/`build` left to the controller.
+
+---
+
+## 370 — returns-date-and-slip — DONE (2026-09-03)
+
+**WORK TYPE:** FIX · branch `fix/370-returns-date-and-slip` · spec `specs/370-returns-date-and-slip.md` · schema unchanged · RLS unchanged.
+
+### §1 — the month filter rolls with today
+
+**Cause, named.** The owner's Returns page read `Jun – Aug 2026` with `Pending 0`; the admin's read
+`Jul – Sept 2026` with `Pending 2`. Both were right: the two pending returns are dated 1 September and
+the owner's REMEMBERED window was stored as two absolute `yyyy-mm` ends (`mp.datalist.months.v2.<list>`,
+259 §4 / 277 §5). A window written in August therefore aged into a filter that hid September, silently,
+and would hide one month more every month the shop stayed open.
+
+**Decision (logged, not escalated):** a remembered window is now stored as its SHAPE —
+`{ back, span }`, where `back` is how many months lie between the current month and the window's END
+and `span` is how many months it covers — and resolved against the clock on every load.
+`this month` is `{back:0,span:1}`; `last 3 months` is `{back:0,span:3}`. A window the user parks in the
+past keeps its distance rather than snapping forward, which is the only reading of an old range that
+survives a change of date without becoming a different question.
+
+**Migration.** `.v2`'s absolute pairs are converted once by `migrateMonthWindow`: the SPAN is kept and
+re-anchored to the current month (`{back:0}`), then written to `.v3` and the old key removed. It is
+deliberately NOT the distance-preserving conversion — that would carry the owner's frozen Jun–Aug
+forward and the fix would be invisible to the person who reported it. 277 §5 took the identical trade on
+this same preference; one lost narrowing is cheaper than an unobservable fix.
+
+**AUDIT — every month filter in the app** (the spec asked for it recorded):
+* `pharmacy/returns` (ReturnsClient) — converted, `useMonthWindowPref(LIST_KEY, nowIso)`.
+* `pharmacy/purchase` (PharmacyPurchaseClient) — converted; a stable `monthNowIso` added, since the
+  screen's own `nowIso` is recomputed on every data change and would have made the setter unstable.
+* `pharmacy/recent-sales` (RecentSalesClient) — converted; it drives a SERVER range through
+  `monthWindowInstants`, so the rolling window now also rolls the request.
+* `pharmacy/suppliers`, `pharmacy/customers` — **no month filter exists** on either (no
+  `<MonthRangePicker>`, no `useMonthWindowPref`). Checked rather than assumed; pinned by the suite so a
+  future month badge on either screen cannot be added without the relative preference.
+
+New in `@mp/shared` (`pharmacy-purchase-desk.ts`): `RelativeMonthWindow`, `DEFAULT_RELATIVE_MONTH_WINDOW`,
+`monthWindowSpan`, `resolveMonthWindow`, `relativeMonthWindow`, `migrateMonthWindow`,
+`parseRelativeMonthWindow`. `apps/web/lib/list-prefs.ts` owns the `.v3` key and is still the only thing
+that touches storage — no screen moved.
+
+### §2 — approvals ignore the date
+
+`pendingApprovalRows` (shared) folds the WHOLE feed through the existing `returnMatchesFilter('PENDING')`
+predicate, so the count and the rows behind it stay one reading (352 §3). The register now takes the
+Awaiting-approval KPI (desk and phone), the `Pending` chip count and the rows the chip filters from that
+fold rather than from the month-windowed set; every other tile, chip and row still answers for the window.
+Both tiles also OPEN what they count — `PkpiTile`/`MKpiTile` gained an optional `onSelect`, rendering a
+real `<button>` with `aria-pressed` (never a `<div>` with a click handler) plus a pressed tint and focus
+ring in `globals.css`. Tiles without the prop are byte-identical to before.
+
+### §3 — the Refund method control (computed height, before and after)
+
+Measured cause: the field's SETTLED branch — `.fixedval`, drawn when the customer's udhaar swallows the
+whole refund — was declared `height:var(--control-md,40px)` → **36px**, while the kit `<Input>` in the same
+`.formrow2` (`Restocking fee (%)`) resolves to `min-h-touch` → **44px**. Two controls on one row, two steps
+apart: 262 §2.3's own defect. `.fixedval` is now `--control-lg` → **44px**, matching its row. The phone's
+private `.mp-ret-mobile .fixedval { height:44px }` override is deleted — it was the proof the desk's number
+was the odd one, and one declaration now serves both tiers. The purchase-return screen's settlement field
+(the same class) comes up with it.
+
+### §4 — print refund slip
+
+**Cause, named.** The press rendered thermal bytes into 282's one entry point, which resolves the tenant's
+print mode FIRST. On `DIALOG` — the default, and every desk with no paired Bluetooth printer — it correctly
+fell through to the browser dialog, and that dialog was `surfaceDialog`, which opens nothing unless a print
+was attempted and failed. The register had no refund-slip surface for it to open: the debit note has had one
+since 341 §1 and the sale return never did. So the button was a no-op on the owner's machine.
+
+* **New A4 document** `apps/web/components/pharmacy/RefundSlipDocument.tsx` on the shared `.mp-pur2 .docsheet`
+  kit — the debit note's page geometry exactly (`measureSheet`/`capsFrom`/`paginateByHeight`/`samePagination`,
+  `.tbl--fill` with `fill={settled}`, `.contline.pushdown`, the same 20+250+164+102+82+96 = 714px columns),
+  so 359 §4's spacing rules hold on this sheet too. Mobile and desktop mount the SAME component (347 §1), so
+  `renderSheetsToPdf` measures one layout and the phone's PDF is the desk's file.
+* **It carries** the return number and `Against <invoice>`, the customer or `Walk-in` (null customer prints the
+  word, never a blank party block), the lines with per-line reasons under each item, the totals stack with the
+  settlement 336 POSTED (`Udhaar adjusted − Rs X` / `To account`, then `Paid out · <method>`), two signature
+  rules (`Issued by` = `Full Name (Role)`, `Received by customer`) and `Powered by …` in the page foot. A
+  pending/rejected/voided return is stamped and states no settlement, because nothing moved.
+* **Thermal** (`@mp/escpos`): `RefundSlipDoc` gained `ledgerCredit` / `paidOut` / `settlement`, and the slip
+  prints the two settlement lines when the waterfall actually split the refund; a return that adjusted nothing
+  keeps the single `Refunded via …` line it always printed — which is why the committed golden slips are
+  untouched and were not regenerated.
+* **Server:** `SaleRefundReceiptView` now carries `ledgerCredit`/`paidOut`/`settlement`, prints the RETURN's own
+  number (`view.returnNo ?? view.id` — it was the row id, which the renderer suppresses under "Return no" per
+  270 §2, so the one number a customer can quote was missing) and credits the person through the shared
+  `creditPerson` (`Full Name (Role)`, 311 §3). New `saleReturnRefundSlip` + `GET
+  /pharmacy/returns/sale/:id/refund-slip`, shaped exactly like `purchase/:id/debit-note`. 367 §1's rule extended
+  to this document: an ABSENT `?width` is now the roll the shop runs (`StoreProfile.receiptWidth`), not an
+  asserted 80.
+* **Printing** from the dialogue goes back through the one entry point (`PrintDocShell` gained an optional
+  `onPrint`; the default is still `window.print()`), with `browserPrintDialog` as its fallback — which is now a
+  fallback onto a real sheet. Thermal where there is a printer, A4 where there is not, one payload behind both.
+
+### Tests written (not run — controller's gates)
+
+* `packages/ui/src/lib/returns-date-and-slip-370.spec.ts` — the relative window as behaviour (including the
+  "tested by clock" case: one stored shape, two dates, two ranges), the migration, the audit of every month
+  filter, the date-free pending fold, the `.fixedval` height, and the slip's contents/geometry/one-renderer
+  claims by source; EN+UR parity for all 21 new keys.
+* `apps/api/src/pharmacy/returns-date-and-slip-370.spec.ts` — the payload both documents are built from: the
+  return number, `Full Name (Role)`, the posted settlement adding up to the refund, A4 and thermal agreeing
+  figure for figure, walk-in vs named customer, the roll resolved server-side, and a pending return stating a
+  zero settlement.
+* `packages/escpos/src/refund-settlement-370.spec.ts` — the settlement lines at both rolls, the unchanged
+  single-line case (byte-identical), and no line over the paper width.
+
+### Gates
+
+`pnpm lint` and `pnpm typecheck` run once at the end: both clean (one pre-existing unused-eslint-disable
+warning in `doctor-portal.repositories.ts`, untouched by this step). Unit/e2e/build left to the controller
+per AGENT.md §4A. Vendor untouched; no schema, no migration, no RLS change.
