@@ -25067,3 +25067,27 @@ CLAUDE.md. Vendor console untouched; no schema change; RLS unchanged.
   on staging before reading the instrument**, then the reseed (360) may follow.
 
 - 368 gate fix (2026-09-03): 357 source-assertion spec still asserted 361 §3's check-2 form (`advance = max(0, -ledger)`); updated it to 368 §3's identity — `open + opening - unplaced - ledger` plus the `stopped` guard. lint + typecheck pass.
+
+---
+
+## 369 — release-runbook — DONE (2026-09-03)
+
+**Branch:** `feature/369-release-runbook` · **WORK TYPE:** OPS (docs + two ops scripts + their tests)
+**Schema:** none. **RLS:** unchanged. **Auth/permissions/flags:** untouched. **Endpoints:** none. **i18n:** no new keys (nothing user-facing). **Vendor:** untouched.
+
+**Problem.** Production went live by hand on 1 Sep 2026 and every lesson lived only in the operator's memory. Tenants keep their own hours (some 24h), so the target is near-zero downtime, never a maintenance window — which means the release has to be a checklist, not a discovery.
+
+**What shipped.**
+- `docs/RELEASE-RUNBOOK.md` — steps 0–8, every command copy-pasteable, each naming what to expect and the failure it prevents: the rehearsal first; `DEPLOY PRODUCTION <project>` then the `release` mirror (because deploy.sh's branch fence refuses `main`/`master`/`production`/`prod`); the superuser `pg_dump` by full path (the app role reads zero rows through FORCE RLS and would hand back an empty backup); env hygiene via check-env.sh; the detached `nohup ./deploy.sh release`; restart discipline (a var deleted from `.env` is still exported in the shell — `unset` before `pm2 restart --update-env`, or delete and relaunch from ecosystem.config.js, always on the `-prod` suffixed names); verification (`/health`, flat pm2 restart counters, one smoke sale, then the instruments per tenant at that tenant's quiet hour, all `--tenant`); rollback from a `release/<date>` tag plus the backup when a migration must be reversed; and §8's standing rules (additive migrations only, every repair script instrumented, the instruments are the release gate).
+- `scripts/check-env.sh <dir>` — the four bites of release one as a gate: CRLF, a `$`/backtick/quote inside a value, a blank URL-typed variable (`*_URL`/`*_ENDPOINT`/`*_URI`, matching @mp/config's `z.string().url().optional()` — absent parses, blank does not), and a `HOSTNAME_MAP` line whose JSON cannot survive `source`. Exits 1 listing KEY NAMES only, never values, so the output is safe to paste into a chat; exits 2 when there is no `.env` at all (a missing file is not "clean").
+- `scripts/rehearse-release.sh <backup.sql> <scratch-db> [--keep]` — restores a backup into a scratch database, runs `migrate deploy` and then the verifier and both repair scripts (report-only, never the apply switch) against the copy, and prints a per-stage PASS/FAIL summary.
+
+**Judgement calls.**
+- *Three guards, not one.* The spec asks it to refuse a production-shaped `DATABASE_URL`; refusing only on the URL still lets a fat-fingered scratch name drop a real database. So it also refuses `APP_ENV=production` and `PM2_SUFFIX=-prod`, requires the scratch name to CONTAIN `scratch`/`rehears` and to be a plain identifier, and refuses a scratch name equal to the database `DATABASE_URL` points at. Every guard runs before the first connection, so a refusal cannot half-execute.
+- *Parse `.env`, never `source` it.* The script reads `DATABASE_URL` out of `./.env` with `sed` when the env is empty. Sourcing an unchecked `.env` is precisely the failure check-env.sh exists to catch.
+- *URL-typed detection by suffix* (`*_URL`, `*_ENDPOINT`, `*_URI`) rather than a hardcoded key list, so a URL variable added later is covered without editing the checker. It over-covers slightly (a non-zod `_URL`) — a false positive costs one deleted blank line; a false negative costs a failed boot.
+- *The runbook carries no host, port-in-use or credential* — placeholders only, and a test asserts no user:password URL can creep in.
+
+**Tests.** `packages/db/src/release-runbook.spec.ts` (34 cases): executes check-env.sh against fixtures for each of the four bites, all four in one file, the clean file, comments/blank lines, whitespace-only URL values, the values-never-printed rule and the missing-.env exit 2; executes rehearse-release.sh against every refusal (prod/production/live db names, APP_ENV, PM2_SUFFIX, non-scratch name, scratch == live db, non-identifier names) with no database in reach, proves it gets PAST the guards on a staging URL (then asks for a real backup), and asserts the stage list and the summary; asserts the runbook's steps appear in order, that deploy.sh really does refuse `production`, and the placeholder discipline.
+
+**Gates.** `pnpm lint` clean; `pnpm typecheck` clean; the new spec file run alone: 34 passed. Full `test:unit`/`build` left to the controller.
