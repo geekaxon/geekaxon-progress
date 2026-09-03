@@ -25428,3 +25428,118 @@ and untouched). `pnpm typecheck` clean. `packages/ui` 182 suites / 4780 tests gr
 The `.payfield` height (above) wants a look on a real device. The mockup draws the payment dialog's
 Note as a two-row `<textarea>`; the app draws a single-line field and this step did not change it —
 the spec named the reference's height and nothing else about that dialog.
+
+---
+
+## 373 — customers-close (2026-09-03) — FIX, branch `fix/373-customers-close`
+
+Spec: `specs/373-customers-close.md`. Mockup: `specs/mockups/pharmacy/customer-desktop.html`. Schema: none. RLS: unchanged. Closes phase 43's customers block.
+
+### §1 The statement dialogue
+
+- **The ghost exit reads `Cancel`, not `Close`.** `CustomerStatement.tsx`'s desk footer mounted `pinvClose` with a lucide `X` glyph; the mockup's own footer (`customer-desktop.html` 6946) is a bare-worded ghost, a spacer, then `Save PDF` and `Print statement`. It now reads `pcusCancel` — the word every other footer in this module already carries (Add, Edit, Receive payment, Refund, Reactivate, both Merge steps) — and the `X` import is gone with it. The phone footer is untouched: 372 §2 settled it at the mockup's two buttons.
+- **The custom range** was already the kit `<DatePicker>` (372 §2); verified, both bounds, `clearable={false}`, shared labels.
+
+### §1 The date-input audit (recorded)
+
+Walked every `.tsx` under `apps/web/app` and `apps/web/components` (259 files), vendor console excluded — it is not a tenant surface and this block does not touch it.
+
+- **Found and fixed — 2 leaks.** `apps/web/app/(patient)/patient/PatientClient.tsx` (date of birth) and `apps/web/app/(platform)/platform/DirectoryConsentTab.tsx` (directory profile date of birth) both mounted a native `<Input type="date">`. Both now mount `<DatePicker>` with `datePickerLabels(lang)`, per 196's rule that the browser's own date chrome never appears inside the product.
+- **False positive — 1.** `apps/web/app/(app)/purchase/PurchaseClient.tsx` passes `type="date"` as a `Field` prop; the branch it selects already mounts `<DatePicker>`. Held by a test so a later edit cannot invert it.
+- **Vendor — 3, deliberately untouched.** `(vendor)/vendor/audit/page.tsx` (two) and `(vendor)/vendor/tenants/[id]/page.tsx` (one).
+- **Out of scope, recorded, not fixed:** native `type="datetime-local"` and `type="time"` survive on tenant surfaces (patient portal appointment slots, Appointments, Doctor availability, admin Consent). The kit has no time or datetime control — `<DatePicker>` is date-only — so replacing them is a new capability, not this fix. Listed here so the next block that wants it has the list.
+
+### §2 Add customer has no Active block
+
+364 §2 took the Active switch off the dialog; because Add and Edit are one component (`CustomerForm`), the block had already left Add too. The owner's decision is now GUARDED rather than merely true by accident, on both halves:
+
+- browser: the form draws exactly one `.switchrow` (Allow udhaar), reads none of the `pcusActive*` copy, and the payload it posts — create and edit alike — states nothing about `active`;
+- server: `parseCreateCustomer` does not read `active` at all and `createCustomer` never writes it, so a create body that names it (a stale tab, a script, a replayed payload) still registers an ACTIVE customer. 313's rule: a control the screen does not draw is a courtesy; the refusal lives behind it. `Deactivate`, on the record, stays the one route in — with its reason, its balance warning and its date.
+
+### §3 The sweep
+
+- Every quoted string 368–372 named is held verbatim in both catalogues: `Print refund slip`, `Udhaar adjusted`, `Showing {from}–{to} of {total}`, `Part returned`, `Merged into {name}`, `Open the ledger`, `Showing {n} of {m}`, `Loading · {n} of {m}`, `All {n} entries`, `Load all`, `Jump to date`, `Powered by Marham Patti`, `Baqaya`. Zero drift found.
+- **No raw ids:** no `pcus*` / `rtn*` / `pdLed*` value interpolates an id, and `customerTombstoneRefusal` names the survivor in words.
+- **No un-resolved keys:** the statement resolves a tender through the one `methodWord` resolver; neither customer book nor the returns book composes `ppurMethod${…}` in code. **One composed lookup survives outside the swept scope and is recorded, not changed:** `PharmacyPurchaseClient.tsx` (the purchase pay panel, two call sites) still builds `ppurMethod${method}`. It is not a leak today — the three tenders that panel offers all have words — but it is the shape 371 §4 deleted, and it is a purchase-screen line, outside "Customers and Returns". Flagged for whoever owns the purchase close.
+- **Phones:** no bare phone value is interpolated anywhere in the customer register, record or cards; every one goes through `formatPkPhone` (358 §2).
+- **The mockup was NOT edited.** `customer-desktop.html` still draws the Active block in both Add and Edit — the owner decision supersedes it — and its line numbers are cited by ~a dozen code comments; re-flowing the file to delete four lines would invalidate every one of them. The divergence is recorded here and asserted in the suite instead.
+
+### Tests
+
+- `packages/ui/src/lib/customers-close-373.spec.tsx` — 29 tests: the footer word (asserted against the mockup's own footer HTML), the two bounds, the whole-tree date-input walk, the Add dialog's one switch and its payload, the string sweep, the id/key/phone greps.
+- `apps/api/src/pharmacy/customers-close-373.spec.ts` — 6 tests: `parseCreateCustomer` drops `active` however spelled, `parseUpdateCustomer` still reads it, a registered customer is active even when the body asked otherwise, and can still be switched off afterwards.
+
+### Gates
+
+- `pnpm lint` — clean (one pre-existing unused-disable warning in `doctor-portal.repositories.ts`, untouched).
+- `pnpm typecheck` — clean.
+- Targeted runs (not the full suite, per the standing rule): the two new files pass, and the seven existing suites that read the changed files — 335, 339, 340, 347, 358, 365, 372 — pass, 206 tests.
+- Vendor untouched. No schema, no migration, no i18n key added or removed.
+
+### End of block
+
+373 is the last authored step of phase 43. PROGRESS.md `Next:` is set to `none — awaiting next spec block [HUMAN_REQUIRED]`; numbering is continuous and the next spec takes 374. Per the standing sequence, what follows is the reseed once the allocation walk PASSES, then Settings, Day-close, Accounting, Prints, Dashboard, and the two audits.
+
+## Quick fix (2026-09-03) — the reseed stops taking a backup it cannot take: `--backup-done`
+
+**No spec.** Ad-hoc fix on staging, requested directly.
+
+**The failure.** `scripts/reseed-staging.ts`'s `backup()` runs `pg_dump` over the connection in
+`DATABASE_URL` — the APPLICATION role. On this database the tenant tables are FORCE-RLS, and
+FORCE means the policy applies to the table's owner too: the dump reads zero rows through it and
+either fails outright or, worse, writes a file that restores an EMPTY database. This is exactly
+the lesson `docs/RELEASE-RUNBOOK.md` §2 already records for the production backup step ("the app
+role cannot pg_dump FORCE-RLS tables … only the superuser sees through it"), and the answer is the
+same: the human takes the dump as the postgres superuser, by full path, first.
+
+**The fix.** A new `--backup-done <path>` option. The operator takes the dump himself; the script
+then VERIFIES that file and skips its own `pg_dump` entirely. Nothing else moved — every gate,
+every refusal, the delete order, the seed path and the invariants are untouched.
+
+- `src/reseed/plan.ts`
+  - `ReseedOptions.backupDone: string | null`, parsed by `parseReseedArgs`. `--backup-done` with
+    nothing after it parses to the EMPTY STRING, never to `null`: `null` is how the file spells
+    "no backup supplied", which is the branch that runs `pg_dump` itself, and a flag that was
+    typed must not collapse into the branch that ignores it. `reseedGate` refuses the empty case
+    with its own reason. The four existing gate checks are unchanged.
+  - `checkSuppliedBackup(file, stat | null, now, maxAgeMs?)` — pure, so the refusals are executed
+    in CI rather than described in a comment (245 §2's rule, and 360's). Three questions: is it
+    there (and a regular file, not the directory holding it), does it hold anything (0 bytes is
+    what an aborted or unauthorised `pg_dump` leaves behind), and is it from THIS sitting.
+    `SUPPLIED_BACKUP_MAX_AGE_MS = 60 min` — long enough to dump a real staging database and think
+    twice, short enough that yesterday's file cannot be waved through as this run's rollback. An
+    mtime in the FUTURE is refused too: an age that cannot be computed must not be approved.
+    Deliberately NOT done: reading the dump or `pg_restore --list`-ing it — that would say
+    "verified" about a restore this script never performed.
+  - `describeAge(ms)` — "45 minutes" / "2 hours 5 minutes" / "3 days", for the refusal text.
+- `scripts/reseed-staging.ts`
+  - `verifySuppliedBackup(path)` stats the file, calls the pure check, and on refusal prints the
+    superuser command that takes a good one (`sudo -u postgres …/pg_dump -Fc <db> -f …` plus the
+    `ls -lh` sanity look) rather than leaving the operator to remember it at the wrong moment. A
+    refusal is as fatal as a failed `pg_dump`: exit 1, nothing deleted, nothing dumped.
+  - `main` resolves the backup path from `--backup-done` when given, else the dated file as
+    before; the report prints it either way, and says plainly when the dump was supplied (and
+    that `--backup-dir` is then ignored). `--dry-run` still writes nothing and now tells the
+    operator to take the superuser dump before the real run, echoing the exact re-run command
+    with `--backup-done`. The success line and the invariant-failure line both name the path, so
+    the rollback is recorded in the report whichever way the backup got there.
+  - The `backup()` doc now states why it can fail on a FORCE-RLS database and points at its other
+    half. `EACCES` and friends are reported as themselves rather than as "does not exist".
+- `src/reseed-staging.spec.ts` — 11 new assertions: the parser (path, absent, trailing-flag),
+  the gate (blank refused, a named path still allowed, production still refused with it set), and
+  `checkSuppliedBackup` over fresh / missing / directory / zero-byte / a day old / the 59-vs-61
+  minute boundary / future-mtime, plus `describeAge`'s wording.
+
+**Gates.** `pnpm lint` and `pnpm typecheck` clean (one pre-existing unused-eslint-disable warning
+in `doctor-portal.repositories.ts`, untouched). `packages/db/tsconfig.json` includes only `src`,
+so the script itself was typechecked separately with `tsc --noEmit --strict` — clean — and
+`eslint` was run over all three changed files — clean.
+
+**Operator note.** The real run on staging is now:
+
+    sudo -u postgres /www/server/pgsql/bin/pg_dump -Fc <db> -f /root/reseed-<stamp>.dump
+    ls -lh /root/reseed-<stamp>.dump
+    APP_ENV=staging SEED_DEMO=1 RESEED_STAGING=1 pnpm reseed:staging \
+      --tenant <id|slug> --backup-done /root/reseed-<stamp>.dump
+
+within the hour that dump was taken.
