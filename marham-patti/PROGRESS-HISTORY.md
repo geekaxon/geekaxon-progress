@@ -25993,3 +25993,130 @@ was altered.
 
 ### Fix — 376 gate: realtime audit missed the new day-period pane (2026-09-03)
 `realtime-everywhere-343.spec.ts` §1 failed: `apps/web/app/(app)/pharmacy/day-close/DayPeriodPanel.tsx` (added in 376) was not in the audit table. It reads `/pharmacy/day-close/period` itself and already declared a `refreshToken` prop, but `DayCloseClient` mounted it without one, so no live event moved it. Fix: `DayCloseClient` now bumps a `liveTick` inside `liveReread` (the sale + desk feed callback) and passes it as `refreshToken`, and the audit table records the pane as exempt — it is a pane of the day-close screen, re-read from that screen's live feeds, with no socket of its own. Gates: `pnpm lint` (0 errors, 1 pre-existing warning) and `pnpm typecheck` pass.
+
+---
+
+## 377 — day-close-count-and-report — DONE (2026-09-03)
+
+**Branch:** `feature/377-day-close-count-and-report` (FEATURE). Spec: `/specs/377-day-close-count-and-report.md`.
+No CODEREF covers 377 (the companion files stop at 113–121).
+
+### The design decisions, and why
+
+**The calculator test is a PROPERTY, not a promise.** The expected cash is never a number the
+server asserts: `expectedCashLadder` returns five named lines (`opening float + cash sales −
+cash refunds + cash in − cash out`) AND the total, and the total is computed by calling 376's
+`expectedCashWithMovements` rather than by writing a second sum. `sumExpectedCashLines` exists
+purely so the acceptance ("expected cash reproduces by hand from the lines shown") can be
+asserted: three tests add the printed lines and expect the printed total — in the pure model, in
+the API view over a seeded period with movements and refunds, and in SQL over the stored close
+record. The web card renders its total from `sumExpectedCashLines(lines)`, not from the server's
+`expected`, so a screen physically cannot print a total its own rows do not reach.
+
+**The close record is SNAPSHOTTED, never re-derived.** Nine nullable columns on `day_periods`
+(`closing_expected_cash`, `closing_variance`, `closing_note`, the four ladder terms, and the two
+counts). A locked report that re-queries today's tables is not a record — it would change the
+next time somebody edited a price or voided an old sale, and the copy in the shop's folder would
+stop matching the copy on the screen. Same reasoning for `day_period_account_confirmations`,
+which snapshots the account's name, details, system total and payment count beside the tick.
+
+**The note gate is the ONLY thing that can hold a close.** `dayCloseGate` fires strictly ABOVE
+the tenant's `varianceNoteThresholdRs` (374 §1, reusing `varianceNoteRequired`), and the server
+refuses the close, not merely the button — the threshold is the tenant's and the form is the
+client's. An unconfirmed payment account explicitly does NOT block: it is written as
+`confirmed=false` and prints as unconfirmed on both papers, because a bank app that is down at
+9pm is not a reason to leave a counted drawer open overnight, and a gate that strands a close is
+a gate a shop learns to defeat.
+
+**Multi-day is stated, never fabricated.** `dayPeriodMultiDay` drives one sentence — "this
+variance covers 5 days" — on screen and on both papers. The drawer was counted once, at the end,
+so attributing any part of the difference to a single day would be an invention.
+
+**Expected comes from the server; only the COUNT comes from the person.** `parseCloseDayPeriod`
+has no field for an expected figure at all (a test posts `expectedCash: 999999` and asserts it is
+dropped), so a client cannot declare a drawer balanced by asserting what it should hold.
+
+**The period lock is HALF-OPEN — a defect the tests caught.** The first implementation used
+`openedAt <= at <= closedAt`. The API spec then failed on "today's ordinary sale is untouched by
+that lock": with a frozen clock the close instant and the next sale coincide, and the sale was
+refused. That is this stack's one unforgivable failure — a guard that stops a sale — so the span
+became `[openedAt, closedAt)` in the shared model, the Prisma query (`closedAt: { gt: at }`) and
+the fake. The close instant belongs to the period that is OPENING.
+
+**`pharmacy.backdateSale` does not pierce a closed period**, and the code says so in prose: that
+key licenses naming a past DATE, and has never been a licence to alter a period whose cash has
+been counted, reconciled and printed. `assertPeriodPostable` runs beside the existing
+`assertCounterPostable` on both commit paths (POS and cashier finalize).
+
+**One renderer, two papers.** `ZReportModel` gained an OPTIONAL `period?: ZReportPeriodBlock`.
+Absent on every 110 per-till Z-report, so those print byte-identically — the escpos golden suite
+(85 tests) passes unchanged, which is the "money logic elsewhere byte-identical" evidence. When
+present, `renderZReport` branches into `renderPeriodZReport` (the mockup's 80mm slip: span,
+ladder, variance + reason, non-cash with `** UNCONFIRMED AT CLOSE **`, sales, payment split, the
+locked sentence) and the web `ZReport` overlay grows the same sections in both thermal and A4.
+
+**The next float is the COUNTED cash, not the expected one.** Carrying the expected figure would
+paper over every shortfall and hand tomorrow a lie; 376's `carriedOpeningFloat` already reads
+`closingCountedCash`, so this fell out of storing the count.
+
+### Files
+
+- `packages/shared/src/day-period-close.ts` (new) — the ladder, span, gate, confirmations, next
+  float, report number, `periodLocksAgainst`. Exported from `index.ts`.
+- `packages/shared/src/pharmacy-dayclose.ts` — `ZReportPeriodBlock` + optional `ZReportInput.period`.
+- `packages/db/prisma/schema.prisma` + migration `20260905000000_day_close_count_and_report`
+  (additive columns, new table, `apply_tenant_rls`).
+- `apps/api/src/pharmacy/` — `pharmacy.repositories.ts` (close/confirm/list/lock + bulk sale
+  items, Prisma impls), `__fakes__.ts` (in-memory twins), `pharmacy.service.ts` (`periodMoney`,
+  `dayPeriodCloseView`, `closeDayPeriod`, `buildPeriodReport`, `dayPeriodReport`,
+  `listDayPeriods`, `assertPeriodPostable`), `pharmacy.dto.ts` (`parseCloseDayPeriod`),
+  `pharmacy.controller.ts` (4 routes), `pharmacy.constants.ts` (`PHARMACY_DAY_CLOSE`).
+- `packages/escpos/src/{documents,render}.ts` — the period labels and `renderPeriodZReport`.
+- `apps/web/app/(app)/pharmacy/day-close/DayClosePeriodPanel.tsx` (new), `ZReport.tsx`,
+  `DayCloseClient.tsx`; `apps/web/app/globals.css` (the `.mp-dayc*` block).
+- `packages/i18n/src/messages/{en,ur}.json` — 99 keys each, parity verified programmatically.
+
+### Endpoints
+
+`GET period/close`, `GET period/list`, `POST period/close` (`@RequirePermission(pharmacy.day.close)`,
+`@Audited`), `GET period/:id/report`. Literals precede `:id` so `close`/`list` cannot be read as
+an id. The READ is intentionally open to `pharmacy.cashier`: a cashier who may not close still
+counts and sees every figure, and the footer reads "waiting for a manager to close".
+
+### Gates
+
+- `pnpm lint` — clean (one pre-existing unused-disable warning in `doctor-portal.repositories.ts`).
+- `pnpm typecheck` — 31/31 tasks green.
+- Targeted jest runs (not the full `test:unit`, per the build loop): API 377 spec 23/23, shared
+  model spec 23/23, DB RLS spec 7/7, escpos goldens 85/85, 376 API spec 20/20.
+- `prisma generate` run after the schema change.
+- Design self-check: replaced hex fallbacks with the real `--mp-ok-fg` / `--mp-danger-fg` /
+  `--mp-ok-bg` / `--mp-warn-*` tokens (376's own diff had stripped exactly this pattern), and
+  gave "Day open" and "Locked" distinct pill treatments. `design-drift-check.mjs` all green.
+
+### Notes for later steps
+
+- 378 (per-cashier close) inherits `periodScope` and the whole close pipeline; the combined-total
+  view and per-shift variances are its work, not this step's.
+- The report number `DC-YYYYMMDD` is DERIVED from `closedAt`, not a stored sequence. Two closes on
+  the same calendar date share a label; if that ever matters, it needs a real counter.
+- `PERIOD_SALES_LIMIT` is 20,000 — a period somebody forgot for a month degrades into a capped
+  read rather than an unbounded one.
+
+
+### Gate fix — 377 unit-test failures (2026-09-03)
+
+`pnpm test:unit` red on two suites, both fallout from 377's new tables/CSS, no feature change:
+
+- `packages/db/src/reseed-staging.spec.ts` (3 failures) — 377 added `DayPeriodAccountConfirmation`,
+  which the reseed partition test requires to sit in exactly one tier. It is trading history (a
+  snapshot of an account's total at one close), so it joins `RESEED_TRADING_ORDER`, placed BEFORE
+  `DayPeriod`: it holds a required declared FK into the period, so it must be deleted first — the
+  same reason the FK-order and no-orphaned-kept-row checks were failing beside the partition one.
+- `packages/ui/src/lib/purchases-desktop-r2-264.spec.tsx` (1 failure) — 377's `.mp-dayc__varsum`
+  clipped with `overflow: hidden` purely to round its corners, exactly the 264 §1 misuse the
+  app-wide audit forbids. Changed to `overflow: clip`; the rule is not positioned or height-capped,
+  so nothing scrolls differently.
+
+Gates after the fix: both suites run individually green (45/45 ui, 62/62 db); `pnpm lint` and
+`pnpm typecheck` clean.
