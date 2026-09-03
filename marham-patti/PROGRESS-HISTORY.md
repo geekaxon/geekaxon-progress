@@ -25609,3 +25609,144 @@ Re-run the reseed naming the dump taken BEFORE the failed attempt:
 `... --tenant <id> --backup-done /root/reseed-<ts>.dump --retry`. Masters stay kept; a second pass clears the
 half-seeded rows with the rest. Note `pnpm install` on staging is needed once, for the new `@mp/shared`
 dependency of `@mp/db`.
+
+---
+
+## 374 — settings-to-mockup — DONE (2026-09-03)
+
+**Work type:** FIX. **Branch:** `fix/374-settings-to-mockup`. **Spec:** `specs/374-settings-to-mockup.md`. No CODEREF exists for this range.
+
+**Problem.** Settings 220–224 were built and never tested against a mockup. The recommitted
+`specs/mockups/pharmacy/settings-desktop.html` / `settings-mobile.html` draw nine sections grouped
+**Setup · Operations · People · Personal**, and four of them did not exist as rows at all: the shop's
+identity, its logo and its palette were three separate rail entries; the tenant tax default and the
+global discount were two more; Cash handling and Accounting did not exist in any form.
+
+**Change, section by section (366's rule — ASSEMBLED, NOT BUILT).**
+
+- **General** — new `sections/GeneralSection.tsx`, 33 lines, which MOUNTS `StoreSection` and
+  `BrandingSection`. Neither pane was rewritten. They stayed two panes because they write two
+  different things through two endpoints with two different validations (a Pakistani phone number;
+  a WCAG contrast floor) — merging the forms would have merged the failures, so one invalid phone
+  would block a palette change.
+- **Pricing** — new `sections/PricingSection.tsx`, which MOUNTS `SalesTaxSection` (tax default,
+  batch pricing + FEFO, margin guard) and `GlobalDiscountSection` (the scoped rule list and its
+  precedence explainer). Same reasoning: one is a form of stored numbers, the other is a list editor
+  with its own conflict resolution, and folding a list into a form's dirty-count would make
+  "3 unsaved changes" mean two different things in one bar.
+- **Cash handling** — NEW pane. Simple / Per-cashier as two `.modecard`s (each option changes what
+  the Day close screen IS and the consequence is a sentence; a segmented control shows two words and
+  hides the only thing that separates them), the variance-note threshold in rupees with the
+  `Warns · never blocks` chip, the float-carry and day-open-banner switches, and a card that says
+  Close day is a PERMISSION and links to Roles rather than offering a second place to set it.
+- **Accounting → Expense categories** — NEW pane, mounting the reason-list editor.
+- **Keyboard shortcuts / Roles / Users / Payment accounts / Returns** — already existed and were
+  mounted; Returns' expired-handling radio group became the mockup's SELECT with the two unchosen
+  options still readable as `.applies` lines, and `Back to batch` keeps its danger note.
+
+**The one new kit primitive, and what it pays for.** `settings/pane-group.tsx`. Two mounted panes
+would draw two save bars, and on a phone the save bar is a fixed pill above the dock — two of them
+would sit on top of each other. A grouped pane publishes its save state upward (`usePaneGroupSlot`)
+and suppresses its own bar; the group renders the one bar the mockup draws and saves only the panes
+that actually CHANGED (saving a clean pane would write a form it loaded minutes ago back over
+whatever another screen has done since). Outside a group the hook returns `false` and every pane
+behaves exactly as it did, which is what keeps 220–224's own tests green.
+
+**The reason-list editor moved.** 316 §4 built the add/rename/deactivate list inside
+`ReturnsSection`. It is now `sections/ReasonListEditor.tsx` and BOTH Returns' two lists and
+Accounting's expense categories mount it. The move added one thing the expense list needs and the
+reason lists do not: an optional REORDER, as a pair of real buttons beside the grip, because the
+expense form lists categories in the owner's order and a drag gesture alone is a control only a
+mouse can find.
+
+**Schema (additive; migration `20260903000000_cash_handling_and_expense_categories`).**
+- New enum `CashHandlingMode` (SIMPLE | PER_CASHIER) and four defaulted columns on
+  `pharmacy_settings`: `cash_handling_mode` (SIMPLE), `variance_note_threshold_rs` (200),
+  `day_close_float_carry` (true), `day_open_banner_enabled` (true). Every default reproduces what a
+  shop that has configured nothing already expects, so no backfill and no behaviour change on the
+  day it lands. They ride the row that already carries the (tenant, branch) unique and the forced
+  RLS, exactly as the printing (281) and returns (289) groups do — a branch override needs no new
+  table and no new isolation story. **Nothing reads them until 376.**
+- New table `expense_categories` (tenant_id, name, is_seeded, active, sort_order) under
+  `apply_tenant_rls()` from its FIRST migration: forced RLS, fail-closed, WITH CHECK. Unique on
+  (tenant, name) so "add Generator fuel back" resolves to the deactivated row instead of raising a
+  constraint error about a row the owner cannot see.
+- `StoreProfile.receiptLogoEnabled` (default FALSE) rides the letterhead JSON — no column, because
+  every other field on that blob is printed on the same paper. Whitelisted in
+  `parseStoreProfilePatch`, so a non-boolean cannot reach the printer as a truthy string.
+
+**Seeding.** `Rent · Salaries · Utilities · Transport · Other` are seeded LAZILY on the first read,
+per tenant — not in the migration and not in the tenant-creation path. 316 §4's reasoning applies
+unchanged: those are two code paths that must agree forever, and a tenant created between the
+migration running and the deploy landing would get neither. Seeded only when the list is COMPLETELY
+empty, so a shop that switched four defaults off is not argued with every time a screen opens.
+
+**Permissions.** New catalog key `pharmacy.day.close` ("Close the day — count the drawer and lock
+the period"), flag-gated on `pharmacy.pos`, granted to MANAGER in the floor (TENANT_OWNER holds
+every TENANT key by construction). It joins `pharmacy.backdateSale`, `pharmacy.print.only`,
+`pharmacy.sale.void`, `pharmacy.return.void` and `pharmacy.return.approve` in the Roles matrix's
+"held apart" capability group, which is the group the mockup names. **Judgement call:** minting the
+key at 374 rather than at 376 is deliberate — §1 asks for it in the matrix now, and a Settings pane
+that describes a permission nobody can grant is a pane that describes a lie.
+
+**Endpoints.** `GET/POST /pharmacy/settings/expense-categories`, `PUT .../:id`, `PUT .../order`.
+Reads are flag-gated only (380's expense form reads them holding `accounts.post`, never
+`pharmacy.settings.manage`); writes carry `pharmacy.settings.manage` and are `@Audited`. **There is
+no DELETE** anywhere in the stack — not in the DTO, not on the repository seam, not on the
+controller. The service also refuses to switch the LAST live category off: an expense form with an
+empty required picker is a form nobody can submit, so the refusal is stated here rather than
+discovered there. The cash-handling fields ride the existing settings PUT, additive on the wire — a
+pre-374 client sends none of them and keeps the defaults, while a mode nobody recognises is REFUSED
+rather than guessed at, because guessing would decide what the Day close screen is.
+
+**Judgement call — the sections the mockups do not picture.** `units`, `categories`, `counters`,
+`receipts`, `printing`, `shortcuts` and the whole money-bearing Account group (subscription,
+domains, marketplace, settlement, platform billing) are not in the recommitted mockups. They were
+KEPT. Deleting a rail row does not delete the decision it carried — it makes it unreachable, and
+each of these is a live tenant configuration with no other route in the product. The four sections
+the mockups DO draw lead each group, in the mockups' own order; the rest follow. The group KEYS
+(`general`, `pharmacy`) were NOT renamed — only their labels, to "Setup" and "Operations" — because
+a key is what every section declares and what the flags hang off, and renaming one would have been a
+migration of twenty-three declarations for nothing an owner can see.
+
+**Retired slugs.** `?s=store`, `?s=sales-tax`, `?s=branding` and `?s=global-discount` no longer
+exist as rows; `resolveSettingsSection` already falls back to the first openable section, so a stale
+bookmark opens the screen rather than an empty pane. `/pharmacy/settings` was repointed from
+`?s=sales-tax` to `?s=pricing`.
+
+**Users.** The role is read in WORDS through `roleWords` (a system role reached the screen as
+`TENANT_OWNER`), and the phone card titles a person `Full Name (Role)` through the one shared
+`formatPersonIdentity`. A new card states the format and carries the refusal note: email addresses
+never appear in the product — not on a receipt, not in a drawer, not in an export.
+
+**CSS.** Four components added under `.mp-set`, tokens only, no hex literal: `.applies` (the "where
+this lands" line, the most repeated component on the page), `.neverblocks` (the guard chip),
+`.modegrid`/`.modecard` and `.reason__grip`, plus `.nfield` repeated under this screen's scope.
+Everything else the mockups draw is a component this screen already had.
+
+**Tests written (not run — the controller runs the gates).**
+- `packages/db/src/expense-categories-isolation-374.spec.ts` — every migration in order inside
+  pglite: forced RLS on the new table (own-rows-only, WITH CHECK refusal, nothing at all with no
+  tenant context), the (tenant, name) unique both ways, no delete path, the four cash columns
+  additive and defaulted, and `cash_handling_mode` as a NATIVE enum so a nonsense mode is refused by
+  the database.
+- `apps/api/src/pharmacy-settings/settings-to-mockup-374.spec.ts` — seeding once and per tenant,
+  add/rename/deactivate/reorder, reactivate-on-re-add, the last-category refusal, the DTOs, and the
+  cash-handling resolver + `varianceNoteRequired` (strictly ABOVE the threshold, sign-agnostic).
+- `packages/ui/src/lib/settings-to-mockup-374.spec.ts` — the rail per the mockups, the MOUNT greps
+  (`<StoreSection`, `<BrandingSection`, `<SalesTaxSection`, `<GlobalDiscountSection`,
+  `<ReasonListEditor`, the permission matrix, the list kit), one-save-bar, the `credit limit` /
+  `outstanding` sweep, `Full Name (Role)`, the receipt-logo default, the CSS token check and EN/UR
+  parity for every new key.
+- `apps/api/src/pharmacy/realtime-everywhere-343.spec.ts` — the six new `(app)` surfaces added to
+  the standing audit with their reasons, so the parity assertion stays exact.
+
+**i18n.** 76 new keys in EN and UR alike; `setgTaxRateHelp` rewritten to the mockup's own sentence so
+the tenant tax default quotes the words the sale line will read — `17% (Tenant default)`.
+
+**Gates run here:** `pnpm prisma generate`, `pnpm lint`, `pnpm typecheck` — all clean (the single
+pre-existing unused-eslint-disable warning in `doctor-portal.repositories.ts` is untouched and
+unrelated). `pnpm test:unit` and `pnpm build` are the controller's.
+
+**Not done, and why:** nothing. The spec's §2 note that a deactivated category must stay on old
+expenses is verifiable only once 380 lands and is recorded here for that step.
