@@ -25888,3 +25888,108 @@ package (185 suites), the whole `apps/api` `pharmacy` + `pharmacy-settings` + `a
 `notifications` trees, and every API e2e wiring suite — all green. i18n untouched (no new keys; the
 branch picker reuses `setgUsersAllBranches`). Vendor untouched. No schema, no migration, no RLS
 change.
+
+## 376 — day-close-open-and-movements — DONE (2026-09-03)
+
+**WORK TYPE:** FEATURE — branch `feature/376-day-close-open-and-movements` (off the 375 head).
+**Spec:** specs/376-day-close-open-and-movements.md. No CODEREF in range.
+**Mockups:** specs/mockups/pharmacy/day-close-desktop.html + day-close-mobile.html (sections A–D of the desktop, A + C of the mobile; E–H belong to 377/378 and were deliberately NOT built).
+
+### The problem this step names
+Day-close as built at 110 is PER TILL and PER DATE: a `day_closes` row keyed (counter, business_date).
+The pharmacy the product is actually for does not close every evening — the day that opened on the 18th
+is still open on the 23rd — so the v1 model has no way to express the period a shop is really trading in,
+no way to carry a float forward, and nowhere to record the Rs 2,000 that left the drawer for the
+electricity bill. 376 adds the PERIOD model beside the v1 reconciliation without touching a figure of it.
+
+### Schema (additive; migration 20260904000000_day_periods_and_cash_movements)
+- enum `DayPeriodStatus` (OPEN | CLOSED) — deliberately NOT `DayCloseStatus`: that enum belongs to the
+  per-till reconciliation and carries a REOPENED state the period model does not have yet.
+- enum `CashMovementDirection` (IN | OUT) — the direction carries the sign, the amount is always positive.
+- `day_periods`: tenant/branch/counter?, `mode` (CashHandlingMode, FROZEN at open so switching the 374
+  setting never changes a day already open), `cashier_user_id` (PER_CASHIER only), opened_at/opened_by,
+  `opening_float`, `opened_implicitly`, closed_at/closed_by, `closing_counted_cash` (377 writes it; 376
+  only reads it, as the float the next open carries), `status`.
+- `cash_movements`: tenant, day_period_id, direction, amount, REQUIRED `reason`, `account_id?`,
+  recorded_by/recorded_at, `reverses_id` + `reversed_by_id` (270 — reverse by ENTRY, never a delete).
+- Both tables ENABLE + FORCE ROW LEVEL SECURITY through `apply_tenant_rls()` in the same migration that
+  creates them; deploy uses the inline-env sourcing rule. Nothing dropped, nothing renamed, no column
+  changed type or nullability — `day_closes`, `cash_counts` and every money path over them are untouched.
+
+### Shared (`packages/shared/src/day-period.ts`, exported from the barrel)
+`dayPeriodAgeDays` (whole CALENDAR days, so a day opened 9am and read 8pm the next day is "1 day", which
+is what a person at the counter would say), `dayBannerTier` / `dayBannerVisible` /
+`dayBannerAsksToReconcile` (none → calm day 1 → warn day 3 → danger day 5), `DAY_BANNER_DISMISS_KEY`,
+`carriedOpeningFloat` (returns NULL, never a fabricated zero, when the carry is off or there is no earlier
+close), `normalizeOpeningFloat`, the movement validators + `CASH_MOVEMENT_IN/OUT_REASONS` chips,
+`summariseCashMovements`, `cashMovementReversal`, and `expectedCashWithMovements`.
+
+### Endpoints (on the existing `pharmacy/day-close` controller — same POS flag, same class gate)
+- `GET  /pharmacy/day-close/period` — the open period (or null), its age + tier, the carried float and
+  who it came from, the movements, their totals, and the tenant's accounts. Read-only and side-effect
+  free: LOOKING at a screen is not the act of opening a drawer. Gated `pharmacy.cashier` (the class key)
+  because the app-wide banner must render for whoever is on any screen.
+- `POST /pharmacy/day-close/period/open` — `pharmacy.day.open`, audited.
+- `POST /pharmacy/day-close/period/movements` — `pharmacy.day.movement`, audited.
+- `POST /pharmacy/day-close/period/movements/:id/reverse` — `pharmacy.day.movement`, audited.
+Route order: the literal `period` segment is declared before `:id/z-report` so it can never be read as an id.
+
+### Permissions / flags
+New TENANT keys `pharmacy.day.open` and `pharmacy.day.movement`, both `PERMISSION_FLAG_REQUIREMENTS` →
+`pharmacy.pos` (flag FIRST, then permission). Defaults follow the mockup's Roles matrix: Manager,
+Pharmacist, Salesman and Cashier hold both; `pharmacy.day.close` stays where 374 put it, so a Cashier
+opens and moves cash but does not declare the day reconciled. Both added to the RolesSection capability
+group beside Close day — three switches, one place an owner will look.
+
+### The implicit open (the judgement call worth recording)
+§1 says selling with NO open period is allowed and the first sale opens one. Two ways to do that: refuse
+the sale until a drawer exists (rejected outright — it would make a reminder into a gate, which this whole
+step exists to avoid), or open one behind the sale. The second, with three deliberate properties:
+(a) it runs on the money path so it is IDEMPOTENT in the repo (find-or-create in one tenant transaction) —
+two simultaneous sales cannot open two drawers; (b) it SWALLOWS ITS OWN FAILURES and only logs, exactly as
+the low-stock crossing does — a committed sale is never lost because a drawer could not be assumed;
+(c) it sets `opened_implicitly`, and the screen SAYS so ("nobody counted a float, check it before you
+close"), because a drawer that was assumed rather than counted has to admit it or the first variance is
+unexplainable. Wired into both sale commit paths (`finalize` and `commitPosSale`), never into the refund
+or void paths — a refund is not a first sale.
+
+### Web
+- `components/shell/DayStatusBanner.tsx`, mounted in `AppShell` inside `.mp-shell-content` — under the
+  page header on every staff screen. Renders nothing without the POS flag, without `pharmacy.cashier`,
+  or while nothing is open. It is a STRIP: no Dialog, no overlay, no redirect, no route guard anywhere in
+  it, and a test greps for the absence of all five. "Not now" writes sessionStorage only, so the dismissal
+  dies with the sign-in; there is no permanent hide, because a reminder that can be silenced for good is
+  one that will be, and the open day would then be invisible.
+- `pharmacy/day-close/DayPeriodPanel.tsx`, MOUNTED at the top of the existing DayCloseClient (366's rule:
+  compose, do not rewrite). No period → the open card with the carried float, its provenance sentence, the
+  opener and the un-back-datable timestamp. A period → the SPAN header (never "today"), the implicit-open
+  warning, the movements list and the Record-movement dialogue (in/out segmented control, required reason
+  with suggestion chips, account defaulting to the drawer). Reverse is offered only on a row that is
+  neither reversed nor itself a reversal; a reversed row stays in the list, quieted and struck through.
+- `globals.css`: one appended block (`.mp-daybanner*`, `.mp-dayp*`, `.mp-daymv*`) on existing tokens only —
+  no new colour system, no hex literal outside this file, light + dark by construction.
+- i18n: 61 new keys, `pdayb*` / `pdopn*` / `pdper*` / `pdmov*`, EN + UR at parity.
+
+### Tests written
+- `packages/ui/src/lib/day-period-376.spec.ts` — the pure model on the mockup's own numbers, including
+  that `expectedCashWithMovements` is BYTE-IDENTICAL to 110's `expectedCashFor` when a period has no
+  movements.
+- `apps/api/src/pharmacy/day-close-open-and-movements-376.spec.ts` (20) — carry/edit/attribute, the
+  double-open no-op, the implicit open and that it does not fire twice, the five-day banner tiers, A SALE
+  DURING A FIVE-DAY-OPEN PERIOD COMMITS, movement record/attribute/account-bounded-to-tenant, reverse by
+  entry netting to zero and refusing a second reversal, per-cashier isolation, and the permission shape.
+- `packages/db/src/day-period-isolation-376.spec.ts` (6) — both tables under forced RLS against the real
+  migrations in pglite: own-rows-only, WITH CHECK refusal, fail-closed with no GUC, native enums, and the
+  reversal pair surviving as two rows.
+- `packages/ui/src/lib/day-close-open-and-movements-376.spec.ts` — the banner is mounted in the SHELL and
+  draws no gate, the panel is MOUNTED on the existing screen, EN+UR parity for every new key, no hex.
+
+### Gate results
+`pnpm lint` clean (one pre-existing unrelated warning in doctor-portal.repositories.ts). `pnpm typecheck`
+clean across all 31 tasks. The four new spec files run green locally (20 + 36 + 6); the adjacent suites
+(dayclose 110, pos-checkout, permissions/rbac, settings 374/375, pos-print-wiring) still pass unchanged.
+`pnpm prisma generate` run after the schema edit. Vendor untouched; no money logic outside the new files
+was altered.
+
+### Fix — 376 gate: realtime audit missed the new day-period pane (2026-09-03)
+`realtime-everywhere-343.spec.ts` §1 failed: `apps/web/app/(app)/pharmacy/day-close/DayPeriodPanel.tsx` (added in 376) was not in the audit table. It reads `/pharmacy/day-close/period` itself and already declared a `refreshToken` prop, but `DayCloseClient` mounted it without one, so no live event moved it. Fix: `DayCloseClient` now bumps a `liveTick` inside `liveReread` (the sale + desk feed callback) and passes it as `refreshToken`, and the audit table records the pane as exempt — it is a pane of the day-close screen, re-read from that screen's live feeds, with no socket of its own. Gates: `pnpm lint` (0 errors, 1 pre-existing warning) and `pnpm typecheck` pass.

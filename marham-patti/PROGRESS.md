@@ -7,13 +7,13 @@
 ## Current Status
 - **Project:** Marham Patti — multi-tenant white-label healthcare platform.
 - **Phase:** **PHASE 44** — Settings, Day-close, Accounting, Dashboard.
-- **Current build-step:** **375 — settings-testing-pass** — DONE (2026-09-03).
-- **Last completed:** **375 — settings-testing-pass** — settings walked section by section; ids named, lists live.
-- **Next:** **376 — day-close-open-and-movements** — specs/376-day-close-open-and-movements.md
+- **Current build-step:** **376 — day-close-open-and-movements** — DONE (2026-09-03).
+- **Last completed:** **376 — day-close-open-and-movements** — a day is a period now; it opens, it reminds, it never blocks a sale.
+- **Next:** **377 — day-close-count-and-report** — specs/377-day-close-count-and-report.md
 
 ### Recent steps
+- **376 — day-close-open-and-movements** — DONE (2026-09-03) — the day opens with the carried float, the banner escalates, cash moves in and out.
 - **375 — settings-testing-pass** — DONE (2026-09-03) — every setting round-trips; branch and staff read as names; lists update live.
 - **374 — settings-to-mockup** — DONE (2026-09-03) — sections mounted to the mockups; expense categories; cash handling stored.
-- **373 — customers-close** — DONE (2026-09-03) — the statement says Cancel, and no native date field survives.
 
 > Older steps in PROGRESS-HISTORY.md
