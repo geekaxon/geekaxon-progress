@@ -25309,3 +25309,122 @@ per AGENT.md §4A. Vendor untouched; no schema, no migration, no RLS change.
   void-purchase + unit-aware suite 223/223; `@mp/i18n` `method-word-371` + parity green.
 
 **WORK TYPE: FIX (branch fix/371-customers-desktop-close)**
+
+---
+
+## 372 — customers-mobile-close — DONE (2026-09-03)
+
+**Branch:** `fix/372-customers-mobile-close` (from staging `65be2da`). WORK TYPE: FIX. Schema: none. RLS: unchanged.
+**Spec:** `specs/372-customers-mobile-close.md`. No CODEREF in range. Mockup: `specs/mockups/pharmacy/customer-mobile.html` (recommitted with the scroll footer); the deployed supplier sheet is the parity reference.
+
+### The finding behind the step
+The customer detail SHEET was the customer detail DRAWER rendered narrow. 363 §1 moved the supplier
+drawer's desk parts into `LedgerDrawerKit` and both books mount them; the PHONE's parts were never
+moved, so on a 360px screen the customer sheet drew the desk's counted underline tab rail, the desk's
+`.drawbar` (a toolbar search box plus a dropdown range menu) and the desk's nine-button pager, while
+the supplier sheet standing beside it drew a full-width four-segment control, the phone's `.mfiltrow`
+with its 46×46 range button, the switcher in its own `.mledbar`, and an infinite list. Same defect
+shape as 363, one tier down.
+
+### §1 — the sheet
+- **Moved to `LedgerDrawerKit` (one declaration, both books mount it):** `MobileSearchField` (there
+  were THREE copies — the supplier list header's, the supplier sheet's and the customer screen's,
+  identical down to the `drift-guard-allow` marker), `MobileFilterRow` (search + `.mrangebtn` + the
+  `.selsheet` bottom sheet it opens), and `SheetTabs` (the `.segctl segctl--full segctl--4` tablist,
+  which both screens had written out by hand with only the id prefix differing).
+- **`<Panel leadIcon>`** — new, opt-in. `MobileSheet` has taken a `lead` for an identity MARK since
+  244 §5 (a 44px `.supmark--lg` IS the tile; `.sheet__hdic` is a 34px medallion for a 16px glyph),
+  and the frame only ever forwarded `icon` — so every caller whose identity is a circle of initials
+  had the mark nested inside the medallion, which is the owner's "initials/heading/description
+  spacing is wrong" on BOTH the record sheet and Edit customer. Fixed in the frame, not per screen.
+- **The standing badge beneath the name:** 351 §1's `headBadges` already reached the sheet's third
+  head row, but `.sheet__hd--stack` only gives `flex:1 0 100%` to `.vdsub` and `.retsum`; a bare
+  `.pill` wrapped shrink-to-fit, so its position depended on the customer's name length. Declared.
+- **Infinite scroll on the phone, pages on the desk.** One window (`PURCHASE_MOBILE_PAGE = 12`, the
+  app's one phone page size) serving whichever tab is in front, rewound on tab/search/range change.
+  `slice()` is the single place either tier's rule is applied.
+- **`<LedgerScrollFoot>`** — new, in the kit, mounted by BOTH party sheets (the mockup's own words:
+  *"the same bar serves the supplier ledger unchanged"*). Four states from `customer-mobile.html`
+  §"Ledger scroll footer": idle (`Showing N of M` · Jump to date · Load all), loading (the count
+  line becomes the loader, Load all goes quiet), jump-open (`<LedgerJump>`, one month, days holding
+  entries dotted and empty days dead), end (the check, and `Top` in Load all's slot).
+  - **The trip wire is NOT the bar.** `.ledfoot` is `position:sticky`, so it is on screen for as long
+    as the list is; an `IntersectionObserver` on it would cascade every page in one frame. The
+    sentinel is a 1px `.ledfoot__wire` in normal flow above it, and it is the hook's CALLBACK ref
+    (218 §2) so the observer follows it across a tab switch.
+  - **The jump popover hangs off the BAR, not the sheet body.** The mockup measures it from the body
+    (`bottom:62px`) because a mockup's body is one screenful; the real body is the SCROLLER, so an
+    absolute box measured from its bottom edge would sit at the bottom of the whole book. `.ledfoot`
+    is sticky (therefore positioned), so `bottom:calc(100% + 8px)` on a child rides with it.
+  - **The supplier sheet's foot moved OUT of `.mledger`.** `.mp-pur2 .mledger` is `overflow:clip`
+    (the rounded card's edge), and a sticky element inside a clip container cannot stick to the
+    scroller it belongs to. All three sheet mounts are siblings of the list now.
+- **`useLedgerJump`** — the landing, shared: rows carry `data-day`, the hook opens the window to the
+  day's index and scrolls to the row once it exists (it appears on a later commit than the press).
+- **Sales amounts:** `<LedgerAmountText>` takes a third case, `debit={null}` → `.amt.muted`. A sale
+  settled at the counter moved the udhaar book by nothing, so it has no sign to print; drawing it in
+  `--text-primary` beside rows that ARE coloured is the owner's "some rows plain". Stated at the
+  row's own weight (`.mp-pur2 .mledrow__ft .amt.muted`), which is 330's lesson.
+- **Payments balance:** already `moneySigned` since 363 §2; asserted so it cannot regress.
+
+### §2 — the dialogs and flows
+- **Edit customer:** `leadIcon`, and the description is `{name} · since {Mon YYYY}` per mockup 6851
+  (it said the name alone, i.e. the sheet's second line repeated the mark's initials).
+- **Deactivate button:** was a private `.btn--quietdanger` (a bare `color:var(--danger)` on a ghost —
+  no surface, no border, and none of the 44px a `.sheet__foot` gives). Now `.btn--dangerquiet`, the
+  mockup's class and the app's, which four other footers already mount; the private CSS is deleted.
+- **Receive payment / Refund:** `.payfield` on the reference and the note, and the 44px the
+  `.payacct` block has stated since 313 §2 is now stated for them too, scope-free. NOTE, recorded
+  honestly: the exact source of the height drift the owner sees is not reproducible by reading — the
+  kit `<Input>`'s `min-h-touch` already resolves to 44px — so the fix STATES the height rather than
+  relying on a minimum, which makes the two branches (cash vs. an account tender) identical by
+  construction. Worth a browser check on staging.
+- **Statement sheet:** the phone gets `.mstmtbar` (the register's own `.mchips` pills over the count
+  line) instead of the desk's 26px `.tbl-toolbar__mini` row; the footer is the mockup's two buttons
+  (the ghost `Close` + spacer are desk-only — `.sheet__foot--row` splits two buttons in half and a
+  third squeezed all three, and the sheet already has a ✕ and a drag grip). The custom range's two
+  bounds were native `<input type="date">` — the one control that ignores the tenant theme outright;
+  they are `<DatePicker>` now, on both tiers, per 196.
+- **Merge:** `<Panel sheetVariant>` forwards 218 §3's `fullscreen`, and the merge asks for it on the
+  step flow and the done screen. Owner reversal of the mockup's "stays inside the sheet, at full
+  height": three steps, a two-record comparison, an acknowledgement and a destructive confirm do not
+  fit a bottom sheet's window. Step 2 on the phone is the mockup's `.mgstack` — two `.mgrec` cards,
+  survivor on top, the whole card head being the radio's label (a 60px target, not an 18px dot),
+  `Differs` marking the closing record's side exactly where the desk marks it.
+- **Inactive notice:** `.mp-inv2 .alert`'s 20px bottom margin has carve-outs where a parent already
+  sets the rhythm with a `gap`, and `.mp-inv2 .mp-mobile` (gap 13px) is that parent — the seam
+  measured 33px. The carve-out the block already documents, applied to the tier it was missing on.
+- **Card view:** Reactivate removed. A card is a LIST row whose whole surface opens the record; a
+  second target inside it that changes account state, with a confirmation the card cannot show, is
+  one mis-tap from switching a customer back on. Deactivate owns the state, from the record.
+
+### Files
+`apps/web/components/pharmacy/LedgerDrawerKit.tsx` (+`MobileSearchField`, `MobileFilterRow`,
+`SheetTabs`, `LedgerScrollFoot`, `LedgerJump`, `useLedgerJump`, `isoDay`),
+`LedgerKit.tsx` (`LedgerAmountText` third case), `Panel.tsx` (`leadIcon`, `sheetVariant`),
+`CustomersClient.tsx`, `SuppliersClient.tsx`, `MergeCustomers.tsx`, `CustomerStatement.tsx`,
+`RecordCustomerPayment.tsx`, `globals.css` (372 block), `packages/i18n/src/messages/{en,ur}.json`
+(17 keys), `packages/ui/src/lib/customers-mobile-close-372.spec.tsx` (new, 47 cases).
+
+### Suites updated because a component MOVED (not because a rule changed)
+`suppliers-drawer-and-mobile-r4`, `purchases-suppliers-mobile-r2`, `purchases-suppliers-mobile-r3`,
+`purchases-mobile-260`, `customers-ledger-334`, `customers-ledger-parity-363` — each now reads the
+component where it lives (the kit) instead of where it used to be declared, and each edit carries the
+reason inline. `customers-and-returns-close-339` had a proximity window widened by one comment.
+
+### Five suites were ALREADY RED on staging `65be2da` before this step
+Verified by stashing the branch and re-running: `363 §2` ×2, `364 §2`, `334 §1`, `334 §2` — all stale
+source assertions left by 370 §1 (the ledger label now takes the return), 371 §1 (the pager moved
+inside the table's div; the payment dialog's imports grew), 371 §3 (a tombstone hides the whole
+`More` block, not just Reactivate) and 371 §4 (the tender's word comes from `methodWord`). Fixed here
+so the gate is green, since §3 requires it.
+
+### Gates
+`pnpm lint` clean (the one `@mp/api` warning at `doctor-portal.repositories.ts:220` is pre-existing
+and untouched). `pnpm typecheck` clean. `packages/ui` 182 suites / 4780 tests green, `packages/i18n`
+6 / 38 green — run per package, since CLAUDE.md forbids the full `pnpm test:unit` here.
+
+### Not done / for the owner
+The `.payfield` height (above) wants a look on a real device. The mockup draws the payment dialog's
+Note as a two-row `<textarea>`; the app draws a single-line field and this step did not change it —
+the spec named the reference's height and nothing else about that dialog.
