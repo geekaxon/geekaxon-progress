@@ -25750,3 +25750,141 @@ unrelated). `pnpm test:unit` and `pnpm build` are the controller's.
 
 **Not done, and why:** nothing. The spec's §2 note that a deactivated category must stay on old
 expenses is verifiable only once 380 lands and is recorded here for that step.
+
+---
+
+## 375 — settings-testing-pass — DONE (2026-09-03)
+
+**WORK TYPE:** FIX — branch `fix/375-settings-testing-pass` (off the staging head, 04b5376).
+**Spec:** `specs/375-settings-testing-pass.md`. **Schema:** none. **RLS:** unchanged. **Migrations:** none.
+
+### The problem
+
+374 mounted Settings to the mockups by composing panes that already existed. Nothing had ever
+walked the whole surface asking the standing-rules questions of a screen that STORES decisions:
+does every setting round-trip, is the permission on the route or only on the button, does another
+seat's change reach the screen, and are there raw ids on it. This is that pass, section by section,
+plus the three dangerous edges §2 names.
+
+### §1 — the section-by-section table
+
+Legend: ✔ passed as found · **FIXED** changed by this step · ➖ not applicable, with the reason.
+
+| Section (group) | Round-trip | Permission server-side | Realtime | Skeleton | Dialog/drawer token | Phones | Raw ids | Keyboard | Mobile sheets |
+|---|---|---|---|---|---|---|---|---|---|
+| General (Setup) = Store + Branding | ✔ whole-document PUT + whole letterhead PUT | ✔ `brand.manage` | ➖ a form: a live re-read discards unsaved work | ✔ | ➖ no modal | ✔ canonical on save (274 §2) | ✔ | ✔ presets are `<button aria-pressed>` | ✔ shared sheet |
+| Payment accounts (Setup) | ✔ create/rename/(de)activate | ✔ read = flag, write = `pharmacy.settings.manage` | **FIXED** subscribes | ✔ | ➖ inline edit | ➖ | ✔ | ✔ | ✔ |
+| Receipts (Setup) | ✔ | ✔ `brand.manage` | ➖ form | ✔ | ➖ | ➖ | ✔ | ✔ | ✔ |
+| Returns (Operations) — policy + two reason lists | ✔ + `expiredPolicyChosen` set by saving | ✔ | **FIXED** the LISTS subscribe; the form does not | ✔ | ➖ | ➖ | ✔ | ✔ | ✔ |
+| Pricing (Operations) = Sales tax + Global discount | ✔ incl. `minMarginPct` null ≠ 0 | ✔ | **FIXED** the rules list subscribes | ✔ | ➖ | ➖ | ✔ | ✔ | ✔ stacked (314 §6) |
+| Cash handling (Operations) | ✔ incl. threshold 0 as a real answer | ✔ | ➖ form | ✔ | ➖ | ➖ | ✔ | ✔ | ✔ |
+| Accounting (Operations) — expense categories | ✔ add/rename/reorder/(de)activate | ✔ | **FIXED** subscribes | ✔ via the shared editor | ➖ | ➖ | ✔ | ✔ | ✔ |
+| Units (Operations) | ✔ | ✔ | **FIXED** subscribes | ✔ | ➖ | ➖ | ✔ | ✔ | ✔ |
+| Categories (Operations) | ✔ | ✔ | **FIXED** subscribes | ✔ | ➖ | ➖ | ✔ | ✔ | ✔ |
+| Printing (Operations) | ✔ | ✔ | ➖ form | ✔ | ➖ | ➖ | ✔ | ✔ | ✔ |
+| Counters (Operations) | ✔ | ✔ | **FIXED** subscribes | ✔ | ➖ | ➖ | ✔ | ✔ | ✔ |
+| Shortcuts (Operations) | ✔ | ✔ | ➖ the shop's map, edited by one admin | ✔ | ➖ confirm only | ➖ | ✔ | ✔ reset-all + print card | ✔ |
+| Staff / Users (People) | ✔ | ✔ admin roles | ➖ no user scope on the bus | ✔ | ➖ confirm only | ✔ `formatPkPhone` | **FIXED** ×3 | ✔ | ✔ |
+| Roles (People) | ✔ | ✔ admin roles | ➖ no role scope on the bus | ✔ | ➖ confirm only | ➖ | ✔ | ✔ | ✔ |
+| My profile (Personal) | ✔ | ✔ own record | ➖ own record | ✔ | ➖ confirm only | ✔ | ✔ | ✔ | ✔ |
+| Notifications (Personal) | ✔ | ✔ own switches | ➖ own switches | ✔ | ➖ | ➖ | ✔ | ✔ | ✔ |
+| Account group (subscription, domains, marketplace, settlement, platform billing) | ✔ | ✔ per-surface permission | ➖ vendor-side records; no tenant scope publishes them | ✔ | ➖ | ➖ | ✔ | ✔ | ✔ |
+
+### The three defects the pass found, and what was done
+
+1. **Raw ids on Settings → Staff, three of them.** The Branch column read `u.branchId` straight
+   off the user row and printed a cuid — on the desktop table AND on the phone card; the invite
+   form asked an owner to TYPE a branch id into a text box; and the person's display fell through
+   to `u.id` when a row carried no name, no email and no phone. Fixed by giving the admin surface
+   the branch directory it never had (`GET /admin/branches`, same admin roles as the staff list it
+   serves, tenant-scoped, backed by a new optional `AdminBranchRepo` seam so every existing
+   positional fixture still constructs): the column names the branch, the invite PICKS one from a
+   `SearchSelect`, and the display ends at `actorDisplayName` — which ends at "Unknown user", never
+   at an id. A branch the directory cannot name falls back to "All branches", never to the cuid.
+2. **Every settings LIST was unsubscribed.** `realtime-everywhere-343.spec.ts` had exempted all of
+   them with one sentence — *"Configuration; no scope publishes it"* — and, in the same breath,
+   written down the condition: *"If a tenant ever edits settings from two seats at once, the answer
+   is a `settings.updated` scope and these subscribe to it — the rule, not an exception to it."*
+   375 §1 is that condition, so the scope was built rather than another exemption written:
+   `settings.master.updated` on the SAME spec-112 per-tenant bus as its SEVENTH scope, announced by
+   the settings services on every master write, and served on `GET /pharmacy/settings/stream`.
+3. **Nothing had ever asserted that one pane's save does not reset another pane's fields.** The PUT
+   is a whole-document write: a field the body omits falls to the DEFAULT, not to its stored value,
+   and 374 left five panes writing that one endpoint. No defect was found (every pane spreads
+   `{ ...settings }`), but the guarantee was unwritten, and it is now the loudest test in the file.
+
+### Judgement calls, and the reasoning
+
+- **A settings FORM deliberately does NOT subscribe.** A list is a statement of what the shop
+  offers, so another manager's change belongs on screen at once. A form is somebody's half-typed
+  edit, and re-reading it under their fingers throws their work away. The 343 audit table now
+  carries that sharper reason in place of "no scope publishes it", so a later step that "finishes
+  the job" by wiring the forms fails the suite and has to argue with the sentence.
+- **The settings stream is its own ENDPOINT, not a merge onto the counter's.** The only reason a
+  stream has ever got its own endpoint in this repo is a differing gate (237 §4), and this is that
+  case: the counter's stream is `pharmacy.sell`, and the owner who configures the shop may hold no
+  counter grant at all. It is NOT a second read loop — `subscribeStream` has been keyed by path
+  since 343 §2, so a third endpoint costs a connection and no second copy of the parser. A viewer
+  who cannot manage settings passes `enabled: false` and holds no socket, so nobody reconnects into
+  the same 403 for the length of a shift (292 §2.3).
+- **The envelope carries no value.** `settings.master.updated` names the master and the reason and
+  nothing else; a pane re-reads. A payload a pane could paint from would be a second copy of a list
+  that can disagree with the first, and a master is small enough that the re-read is one request.
+- **`GET /admin/branches` rather than widening `/admin/users`.** A branch name is a property of the
+  branch, and the invite form needs the LIST regardless — one read answers both. The existing
+  branch list (`/transfers/branches`) was unusable here: it is gated on the multi-branch flag plus
+  `transfer.manage`, neither of which a single-branch pharmacy's owner holds.
+- **The 720/700 tokens: the honest finding is that Settings opens no form dialog and no drawer at
+  all.** Every edit happens in place and the only modals are CONFIRMATIONS, which are the kit's
+  460px question by design. So the rule kept is that no pane opens a modal wearing a width of its
+  own — asserted across every pane — rather than a token forced onto a surface that has none.
+
+### §2 — the three dangerous edges
+
+- **Batch pricing affects future sales only.** The commit half was already proven at 342 (a real
+  sale under each mode, and flipping the setting afterwards changing nothing about it). 375 adds
+  the RE-READ half: every `batchPricing:` value assignment in the pharmacy service reads
+  `settings.batchPricingMode` on the PICK path, and no re-read path consults the mode at all — a
+  committed line is a stored number, and the setting is a rule for the next pick.
+- **Deactivating a payment account today's open day used is ALLOWED**, and the account still
+  displays. `listPaymentAccounts` hands back INACTIVE rows too, which is what every payment row's
+  name map and the day's reconciliation are built from; a list that filtered to active rows would
+  leave yesterday's card payment reading as an id or a dash. Cash remains the one refusal, stated
+  rather than hidden, and there is no DELETE anywhere on the surface.
+- **Lowering the variance threshold applies FROM THE NEXT CLOSE**, because the threshold is read at
+  close time from the tenant's current setting and is stamped onto no day. Asserted both ways: the
+  behaviour through the resolver, and that `DayClose` carries no threshold column — if a later step
+  ever adds one, "applies from the next close" silently becomes "applies from the next OPEN", and
+  that test says so out loud.
+
+### Files
+
+- NEW `packages/shared/src/settings-live.ts` (+ index export) — the scope, its envelope, its guard.
+- NEW `apps/api/src/pharmacy-settings/pharmacy-settings.realtime.ts` — publisher seam + SSE stream.
+- `apps/api/src/notifications/notifications.realtime.bus.ts` — the seventh scope (publish/subscribe
+  + its subject), default no-op on the abstract so a pre-375 adapter still satisfies the seam.
+- `apps/api/src/pharmacy-settings/{pharmacy-settings,expense-categories,return-reasons}.service.ts`
+  — announce on every master write, through an `@Optional()` seam so every positional fixture
+  still constructs. Sixteen announcements; a REFUSED write announces nothing.
+- `apps/api/src/pharmacy-settings/pharmacy-settings.{controller,module}.ts` — `@Sse('stream')` under
+  `pharmacy.settings.manage`, and the wiring (NotificationsModule already exports the bus).
+- `apps/api/src/admin/{admin.constants,admin.repositories,admin-user.service,admin.controller,admin.module}.ts`
+  — `AdminBranchRepo` + `GET /admin/branches`.
+- `apps/web/lib/stock-live.ts` — `SETTINGS_STREAM_PATH` + `useSettingsLive`, in the one reader.
+- `apps/web/app/(app)/settings/sections/*` — subscriptions on the seven list panes; the Users
+  fixes; nothing else moved.
+- `apps/api/src/pharmacy/realtime-everywhere-343.spec.ts` — the audit table now records the seven
+  subscriptions and the sharper exemption for the forms.
+- `packages/ui/src/lib/realtime-and-push-291.spec.tsx` — the "one stock endpoint" assertion now
+  names the two differently-gated endpoints instead of counting to one.
+- NEW `apps/api/src/pharmacy-settings/settings-testing-pass-375.spec.ts` (28 tests) and
+  NEW `packages/ui/src/lib/settings-testing-pass-375.spec.ts` (22 tests).
+
+### Gates
+
+`pnpm lint` and `pnpm typecheck` clean (one pre-existing unrelated warning in `doctor-portal`).
+The touched suites were run file-by-file rather than as a full `test:unit`: the whole `@mp/ui`
+package (185 suites), the whole `apps/api` `pharmacy` + `pharmacy-settings` + `admin` +
+`notifications` trees, and every API e2e wiring suite — all green. i18n untouched (no new keys; the
+branch picker reuses `setgUsersAllBranches`). Vendor untouched. No schema, no migration, no RLS
+change.
