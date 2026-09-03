@@ -25205,3 +25205,107 @@ since 341 §1 and the sale return never did. So the button was a no-op on the ow
 `pnpm lint` and `pnpm typecheck` run once at the end: both clean (one pre-existing unused-eslint-disable
 warning in `doctor-portal.repositories.ts`, untouched by this step). Unit/e2e/build left to the controller
 per AGENT.md §4A. Vendor untouched; no schema, no migration, no RLS change.
+
+---
+
+## 371 — customers-desktop-close — DONE (2026-09-03)
+
+**Branch:** `fix/371-customers-desktop-close` (from the 370 head). **Spec:** `specs/371-customers-desktop-close.md`. **Schema:** none. **RLS:** unchanged. **Migrations:** none.
+
+### §3 — WHY 339 §1 AND 364 §2 LEFT THIS OPEN (the spec asked for the `git log` answer)
+
+- `3e4b413` **339** — *"a parked sale keeps its owner, a new one cannot take a closed account"*. Its own
+  message records the decision: of the three §1 scenarios, two — including *"a merged-away record's
+  documents answering from the survivor"* — were judged **"already true by construction"** and were
+  given TESTS ONLY. The step's whole write-side change was `commitPosSale` refusing a fresh cart
+  naming a switched-off customer. So no write path that names a customer ever learned what a
+  tombstone is; the tests asserted the read side, which was indeed already correct.
+- `4afd615` **364** — §2 removed **Reactivate** from a tombstone and §3 pointed `Open ledger` at the
+  survivor. Both are browser-side. The two controls the owner actually pressed — **Edit** and
+  **Receive payment** — live in the drawer's FOOTER, which is the `<Panel>` frame's slot rather than
+  the body 335/364 were editing, so neither step looked there.
+- Net: the tombstone was a convention drawn on screens, never a rule. `RET-S-23` is what a
+  convention costs — a returns page loaded before the merge, saved after it, posting the stale
+  `customerId` the browser was holding.
+
+### What was built
+
+**shared (`pharmacy-customers.ts`)** — `CustomerTombstoneAction` (9 actions), `customerTombstoneRefusal`
+(one sentence: names the record, names the survivor, says where the action IS possible; no ids) and
+`isMergedCustomer`. One reading behind the guard and behind every hidden control.
+
+**api**
+- `PharmacyService.refuseMergedCustomer(row, action)` — the guard, called from `updateCustomer`
+  (edit / deactivate / reactivate, the word chosen from the patch), `recordCustomerPayment`
+  (payment / refund), `reverseCustomerPayment`, and `commitPosSale` (a tombstone is switched off
+  too, and *"reactivate it in Customers"* is the one piece of advice that cannot be taken on one).
+- `createSaleReturn` — **whose return this is, is the SALE's answer**. When the caller names a
+  customer, `sale.customerId` wins (a merge has already repointed it); a return posted with NO
+  customer still names none, so the refund waterfall reads exactly the book it read before and the
+  money is byte-identical on every unmerged sale. A named tombstone is refused.
+- `repairMergedCustomerDocuments(tenantId, {apply})` + `POST pharmacy/customers/merged/repair`
+  (`@Audited pharmacy.customer.merge.repair`, literal path before `:id`) + `parseMergedCustomerRepair`
+  (`apply` must be a real boolean; every other body is a REPORT — 317 §3's rule and its reasoning).
+  Walks every tombstone, resolves the survivor from the tombstone's OWN sentence against the tenant's
+  book (`name (phone)`, the string `customerMergedNote` composed), reports what is still sitting on
+  it, repoints when asked. Unresolvable survivors are REPORTED, never skipped in silence. Idempotent
+  by construction: the second pass matches no rows.
+- `PharmacyRepo.repointCustomerDocuments(from, to, dryRun)` + the in-memory twin — the same four
+  `updateMany`s the merge runs, counted instead of written on a dry run.
+- §4 — `assembleCustomerLedger` names a sale return's ledger row from the `return:<id>` reference it
+  already stores: `Sale return RET-S-1 · INV-1`, replacing a bare `Payment`.
+- §1 — `parseCustomerPayment` accepts `notes` and composes `reference · notes` into the one free-text
+  column, the identical lossless join the supplier half has used since 243 §6. No schema.
+
+**web**
+- §1 header — `<Panel>`'s drawer header gave its text column no `flex`, and under `justify-content:
+  space-between` a shrink-to-fit middle child CENTRES. `.drawer__head-t { flex:1; min-width:0 }`,
+  which is `.pdrawer__hd .t`'s own declaration.
+- §1 pagination — 363 mounted the supplier's `<Pager>` and hung it OUTSIDE the `.dtbl`, so the
+  compact `.dtbl--fit .pager` rule never reached it and it rendered at the 44px `.mp-inv2` size.
+  One `pagerNode`, drawn inside each desk table's own div (and each tab's empty state moved in with
+  it, as the supplier's are); the phone keeps it in the tab panel, which has no such wrapper.
+- §1 columns — `.dtbl--csales` status 118 → 138 (the PILL, not the word) paid for by the date going
+  to the supplier's 90: `--dt-inner` 638 → 644. `.dtbl--cpay` takes `.dtbl--pay`'s budget exactly
+  (90 / auto / 132 / 126 / 52, `--dt-inner` 534) and gains 279 §4's wrap rule for the reference, the
+  method cell and the reversal note — shown whole, and horizontally scrollable, never clipped.
+- §1 dialog — `RecordCustomerPayment`'s non-account Reference was the one hand-drawn field in the
+  app (`<input className="input">`, no `#` glyph); it is now `.input-wrap` + `<Input>` like the
+  `.payacct` block beside it, and a **Note** field was added under it.
+- §2 — the register's Actions column gains Receive payment / Refund (by balance state, 319 §1) and
+  Deactivate, both gated on `pharmacy.sell` (the key the server enforces) and both opening the same
+  surfaces the drawer opens. A merged row offers ONE action: open the book.
+- §3 — the drawer's footer is absent on a tombstone, and so is the whole `More` block (Statement,
+  Merge, Deactivate/Reactivate). There is no server statement route — the statement is composed in
+  the browser over the ledger — so hiding it is the whole of that one; every other listed action is
+  refused server-side.
+- §4 — `openRecord`'s `quiet` now means "the SAME record re-reading". Landing on a DIFFERENT record
+  clears the book first; that is why `Open ledger` after a merge could wear the survivor's name over
+  the merged-away record's ledger (and keep it if the read failed) — the second report 364 §3 got.
+- §4 — `methodWord(lang, method, creditKey)` in `LedgerDrawerKit`: `CREDIT` takes a caller-supplied
+  word (`pdPayFromAdvance` on the supplier side, `pcusMethodCredit` — "Udhaar adjusted" — on the
+  customer's), every other tender resolves and falls back to the stored value rather than the key.
+  Mounted in the customer ledger's `rowMeta`, the Payments tab, the Returns tab and the printed
+  statement; the supplier book's private `methodLabel` is now a one-line call to it.
+
+**i18n** — `pcusReceiveAction`, `pcusRefundAction`, `pcusDeactivateAction`, `pcusMethodCredit` in en + ur.
+
+### Decisions recorded
+
+- The repair is an **endpoint**, not a SQL file: 317 §3's reconciliation is the precedent, and the
+  same three properties are what make it safe — reported first, idempotent, no ids in the report.
+- A return posted with no customer keeps none. Deriving one from the sale would have changed the
+  refund waterfall on every cash refund against a customer with a tab — a money change this step
+  has no mandate for.
+- `pharmacy.sell` is the gate for the new row actions. It is the key the controller already
+  enforces on every customer write; a finer key would be a second opinion about the same rule.
+
+### Gates
+
+- `pnpm lint` — clean (one pre-existing unused-disable warning in `doctor-portal.repositories.ts`).
+- `pnpm typecheck` — clean, 31/31.
+- Targeted jest (the controller runs the full gate): `customers-desktop-close-371` 14/14 new;
+  333/334/335/339/363/364 + every customer/pos suite 322/322; every returns + dayclose +
+  void-purchase + unit-aware suite 223/223; `@mp/i18n` `method-word-371` + parity green.
+
+**WORK TYPE: FIX (branch fix/371-customers-desktop-close)**
