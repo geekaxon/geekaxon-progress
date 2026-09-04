@@ -26538,3 +26538,167 @@ whole build is organised so that no money is folded twice anywhere:
   EDIT `apps/web/app/globals.css` (`.mp-pdash` kit + `.mp-rep` selector extension), and the four deep-link seeds:
   `pharmacy/customers/*`, `pharmacy/suppliers/*`, `pharmacy/returns/*`, `pharmacy/pos/*`.
 - ADD `packages/ui/src/lib/dashboard-383.spec.ts`; EDIT `packages/i18n/src/messages/{en,ur}.json` (96 keys, parity clean).
+
+---
+
+## 384 — dashboard-close — DONE (2026-09-04)
+
+**WORK TYPE: FIX (branch fix/384-dashboard-close)** — the Dashboard's standing-rules pass (§1) and
+the block's sweep (§2). Schema untouched, RLS unchanged, no new endpoint, nothing written.
+
+### What the pass actually found
+
+1. **THE PAGE WAS NOT DRAWING ITS FIGURES.** `<Loading>` (303 §4) renders its children only WHILE a
+   fetch is pending. 383 put `<Kpis>`, `<Charts>` and `<Lists>` *inside* `<Loading pending={refreshing}>`,
+   so the instant the read landed `refreshing` went false and all three returned `null`: the deployed
+   first screen was a header, an attention strip and a period selector over nothing at all. Every 383
+   suite was green over it, because none of them asked what the composition renders when it is NOT
+   loading. Fixed to 303 §4's own two-line shape — the skeleton inside `<Loading>`, the figures beside
+   it — which is what `ReportsClient` has done since 303 and what this screen should have copied.
+2. **`?open=<id>` WAS A VOCABULARY NOBODY SPEAKS.** Five row links (recent sales, two shelf lists,
+   customers, suppliers) pointed at a parameter no screen in the pharmacy module has ever read, and
+   the two shelf FOOTERS pointed at `alerts?filter=…` where that screen reads `?tab=` — so *near
+   expiry* opened the LOW STOCK tab. Now: `recent-sales?sale=` (345 §2), `suppliers?supplier=`
+   (357 §2), `inventory/alerts?tab=low`, `?tab=expiry`, `?tab=expiry&bucket=EXPIRED`, and a NEW
+   `customers?customer=` deep link built as an exact copy of the supplier desk's one-hop effect
+   (opened over the whole list whatever chip it was left on; fired once per id via a ref).
+   Decision recorded: the two shelf rows go to the alerts screen's tab rather than to a per-medicine
+   drawer, because the inventory screen has no per-medicine deep link and inventing one in a closing
+   pass is a new capability, not a drift fix. It is the same destination `ATTENTION_RULES` already
+   uses for the same two conditions, so the row and the strip cannot disagree.
+3. **THE PERIOD WAS FORGOTTEN ON EVERY RELOAD.** 383 offered the control and held it in a plain
+   `useState` — 213 §7 / 314 §2's lesson a fourth time, on the screen the app opens on. `range` is
+   now the per-user store's FIFTH preference (316 §1, after 359 §2's `sort`): `UI_PREF_KEYS` and
+   `UI_PREF_VALUES` gained it in `packages/shared/src/user-ui-prefs.ts` (so the API accepts exactly
+   what the client stores — same file, both sides), `readRangeValue` decodes it, `useRangePref` in
+   `apps/web/lib/list-prefs.ts` is the hook, and the Dashboard keys both its period and its density
+   to one `LIST_KEY = 'pharmacy.dashboard'`. Only NAMED windows are storable — `custom` is refused on
+   both sides, because two frozen dates pretending to be a period is 370 §1's finding again. No
+   migration: `user_ui_preferences.pref` is a validated string column.
+4. **`Full Name (Role)` WAS HAND-JOINED.** The cashier on a sale row was `name` + `(role)` inlined in
+   two places. Now `<PersonName>` in the table cell and 317 §4's `personCredit` on the phone row —
+   311 §3's rule, one formatter, the same credit the desk this row opens prints.
+5. **THE SKELETON SKIPPED THE CHART ROW.** A period change collapsed the page by two card-heights and
+   pushed the lists up under the reader's pointer. `DashboardSkeleton` is split into
+   `AttentionSkeleton` (answered once, at first paint) and `PeriodSkeleton` (answered again on every
+   period move) — the latter now standing in for the KPI row, BOTH charts and a list, with a new
+   `.mp-pdash .skelbar--chart` at the chart's own 190px.
+
+### Verified clean during the sweep (no change needed)
+
+Realtime on all three feeds and enforced by `realtime-everywhere-343.spec.ts`; the strip and the
+period control sitting outside the period region; permissions filtered on the SERVER with nothing
+disabled anywhere; 95 `dsh*` keys present in EN and UR with identical placeholder sets, and every
+`tr(…)` argument object matching the string it fills; the `?filter=` chips on the two desks; no raw
+id in text position; colour tokens, mobile stacking and the reduced-motion stand-down.
+
+### Files
+
+`apps/web/app/(app)/pharmacy/dashboard/DashboardClient.tsx` (period region, skeletons, person credit,
+five links, per-user period), `apps/web/app/(app)/pharmacy/customers/CustomersClient.tsx` (`?customer=`),
+`apps/web/app/globals.css` (`.skelbar--chart`), `packages/shared/src/user-ui-prefs.ts` (`range`),
+`apps/web/lib/list-prefs.ts` (`useRangePref`), `apps/api/src/preferences/personalization-and-language-316.spec.ts`
+(the key list now names four), `packages/ui/src/lib/dashboard-close-384.spec.tsx` (NEW — 7 describes:
+the period region renders figures, a skeleton per block, every link against the source of the screen it
+opens, the colour rules by COMPUTED STYLE over the real cascade, mobile stacking measured at 390px,
+`Full Name (Role)` + no raw ids, and the remembered period), `docs/384-dashboard-standing-rules.md`
+(NEW — the rules table, five blocks × fifteen rules, with the decisions stated where a rule cannot apply).
+
+### Gates
+
+`pnpm lint` clean (one pre-existing unused-disable warning in `doctor-portal.repositories.ts`, untouched).
+`pnpm typecheck` clean across all 31 tasks. Unit tests written, not run (AGENT.md §4A).
+
+### Note for the next session
+
+This was the block-final step of 374 → 384 and **there is no spec 385**; the next run needs a new spec
+block. The owner still runs `verify-accounting-379.ts` and the allocation instrument on the deployed
+staging build (spec 384 §2) — those outputs open the next round. Standing sequence unchanged: the
+reseed once 368's instrument passes · Prints · final Pharmacy audit · whole-app consistency audit ·
+then Lab and Clinic.
+
+---
+
+## 385 — shell-and-stream-fixes — DONE (2026-09-04)
+
+**Type:** FIX · branch `fix/385-shell-and-stream-fixes` · spec `/specs/385-shell-and-stream-fixes.md` · no CODEREF in range.
+Three owner reports — "still old", "Reconnecting…", "Something went wrong" — were one nav registry that never retired its old rows, one SSE stream without the heartbeat, and one hook called after an early return. All three were found in source before the spec; built from the finding, not re-diagnosed.
+
+### §1 — the old Dashboard and Accounts are retired
+
+**Nav entries removed** from `packages/shared/src/nav-registry.ts`: `/dashboard` (group `core`) and `/accounts` (group `money`). Both also removed from `UNGATED_NAV_HREFS` — the 232 §1.4 suite has an "exception list is not allowed to rot" test that asserts every href on that list still exists as an entry, so the two moves are one edit or neither compiles a passing suite. The command menu reads the same registry (286 §2) and the API's page catalogue is `NAV.filter(isNavItemVisible)`, so both left search with the registry edit — verified by reading `pharmacy-shortcuts.service.ts`, not assumed.
+
+**Routes redirected** (server redirects, `next/navigation`'s `redirect()`, so the network tab records the hop):
+- `/dashboard` → `/pharmacy/dashboard`
+- `/accounts` → `/pharmacy/accounting`
+
+Query strings travel: new helper `apps/web/lib/retired-route.ts` (`withSearchParams`) re-attaches every parameter, repeated keys included, so `/dashboard?branch=b2` lands on the same branch it named. Both pages are `async` and await Next 15's promised `searchParams`.
+
+**Files deleted:** `app/(app)/dashboard/DashboardClient.tsx`, `app/(app)/dashboard/SalesChart.tsx`, `app/(app)/accounts/AccountsClient.tsx`. `grep -rn` for each export returns only the 343 audit table and three source-census specs, all updated below. The `/dashboard/*` and `/accounts/*` API modules are UNTOUCHED — retiring a screen is the web's business.
+
+**`STAFF_HOME`** (`packages/shared/src/nav-registry.ts`, re-exported from `apps/web/lib/nav.ts`) = `/pharmacy/dashboard`. Consumers: `StaffLoginForm.audienceHome`, `tenant-gate/page.tsx`, `InstallApp.HOME_PATH.staff`, `demo/DemoClient.tsx`, and the fourteen desktop "Home" breadcrumbs that each spelled `/dashboard` for themselves (Settings shell, suppliers, inventory, stock alerts, customers, purchases ×2, returns ×3, recent sales, accounting, expenses, profit, overview). The later Roles → default-page spec changes this constant's value or its consumer; it does not add a literal.
+
+**Not changed, deliberately:** `tenantRoleHome()` in `packages/ui/src/lib/surface-routing.ts` still answers `/dashboard` for staff. It is edge middleware logic and the module is deliberately import-free (no `@mp/shared`) so it stays edge-safe; the redirect carries it. Recorded here so the next reader knows it was a decision.
+
+**PWA:** staff `start_url` moved to `/pharmacy/dashboard` in both `apps/web/public/manifest-staff.webmanifest` and `packages/ui/src/lib/pwa.ts`. The manifest `id` stays `/dashboard` — an installed PWA is keyed by its id, and moving it would orphan every device the staff app is already on.
+
+**i18n:** deleted `navDashboard`, `navAccounts` and `navSub.dashboard`, `navSub.accounts` from EN and UR. Neither route appeared in `ROUTE_TITLE_KEYS` / `ROUTE_SUBTITLE_KEYS` (those hold only the three sub-route headings 301/308 added), so nothing to remove there. The retired islands' BODY keys (`dash*`, `acct*`) were left: the catalogue already carries ~1200 keys no source references, and a sweep of that size in a fix round is a bigger risk than the dead weight.
+
+### §2 — the Administration group is trimmed
+
+**Removed from the registry:** `/admin/roles`, `/admin/users`, `/admin/brand`, `/admin/consent`, `/admin/import`, `/admin/sync`, `/admin/flags`, `/admin/ai-cost` — and the same eight off `UNGATED_NAV_HREFS`. The group now shows Audit log, Notifications and Settings.
+
+**Redirected:** `/admin/roles` → `/settings?s=roles`; `/admin/users` → `/settings?s=users`; `/admin/brand` → `/settings?s=general`. The `general` id is the section that MOUNTS `BrandingSection` (`GeneralSection.tsx` renders it; there is no `branding` id in `settings/registry.tsx`) — read off the registry, never invented.
+
+**Deleted:** `app/(app)/admin/{consent,import,sync,flags,ai-cost}` entire directories (pages + `ConsentManager`, `ImportWizard`, `SyncDemo`, `FlagManager`, `AiCostClient`). The routes now 404 through the app's own not-found. The API modules behind them stay: Consent and Flags are always-on infrastructure (ARCHITECTURE §3–§4) and the vendor console still drives flags.
+
+**Kept on disk:** `admin/roles/RoleManager.tsx`, `admin/users/UserManager.tsx`, `admin/brand/BrandManager.tsx`. The spec lists deletions for five routes and these three are not among them; two existing suites (275, 307) read them as source. They are unreferenced by any route now.
+
+**UNUSED AFTER 385** — kept, not deleted, because a role/permission name is a contract with stored role rows:
+- `ADMIN_ROLES` in `nav-registry.ts` — its three consumers (`/admin/roles`, `/admin/users`, `/admin/import`) left the registry. Exported so it stands without tripping `no-unused-vars`. (`settings/registry.tsx` has its own copy, still in use by four Settings panes.)
+- Permissions that now gate no nav row: `flags.manage`, `brand.manage`, `consent.manage`, `sync.inspect`, `ai.budget.manage`. Every one still gates its API surface.
+
+**Dead-link sweep** (each grepped): the shell's ungated hrefs (`AppShell.ACCOUNT_HREFS` — `/settings`, `/admin/notifications`, both alive), the command menu (registry-driven), the mobile More sheet (`staffMobileTabs`, registry-driven), the shortcuts overlay (`getSlots` already nulls any stored href not in `NAV`, so a tenant slot pointing at `/admin/users` self-heals). One real find outside the sweep: `notifications.realtime.service.ts` raised `CREDIT_OVER_LIMIT` with `href: '/accounts'` — repointed to `/pharmacy/accounting`.
+
+**Carried, not dropped:** 322 §1 required the money surface to register a pull-to-refresh loader; that surface is `/pharmacy/accounting` now, so `useScreenRefresh(load)` moved onto `AccountingClient`. Without it the guarantee would have died with the page.
+
+### §3 — every SSE stream carries the heartbeat
+
+**The fix.** `RecentSalesRealtimeStream.stream()` (`apps/api/src/pharmacy/pharmacy.sale-events.ts`) now returns through `withSseHeartbeat`, exactly as the POS stream, the bell and Settings do. Without it the response had sent no byte, the proxy forwarded nothing, the browser's `fetch` never resolved, and the chip read "Reconnecting…" for the life of the page while every committed sale went to a subscriber nobody was reading.
+
+**A SECOND stream was missing it**, found by the new test and not by the spec: `PlatformRealtimeService.stream()` (`apps/api/src/vendor/platform-notifications.service.ts`) — the vendor console's bell. It loads the admin's permission context before it can emit anything, which is precisely the shape a proxy sits on. Wrapped.
+
+**The standing rule, made greppable:** `apps/api/src/notifications/sse-heartbeat-385.spec.ts` walks every `.ts` under `apps/api/src` for `@Sse(`, extracts the handler body by brace-matching, and asserts it references `withSseHeartbeat` either inline or in the service method it delegates to (it resolves `this.<prop>.<method>()` through the constructor's declared type to the class file). Five handlers found; all five pass. A guard test asserts the walker finds at least five, so it can never pass vacuously.
+
+**The label was wrong too (§3.3).** `liveFeedState()` returned `reconnecting` for every not-connected state, including one the server had REFUSED (292 §2.3 stops the loop on 401/403/404). Now:
+- `LiveStreamListener` gained `onRefused`; `runStream` emits it at the refusal and `subscribeStream` fires it for a listener joining an already-refused connection.
+- All five hooks (`useLiveStream`, `useStockLive`, `useDeskLive`, `useSaleLive`, `useSettingsLive`) return the new `LiveStreamStatus` = `{ connected, refused }`.
+- `LiveFeedState` gained a fourth value `'off'`; `liveFeedState({ refused })` checks it first, since a refused stream is a disconnected one too.
+- The chip (`RecentSalesClient`) renders `off` as **"Live updates off"** (`prsLiveOff`, EN + UR) on the resting `liveind--paused` skin, never "Reconnecting…". A `liveind` grep finds exactly one chip in the app, so that is every screen that draws one.
+
+**Streams per screen, for the staging check** — Recent sales, Dashboard, Day close, Reports, Accounting (+ Overview, Profit, Expenses) subscribe `/pharmacy/recent-sales/stream` via `useSaleLive` and/or the merged tenant stream `/pharmacy/stream` via `useDeskLive`/`useStockLive`; Customers and POS ride the merged stream via `useLiveStream`; Settings panes ride `/pharmacy/settings/stream`. All are now heartbeat-backed.
+
+### §4 — Settings → Pricing crashes on load
+
+React #310. `GlobalDiscountSection` returned early on `failed` / `!rules` and then called `useCallback` (`closeDraft`) two hundred lines below: N hooks while loading, N+1 once loaded. `closeDraft` moved above both guards — it was the only hook below them; every other hook (`usePermission`, `useMobileTier`, seven `useState`s, `useCallback load`, two `useEffect`s, `useSettingsLive`, `useMemo conflicted`, `useSectionSub`) was already above.
+
+`react-hooks/rules-of-hooks` is now an **error** in `eslint.config.mjs` over `apps/**` and `packages/**` (new root devDependency `eslint-plugin-react-hooks@^5.2.0`, registered by hand rather than via a preset so the version's config-export shape does not matter). **Lint-fix count: 2** — both in `PharmacyInventoryClient.tsx`, one cause: a plain handler named `useTyped` called from two JSX callbacks, which to the linter and to a reader is a hook called conditionally. Renamed `takeTyped`. Nothing else in the repo violates the rule.
+
+### Tests updated (source-census suites that named a file or a row that moved)
+
+- `apps/api/src/pharmacy/realtime-everywhere-343.spec.ts` — eight rows removed from the AUDIT table with the files they described; the table-vs-tree equality test was re-verified by walking `(app)` and diffing against the table keys (0 missing, 0 stale).
+- `packages/ui/src/lib/app-polish-322.spec.tsx` — the two retired screens' refresh registrations repointed at `pharmacy/dashboard` and `pharmacy/accounting`.
+- `packages/ui/src/lib/realtime-completion-299.spec.tsx`, `realtime-and-push-291.spec.tsx` — `DASHBOARD` now names 383's screen.
+- `packages/ui/src/lib/package-nav-gating-and-identity-fixes.spec.tsx`, `rx-desk-gating-and-pwa-focus.spec.tsx` — the pharmacy tenant's home row is `/pharmacy/dashboard`.
+- `apps/api/src/pharmacy-shortcuts/command-menu-and-keyboard-286.spec.ts` — "a role-gated admin page" became "an admin page … does not hold its key" over `/admin/audit` + `audit.view`; no registry entry carries `roles:` any more.
+- `packages/ui/src/lib/recent-sales-close-367.spec.tsx` — the `between()` end marker follows the hook's new return.
+- `packages/ui/src/lib/stock-alerts-screen-polish.spec.ts`, `client-nav-and-layer-gestures.spec.tsx` — the Home crumb is `{STAFF_HOME}`.
+- `apps/api/src/pharmacy/recent-sales.spec.ts` — new case: refused ⇒ `off`, and an ordinary drop is still `reconnecting`.
+
+### Gates
+
+`pnpm prisma generate` (the plugin install refreshed `node_modules`), then `pnpm typecheck` — 31/31 green — and `pnpm lint` — 17/17 green, 0 errors. The one warning (`doctor-portal.repositories.ts:220`, unused eslint-disable) was confirmed pre-existing by re-running the previous config against that file. `pnpm test:unit` / `build` not run here by standing rule; the controller runs the full gates.
+
+### Verification is a browser run, not a passing test
+
+Deploy to staging, then on the deployed pages: one dashboard icon and one accounting icon in the sidebar; `/dashboard` and `/accounts` recording a 307 in the network tab; `/` after login landing on `/pharmacy/dashboard`; exactly one "Dashboard" and one "Accounting" in the command menu; the three Settings redirects opening the named section; Recent sales reading "Live" within 3s with a first frame received and the connection held past 90s, and a sale rung on device B appearing on device A unrefreshed; Settings → Operations → Pricing opening with a clean console.
