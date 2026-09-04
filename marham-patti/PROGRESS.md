@@ -7,13 +7,13 @@
 ## Current build-step
 Phase 45 — the fix round after the Phase 44 owner test (385–388), each on its own `fix/*` branch.
 
-**Last completed:** **385 — shell-and-stream-fixes** — DONE (2026-09-04)
+**Last completed:** **386 — inventory-alert-rules** — DONE (2026-09-04)
 
-**Next:** **386 — inventory-alert-rules** — /specs/386-inventory-alert-rules.md
+**Next:** **387 — customers-fix-round** — /specs/387-customers-fix-round.md
 
 ### Recent steps
+- **386 — inventory-alert-rules** — DONE (2026-09-04) — empty is not low, and the shop writes its own reasons for stock going missing.
 - **385 — shell-and-stream-fixes** — DONE (2026-09-04) — one dashboard, one ledger, the live feed's heartbeat, hooks before guards.
 - **384 — dashboard-close** — DONE (2026-09-04) — the dashboard's standing-rules pass, and the page that was not drawing.
-- **383 — dashboard** — DONE (2026-09-04) — the dashboard, and only what is true.
 
 > Older steps in PROGRESS-HISTORY.md

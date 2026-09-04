@@ -26702,3 +26702,130 @@ React #310. `GlobalDiscountSection` returned early on `failed` / `!rules` and th
 ### Verification is a browser run, not a passing test
 
 Deploy to staging, then on the deployed pages: one dashboard icon and one accounting icon in the sidebar; `/dashboard` and `/accounts` recording a 307 in the network tab; `/` after login landing on `/pharmacy/dashboard`; exactly one "Dashboard" and one "Accounting" in the command menu; the three Settings redirects opening the named section; Recent sales reading "Live" within 3s with a first frame received and the connection held past 90s, and a sale rung on device B appearing on device A unrefreshed; Settings → Operations → Pricing opening with a clean console.
+
+## 386 — inventory-alert-rules — DONE (2026-09-04)
+
+**Type:** FIX. Branch `fix/386-inventory-alert-rules`. Spec `/specs/386-inventory-alert-rules.md`. No CODEREF covers 386.
+
+### §1 — Zero is out of stock, not low
+
+`belowMinStock` documented *"zero on-hand is out-of-stock, surfaced separately"* and then returned
+`q <= minStock`, which is true at zero. Duphalac at 0 therefore sat in Low stock wearing a red pill
+and was counted in both buckets at once. The rule is now enforced at the source and the two sets are
+disjoint by construction:
+
+    lowStock ⇔ 0 < qty ≤ minStock   ·   outOfStock ⇔ qty = 0
+
+`packages/shared/src/pharmacy-inventory.ts` gained two named halves so nothing spells the predicate
+for itself: `isOutOfStock(qty)` (the empty shelf) and `needsReorder(qty, minStock)` (their UNION —
+"which shelf must be bought", which is a different question and the only one that wants zero folded
+in). `belowMinStock` and `isLowStock` are now strictly LOW.
+
+**Every low/out derivation site, traced and settled:**
+
+| site | what changed |
+| --- | --- |
+| `packages/shared/src/pharmacy-inventory.ts` | `belowMinStock` + `isLowStock` exclude zero; `isOutOfStock` + `needsReorder` added; `inventoryStats` asks the two predicates independently (the `else` that held them apart by hand is gone) |
+| `packages/shared/src/pharmacy-reports.ts` | `stockReport` — same two independent predicates |
+| `apps/api/src/pharmacy/pharmacy.service.ts` `inventoryList` | row `lowStock` / `outOfStock` read the pair; the hand-written `qty > 0 &&` removed |
+| …`medicineDetail` | `lowStock`, `outOfStock` and `banner.outOfStock` resolved once, into the two locals the drawer reads |
+| …`lowStock()` | rows are LOW ONLY; empty shelves moved to a new `outOfStockRows` + `outOfStock` count on `LowStockView`; `totalCostToReorder` sums low rows alone (§1.3) |
+| …`scanAlerts` | raises LOW_STOCK over `rows ∪ outOfStockRows`, so a shelf that empties still notifies |
+| …`adjustStock` `lowStockReached` | `needsReorder` — an adjustment that empties the shelf has crossed the reorder line |
+| …low-stock-on-sale crossing (292) | `needsReorder`, so the sale that takes the LAST strip still fires |
+| `apps/api/src/pharmacy/pharmacy.repositories.ts` | nav-count loop (two independent `if`s); the export's `lowStock=1` filter left on the LOW predicate, commented |
+| `apps/api/src/pharmacy/__fakes__.ts` | the same two, so the fake and Prisma answer alike |
+| `apps/api/src/pharmacy-inventory/pharmacy-inventory.service.ts` (legacy 28) | list `lowStock` flag, the reducing-adjustment notification and the alerts list — each dropped its own `qty > 0` |
+| `apps/api/src/pharmacy-dashboard/dashboard.service.ts` | the attention strip's LOW_STOCK `secondary` and `totals.lowStockOutOfStock` read `lowStock.outOfStock` instead of re-deriving from the rows |
+| `apps/web/.../inventory/PharmacyInventoryClient.tsx` | §1.4 — the drawer's stock pill. It was handed `detail.medicine`, a `MedicineView` carrying NONE of `outOfStock` / `lowStock` / `expiryBand`, so every rung read `undefined` and the ladder fell through to "In stock" an inch under the red "Out of stock" banner. `statusOf` now takes a `StatusSignals` shape and the drawer builds it from the same flags the banner reads |
+| `apps/web/.../inventory/alerts/StockAlertsClient.tsx` | no derivation to fix — the payload contract is documented instead (rows are low-only; the designed Out-of-stock tab is a later spec and is deliberately not drawn) |
+
+Untouched because they were already right: `inventoryUrgency` (resolution order over counts it is
+handed), `StockAlertsClient.stockBar`, the legacy `InventoryClient` (reads the flag).
+
+Test added: `pharmacy-inventory-helpers.spec.ts` — `{0,10}` is out and not low, `{10,10}` is low,
+`{11,10}` is neither, `{0,null}` is out; plus an exhaustive cross-product asserting the two sets never
+intersect, and the `needsReorder` union. `isLowStock(0)` flipped to `false` in the existing assertion.
+
+### §2 — Adjustment reasons become a Settings list
+
+Owner, 4 Sep: *"Reasons set in Settings exactly like returns; only Other needs a note; the rest
+optional."*
+
+**Schema / migrations.** No new table: `ReturnReasonOption` already IS the shape, so it carries a
+THIRD kind. `ReturnReasonKind` gains `ADJUSTMENT`; the model gains `adjustCode AdjustType?
+@map("adjust_code")` — what an adjustment option posts on the frozen enum, the way `code` does for a
+return. TWO migration files, because Postgres refuses to use a new enum label in the transaction that
+added it (the repo's own convention since 51/55/63):
+
+* `20260908000000_adjustment_reason_kind` — the enum value + the column.
+* `20260908010000_adjustment_reason_seed` — the four options backfilled for every existing tenant,
+  `ON CONFLICT DO NOTHING` on the existing `(tenant_id, kind, label)` unique. FORCE RLS is lifted for
+  the length of the INSERT and restored immediately after (the 61/90 trap: a migration holds no
+  `app.tenant_id`, so under FORCE the backfill would write into a table it cannot see); RLS itself is
+  never disabled and no policy is touched.
+
+**Seed site REUSED, not duplicated.** 316 deliberately seeds reason lists LAZILY on first read rather
+than in the tenant-creation path (see `ReturnReasonsService`'s header: two paths that must agree
+forever, and a tenant created between the migration and the deploy would get neither). That seeder IS
+the tenant-create path here, so `ADJUSTMENT` is one more entry in its `missing` array and there is no
+second seeder anywhere. `DEFAULT_ADJUSTMENT_REASONS` in `@mp/shared`: Damage→DAMAGE,
+Expiry write-off→EXPIRE, Count correction→CORRECTION, Other→OTHER (free text).
+
+**Types.** `ReasonKindLit = ReturnKindLit | 'ADJUSTMENT'` is its own type — `ReturnKindLit` is the
+returns screen's segmented toggle, `sourceHref`, type pill and number prefix, and an adjustment is
+none of those. `isReasonKind` gates the endpoints; `isReturnKind` is untouched.
+
+**API.** `GET/POST/PUT /pharmacy/settings/return-reasons` accept `kind=ADJUSTMENT` on the same
+`pharmacy.settings.manage` write gate and the same flag-only read gate; `lists()` answers
+`{sale, purchase, adjustment}`. `POST /pharmacy/inventory/adjustments` accepts `reasonOptionId`;
+`PharmacyService.resolveAdjustReason` resolves `type` from the option's `adjustCode`, refuses a
+deactivated option or an unknown id, and enforces the free-text rule server-side — an `isFreeText`
+option refuses a blank note with the message key `pinvAdjNoteRequired`, every other option accepts an
+absent one. The stored `StockAdjustment.reason` snapshots the option's LABEL (`adjustReasonPost`), so
+a rename never rewrites history. A caller that still posts a raw `type` (an offline replay queued
+before the deploy) keeps the old contract exactly, note included; `ReturnReasonsService` is injected
+`@Optional()` for the same frozen-logic reason the five realtime feeds are.
+
+**Settings.** New section `adjustment-reasons`, filed beside Units and Categories under `pharmacy`
+with their gates and a `sliders` glyph. It MOUNTS the returns list — the wired wrapper moved out of
+`ReturnsSection` into `sections/ReasonList.tsx`, so all three lists are one component with one
+endpoint, one cache invalidation and one live subscription. Only the title, the hint and the row's
+one-line sentence differ by kind. No third copy of the editor exists.
+
+**Adjust dialog.** The local `ADJUST_REASONS` constant is deleted; the select is fed by
+`useReturnReasons('ADJUSTMENT')` (active, in `sortOrder`, the tenant's own labels). The Note field
+shows *Required* only under the free-text option and *Optional* otherwise, in the same slot so the
+label does not shift; the inline error follows the same `reasonNeedsNote` the API refuses with. The
+placeholder is now *"What happened — e.g. 3 strips crushed in the drawer"* — the purchase-order
+example is gone, because an adjustment never records a receipt (28 §3.1). `@mp/shared`'s
+`ADJUST_REASONS` survives as what it now actually is, an accept-list for the legacy raw-`type` path,
+and its docstring says so.
+
+**Realtime (§2.6).** `useReturnReasons` now subscribes to the 375 §1 settings stream itself:
+`clearReturnReasonsCache()` only ever reached the tab the edit was made in, and the manager renaming
+*Damage* is rarely at the counter about to file a write-off under it. The subscription carries that
+stream's own `pharmacy.settings.manage` gate, so a seat that cannot manage settings holds no socket
+that would be refused and simply reads the list per session as before.
+
+**Design.** One new CSS rule: `.cxdialog .field__label .field__req`, mirroring the `.opt` rule beside
+it, because the Note label now toggles between the two marks. Everything else is existing anatomy —
+`SetCard`/`SetField` via `ReasonListEditor`, `SearchSelect`, the `pill` status ladder. Nine new i18n
+keys in both `en` and `ur`; `pinvAdjNotePlaceholder` reworded in both.
+
+### Decisions worth keeping
+
+* `LowStockRow.outOfStock` STAYS on the row rather than being deleted: it now says which of the two
+  disjoint lists a row came from, which keeps the alerts table's pill honest and leaves the designed
+  Out-of-stock tab (a later spec) something to render.
+* `lowStock()`'s out-of-stock population is the REORDER DESK's — medicines with a `minStock`
+  configured. Inventory's stat-strip out-of-stock chip stays the whole catalogue. "What is empty" and
+  "what that I track is empty" are two questions; both are stated, neither is fudged.
+* A tenant-ADDED adjustment reason posts `OTHER` on the frozen enum and carries its own label. The
+  enum is never extended — a database enum the tenant can grow is a migration every shop would need.
+
+### Gates
+
+`pnpm prisma generate` ✓ · `pnpm typecheck` ✓ (31/31) · `pnpm lint` ✓ (0 errors; the one warning is a
+pre-existing unused eslint-disable in `doctor-portal.repositories.ts`, untouched here). `test:unit`,
+`test:e2e` and `build` are the controller's per the standing rules.
