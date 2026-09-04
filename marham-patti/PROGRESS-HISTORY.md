@@ -26428,3 +26428,113 @@ the permission the ledger READ asks for.
 `pnpm lint` clean (one pre-existing unrelated warning in `doctor-portal.repositories.ts`).
 `pnpm typecheck` clean, 31/31. Per CLAUDE.md the agent did not run `test:unit` / `build`.
 Vendor untouched; no schema change, so no `prisma generate` needed.
+
+---
+
+## 383 — dashboard — DONE (2026-09-04)
+
+**WORK TYPE:** FEATURE · branch `feature/383-dashboard` · spec `/specs/383-dashboard.md` · no CODEREF (none exists for 383).
+Mockups: `specs/mockups/pharmacy/dashboard-desktop.html` + `dashboard-mobile.html`. **Schema: none — every route added is a read.**
+
+### The shape of the step
+The Dashboard assembles; it does not calculate. Spec §2's first acceptance line ("every card and list figure
+equals its home screen's figure for the same period") is a property of PROVENANCE, not of arithmetic, so the
+whole build is organised so that no money is folded twice anywhere:
+
+- **API** — new `apps/api/src/pharmacy-dashboard/` (constants, view, service, controller, module, spec), a thin
+  module with **no repository, no clock and no writes**. It imports `PharmacyModule` (109's period fold, 377's
+  expected-cash ladder, the shelf alerts, held sales, the two desks' headers) and `AccountingModule` (381's
+  profit statement + its revenue-by-account split), and arranges what they return. Registered in `app.module.ts`
+  beside — and deliberately distinct from — spec 24's `DashboardModule` owner cockpit.
+- **Endpoint** — `GET /pharmacy/dashboard?range=today|week|month|custom&from&to`, parsed by the REPORTS hub's own
+  `parseReportsQuery`, so "this month" means one thing across the two screens and a custom span is validated once.
+- **Shared** — new `packages/shared/src/pharmacy-dashboard.ts`: the strip's rules table (severity, href, `anyOf`
+  permission gate), `buildAttentionStrip`, `visibleAttention`, `QUICK_ACTIONS` / `visibleQuickActions`,
+  `dashboardSlices`, `deltaPct`, `unitsPerSale`. The server decides what to send with the same functions the
+  client draws with, so a role's dashboard cannot come out one shape on the server and another in the browser.
+- **Web** — `apps/web/app/(app)/pharmacy/dashboard/` (page, `DashboardClient`, `DashboardDonut`). The trend chart
+  is the Reports hub's own `ReportsCharts` module, imported dynamically — one drawing, two screens. Kit CSS added
+  under **`.mp-pdash`** (NOT `.mp-dash`, which spec 24's cockpit already owns), reusing the `.mp-rep` card/chart/
+  split families by extending their selector lists rather than copying them.
+- **Nav + i18n** — `/pharmacy/dashboard` added to `nav-registry` at the head of the pharmacy group; 96 new keys in
+  EN and UR (parity verified).
+
+### Decisions recorded
+1. **No class-wide `@RequirePermission`.** The seed roles do not nest: MANAGER holds neither `pharmacy.sell` nor
+   `pharmacy.cashier`; CASHIER holds `pharmacy.cashier` and not `pharmacy.sell`; PHARMACIST holds both and not
+   `pharmacy.day.close`. Any single key as the gate would 403 one of the three people the mockup draws this
+   screen for. So the class is gated by the `pharmacy.pos` FLAG, the caller's effective keys are resolved per
+   request in the controller, and **every section is decided against them before anything is read** — an
+   unreadable figure is never computed, let alone sent. A reader with no pharmacy key gets an empty dashboard,
+   not a refusal. The nav entry declares no `requiredPermission` for the same reason (unique in the registry;
+   documented inline there).
+2. **Permission map for the strip and the actions** (`anyOf`, an OR): day-open → cashier / day.close / day.open;
+   expired + near-expiry → stock.adjust / inventory.manage; supplier baqaya → accounting.view / purchase.manage
+   (381 §2 put that position behind exactly that key); customers over limit → accounting.view; low stock →
+   sell / cashier / inventory.manage; returns pending → return.approve; held → sell / cashier. Actions: new sale
+   → sell; new purchase → stock.adjust / purchase.manage; adjust stock → stock.adjust; close day → day.close.
+   This reproduces the mockup's Cashier state (four attention items filtered out, profit absent entirely).
+3. **Profit is absent for a role without `pharmacy.accounting.view`**, and the held-sales card takes its place —
+   the mockup's own rule. The payment-method donut rides the same key, because the split names the shop's bank
+   and wallet accounts.
+4. **The attention strip is always NOW.** The period selector rewrites all four KPIs, the trend, the donut and
+   the top-10 and never the strip: expired stock is not a fact about last month. Pending returns are date-free
+   per 370 §2 for the same reason.
+5. **Deltas: sales only.** `PharmacyService.periodSalesSummary` reads the sale headers once and hands them to the
+   SAME `salesSummary` fold the Reports hub uses, giving the Sales card its "vs last period". Profit and
+   items-sold carry `delta: null` on purpose — comparing them needs the previous window's LINE costs, i.e. a
+   second full costing pass on every realtime re-read, to decorate a card with a chip. `deltaPct` already models
+   "no comparison" as null rather than an invented 0%, and the card renders without the chip.
+6. **Per-cashier "my sales / my drawer" not implemented.** The mobile mockup's Cashier variant re-scopes the KPI
+   cards to that person's own shift. The drawer card already does this for free (`dayPeriodCloseView` resolves
+   the caller's own period in PER_CASHIER mode); a range-scoped per-cashier SALES figure has no home screen to
+   agree with, and §2's acceptance is parity with home screens. The permission-shaped filtering §1/§2 do require
+   is fully implemented. Recorded as a deliberate deviation.
+7. **Deep links go to the ALREADY-FILTERED list.** Inventory alerts already read `?tab=`/`?bucket=`. Customers,
+   Suppliers, Returns and the POS held-sheet did not, so each now seeds its existing chip/sheet state once from
+   the query (`?filter=over`, `?filter=overdue`, `?filter=pending`, `?held=1`) and owns it thereafter; their
+   `page.tsx` gained the `<Suspense fallback={null}>` boundary `useSearchParams` requires (the pattern already
+   used by `inventory/alerts/page.tsx`). No other behaviour on those screens changed.
+8. **Two additive changes to existing folds**, both to avoid a second calculation: `PharmacyService.reports()`
+   takes an optional `topLimit` (default 5, unchanged for the hub; the Dashboard passes 10 for its top-10 bar
+   chart), and `TopSelling` gained `distinct` — the count of products the period moved, which cannot be
+   recovered from a ranking that has been cut to its limit and which the *Items sold* card states.
+9. **`pendingReturnsCount`** added to `PharmacyService`: `listReturns` reads every lot behind every return so a
+   row can say whether the goods came back expired, which a strip counting one number has no use for. The count
+   applies the SAME predicate over the same two header lists (sale return PENDING; purchase return's own
+   `pendingApproval` flag — 341 §2's reason the two kinds cannot share a status test).
+10. **Overdue baqaya is the Purchases desk's own reading** — an invoice with `owed > 0`, not voided, whose
+    `dueAt` has passed — counted over that desk's rows, so "2 suppliers overdue" here and there are the same two.
+11. **A missing donut slice is absent, not zero**, and the clear strip is one line whose sentence NAMES every
+    condition checked — the difference between "nothing is wrong" and "nothing has loaded". Two shelf lists
+    disappear entirely when there is nothing to list; the page gets shorter, not emptier.
+
+### Tests written
+- `apps/api/src/pharmacy-dashboard/dashboard-383.spec.ts` — the pure folds (only-what-is-true, danger→warn→info
+  ranking, the Cashier's four filtered items, quick-action re-flow, zero-slice drop, null delta) plus a
+  PROVENANCE suite over the service with both composed services stubbed: the POS totals, 381's profit, 377's
+  ladder (which still adds up on the card), the desks' positions and the donut all arrive unchanged; the payload
+  is permission-shaped (profit never sent AND never computed for a cashier; the two books never read); a missing
+  open day leaves the drawer card absent rather than failing the screen.
+- `packages/ui/src/lib/dashboard-383.spec.ts` — what a fold cannot answer: the on-screen ORDER (strip before
+  KPIs before charts before lists, and the strip outside the period-driven region), no `disabled` in the action
+  row and no permission re-decision in the browser, EN+UR for every key the screen can render, the clear line
+  naming its conditions, the `.mp-pdash` scope and its reuse of the reports kit, both charts dynamically
+  imported, and a gated module that writes nothing.
+
+### Gate results
+- `pnpm typecheck` — **PASS** (31/31 tasks).
+- `pnpm lint` — **PASS** (0 errors; the single pre-existing warning in `doctor-portal.repositories.ts` is
+  untouched by this step). Web design-drift, token-integrity, tenant-english-only, search-select and page-title
+  checks all green.
+- `pnpm test:unit` / `pnpm build` not run here by standing rule; the controller runs the full gates.
+
+### Files
+- ADD `packages/shared/src/pharmacy-dashboard.ts`; EDIT `packages/shared/src/index.ts`,
+  `packages/shared/src/pharmacy-reports.ts` (`TopSelling.distinct`), `packages/shared/src/nav-registry.ts`.
+- ADD `apps/api/src/pharmacy-dashboard/{dashboard.constants,dashboard.view,dashboard.service,dashboard.controller,dashboard.module,index,dashboard-383.spec}.ts`;
+  EDIT `apps/api/src/app.module.ts`, `apps/api/src/pharmacy/pharmacy.service.ts` (`topLimit`, `periodSalesSummary`, `pendingReturnsCount`).
+- ADD `apps/web/app/(app)/pharmacy/dashboard/{page,DashboardClient,DashboardDonut}.tsx`;
+  EDIT `apps/web/app/globals.css` (`.mp-pdash` kit + `.mp-rep` selector extension), and the four deep-link seeds:
+  `pharmacy/customers/*`, `pharmacy/suppliers/*`, `pharmacy/returns/*`, `pharmacy/pos/*`.
+- ADD `packages/ui/src/lib/dashboard-383.spec.ts`; EDIT `packages/i18n/src/messages/{en,ur}.json` (96 keys, parity clean).
