@@ -26197,3 +26197,69 @@ keyboard preset because it is not a list surface.
 `doctor-portal.repositories.ts`, untouched by this step). `pnpm test:unit` / `build` are the controller's, per
 the standing rules. Vendor untouched; no schema change, so no migration and no `prisma generate` beyond the
 build's own.
+
+---
+
+## 379 — accounting-ledger — DONE (2026-09-04)
+
+**Branch:** `feature/379-accounting-ledger` (WORK TYPE: FEATURE). Spec: `specs/379-accounting-ledger.md`. No CODEREF covers 379.
+
+### What was built
+
+**One ledger, read from the rows that already exist.** `GET /accounting/ledger?from&to[&vertical&account&category&counterparty&q]` returns a period's whole money book: the opening balance, every row with its running balance, the filter chips' options with tallies, and the narrowed slice. Nothing is copied into a new table and nothing is written — the module has no `create`/`update`/`delete` and no POST route, which the suite greps for.
+
+**The seven sources, unioned once.** `packages/shared/src/accounting-ledger.ts` holds the whole vocabulary and both pure folds: `toLedgerRows` (what a source row is worth) and `buildAccountingLedger` (what the book does with it), plus `filterAccountingLedger` / `accountingRowMatches` / `accountingLedgerFacets`. Streams: sale tender legs (313 §2), sale-return refunds (336), supplier payments and their reversals (270 §1.2), purchase-return credit notes (304 §1.2), customer payments / refunds / reversals (107 / 334 §2 / 363 §2), drawer movements (376 §3), stock write-offs (342). `EXPENSE` is declared in the kind union so 380 does not re-open the vocabulary.
+
+**The direction rule, decided once.** This book's balance is money the business is HOLDING, so IN takes it up (green) and OUT takes it down (amber) — the inverse of the supplier and customer books, whose balance is what somebody owes. The client asks `<LedgerAmountCell>` for `debit={flow === 'OUT'}`, which is documented as "which way this entry moved the balance", so one colour vocabulary serves all three books and the Pro columns still read as the cash account does (money in = Debit). Measured through the real cascade, not grepped.
+
+**Four judgements about what is money** (the whole correctness of the screen, all in `toLedgerRows`):
+1. a `CREDIT` tender leg is udhaar — a balance, not a rupee — on a sale AND on a customer payment;
+2. a sale void's compensating customer payment is written CASH-and-positive by 313 §4 and is still not money: `isSaleVoidCreditRestore` (313's own published predicate) excludes it;
+3. a refund counts for `refundTotal − ledgerCredit` — what left the till — with the udhaar leg read back off the posted row (341 §3), never re-derived through the waterfall;
+4. a void is a reversing ROW synthesised from the void stamp (voiding writes no reversing payment row), never an erasure.
+A sale committed before 313 §2 has no payment rows at all; one stand-in row of `total − creditAmount` keeps the oldest takings in the book.
+
+**`reversed` vs `paired`.** A reversed pair nets to nothing, so neither half moves the running balance and both print the figure from the row before them. But a sale rung in August and voided in September took real money in August: `reversed` decides the INK (struck, muted, on both halves) and `paired` — is the other half in THIS book, matched by row key — decides the ARITHMETIC. The period read therefore takes either end of a document (`createdAt` in window OR `voidedAt` in window) and flags which half it has (`soldInPeriod` / `voidedInPeriod`, `refundedInPeriod` / `voidedInPeriod`), so a reversal of an older sale appears and its takings are not re-counted.
+
+**Filters compose, and none of them touches a balance.** The balance is carried over the WHOLE period before any chip is pressed; a filter hides rows and never re-runs the arithmetic (the mockup's own "nothing is hidden and nothing is recalculated"). The screen narrows in the browser with `accountingRowMatches` — the server's own predicate — so pressing a chip re-renders and never re-fetches, exactly as 314 §2 requires of the Simple/Pro switch. Facets are derived from the period's rows, so a retired account is offered while a row still names it and an unused one is not offered at all.
+
+**Schema.** Migration `20260906000000_ledger_vertical`: one new enum `LedgerVertical` (PHARMACY / CLINIC / LAB / BUSINESS — the fourth is "whole business", what rent, payroll and a bank deposit are filed under) and one `vertical` column, `NOT NULL DEFAULT 'PHARMACY'`, on `sales`, `sale_returns`, `customer_payments`, `supplier_payments`, `purchase_returns`, `cash_movements`, `stock_adjustments`. Additive only: no table created, none dropped, no column retyped, and the default IS the backfill (every existing row is a pharmacy row). All seven tables are already under the canonical forced RLS from 02 and a policy bounds rows rather than columns, so the new column is fail-closed from the instant it exists — there is no new `apply_tenant_rls` call to forget. Four indexes added on the money's own date (`paid_at`, `received_at`, `recorded_at`, `created_at`), because ordering on `created_at` would file a back-dated payment on the day somebody typed it.
+
+**DECISION — the vertical is a COLUMN, not a derivation.** Inferring it from the table a row came out of ("sales are Pharmacy") is wrong the first day a clinic consultation or a lab panel settles at the same counter, which is precisely what "Pharmacy, Clinic and Lab in one ledger" means, and it is unfixable afterwards because the fact was never recorded.
+
+**DECISION — its own permission, `pharmacy.accounting.view`, gated on `pharmacy.pos`.** Not `pharmacy.sell`: a cashier who rings a sale and reprints a slip is not thereby somebody who may read the month's takings across every counter (237 §2 drew that line for the sales feed). Not `accounts.view`: that opens spec 23's double-entry chart under `accounting.full`, and 379's first locked line is "not double-entry". Defaults: MANAGER and FINANCE written; TENANT_OWNER holds every tenant key by construction; the counter roles get none.
+
+**DECISION — its own module, `apps/api/src/accounting/`.** Not another surface on `PharmacyModule` (380–382 land expenses, profit and the export here, and none of them belongs to the till) and not `AccountsModule` (that is 23's double-entry ledger).
+
+**DECISION — descriptions are a KEY plus its values, never a server-composed sentence**, so the ledger reads in Urdu as well as English. The search box looks through the VALUES (a medicine name, a reason, a slip number) and never the key, which the suite proves by searching for `aclDescSale` and getting nothing.
+
+**UI.** `/pharmacy/accounting` — server shell + client island, mounted on the kit and not rebuilt: `<LedgerModeSwitch>` on 316's per-user store, `<LedgerAmountCell>` / `<LedgerAmountText>` (330), `<RefCell>` (363), `<LedgerScrollFoot>` (372's infinite-scroll footer) on the phone, `<MonthRangePicker>` + `useMonthWindowPref` (370's RELATIVE range), `<SearchSelect>` for every chip (94 §2.1 / 212 §7.1), `<PersonName>` / `personCredit` for `Full Name (Role)` on a reversed row's note and in the phone sheet. Desk table is 8 columns in Simple and 9 in Pro; the phone is 363 §1's rule — SIMPLE IS THE ROW, PRO IS THE CARD — with an entry sheet behind a tap. Every row drills to its source: `?sale=` on Recent sales and `?supplier=` on the supplier desk (the two deep links that actually exist), and the owning screen without a parameter for the rest — a query key no page reads would look precise and be a lie. New CSS is scoped `.mp-acl` under the existing `.mp-inv2 .mp-pur2`; the balance's `.led-run` is not restated, extended or overridden anywhere in it.
+
+**i18n.** 70 new keys, EN + UR, parity checked: nav label + subtitle, the page, the eight columns, the four chips, the fourteen category words, the four vertical words, twelve description templates, the footer and the phone sheet.
+
+**The instrument (§2).** `packages/db/scripts/verify-accounting-379.ts`, read-only, on 361 §4's `tenant-read` discipline (env printed redacted, BYPASSRLS reported, GUC read back and matched before any row, an empty read is a FAILURE). It proves `Σ money in − Σ money out == till + supplier + customer` for a period, and the two sides are computed differently ON PURPOSE: the LEFT is the app's own answer, folded through the very `toLedgerRows` + `buildAccountingLedger` the endpoint serves from (which is why the union was moved into `@mp/shared` rather than left in the API service); the RIGHT is arithmetic straight off the source rows, grouped as the three books the shop already keeps. Memo rows — credit notes and write-offs — are on neither side, which is what "moved no money" means, and their value is reported separately so the omission cannot be mistaken for an oversight. It also checks that no row key appears twice and that every row names a document it can drill to. `--tenant`, `--from`, `--to`; exit 1 on any gap.
+
+### Files
+
+- `packages/db/prisma/schema.prisma` — `LedgerVertical` enum, `vertical` on seven models, four indexes.
+- `packages/db/prisma/migrations/20260906000000_ledger_vertical/migration.sql`.
+- `packages/db/src/index.ts` — `LedgerVertical` re-export.
+- `packages/db/scripts/verify-accounting-379.ts` — the instrument.
+- `packages/shared/src/accounting-ledger.ts` (new) + `index.ts` export.
+- `packages/shared/src/permissions.ts` — `pharmacy.accounting.view` (catalog, flag requirement, MANAGER + FINANCE defaults).
+- `packages/shared/src/nav-registry.ts` — `/pharmacy/accounting`.
+- `apps/api/src/accounting/{constants,repository,service,controller,dto,module}.ts` + `accounting-ledger-379.spec.ts`.
+- `apps/api/src/app.module.ts` — `AccountingModule`.
+- `apps/web/app/(app)/pharmacy/accounting/{page.tsx,AccountingClient.tsx}`; `apps/web/app/globals.css`.
+- `packages/i18n/src/messages/{en,ur}.json`.
+- `packages/ui/src/lib/accounting-ledger-379.spec.tsx`.
+
+### Gates
+
+`pnpm prisma generate` ran (schema changed). `pnpm lint` clean (one pre-existing warning in `doctor-portal.repositories.ts`, untouched). `pnpm typecheck` clean across all 31 tasks. New suites written and run in isolation: 33 tests in `accounting-ledger-379.spec.ts` (API), 24 in `accounting-ledger-379.spec.tsx` (UI). `pnpm test:unit` / `pnpm build` deliberately NOT run — the controller runs the full gates.
+
+### Notes for later
+
+- 380 sets a row's `category` to the tenant's own expense category name; the client already prints an unknown category key verbatim and the `EXPENSE` kind, its word and its source type are all in place.
+- The endpoint's `vertical` / `account` / `category` / `counterparty` / `q` parameters are live and server-enforced; the screen does not send them (it narrows locally with the same predicate). They exist for 382's export and for the instrument.
+- Nothing writes a non-`PHARMACY` vertical yet. The column is there so Clinic and Lab have somewhere to put the fact the day they settle money of their own.
