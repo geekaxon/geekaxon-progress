@@ -26340,3 +26340,91 @@ Money in / out / Net come from `buildAccountingLedger` (the very ledger the Ledg
 ### Notes for later
 - `overview()` reads the whole supplier and customer books to state two figures. That is the price of matching those desks' headers exactly, and it is the right trade today; if it ever hurts, the fix is a header-only fold on `PharmacyService` that both callers share — never a second fold here.
 - `revenueByAccount` shows udhaar and the unrecorded residual as rows that narrow nothing, so they open the period's ledger unfiltered rather than a chip that matches no row.
+
+---
+
+## 382 — accounting-export-and-close — DONE (2026-09-04)
+
+**Branch:** `feature/382-accounting-export-and-close` (from the 381 head). **Schema:** none. **RLS:** unchanged.
+
+### §1 — the export
+
+**Decision: ONE serialiser, pure, in `@mp/shared`, called only by the API.** The locked line of the
+step is that statutory accounting is answered by an export and never by a rebuild, and the thing
+that makes an export worth anything is that it agrees with the screen it was taken from. Two
+serialisers (one in the browser for the table, one on the server for the file) is exactly how they
+come to disagree, and the person who finds out is an accountant reconciling a month. So:
+
+- `packages/shared/src/accounting-export.ts` — `buildAccountingLedgerCsv`,
+  `buildAccountingProfitCsv`, plus the three label helpers the SCREEN now also uses
+  (`accountingRowDescription`, `accountingCategoryLabel`, `accountingVerticalLabel`) and the
+  RFC-4180 cell/line writers. The fold knows the column ORDER and knows no English: it takes a
+  `t(key, args)` and hands back a file, so an Urdu reader gets an Urdu file with no second copy of
+  the column list. `AccountingClient` now BINDS those helpers instead of owning its own copies —
+  the file's Description column and the row it came from cannot drift.
+- Ledger columns, the eleven 379 carries: date · reference · description · counterparty · account ·
+  vertical · category · debit · credit · balance · recorded by. Dates ISO `YYYY-MM-DD`, money a bare
+  number (no `Rs`, no separators) so a trial balance can be built without a find-and-replace; the
+  column that does not apply is BLANK, never a dash (the mockup's own Pro-view rule). Recorded by is
+  `creditPerson` — `Full Name (Role)`, never a login, never an id.
+- The footer the table prints is in the file: an opening-balance line and a totals line, at the
+  BOTTOM because the rows run newest-first, which puts the opening where it chronologically belongs.
+  The running balance is the one the rows arrived with and is never recomputed over the filtered set.
+- Profit CSV: section · line · documents · amount. Every term prints its expanded rows AND its own
+  total, and the two subtractions print as their own lines, so 381's calculator test survives into
+  the spreadsheet.
+- API: `GET /accounting/export/ledger` and `GET /accounting/export/profit`, both
+  `@RequireFeature('pharmacy.pos')` + `@RequirePermission('pharmacy.accounting.view')`, both
+  `text/csv; charset=utf-8` with a `Content-Disposition`. The ledger export takes the LEDGER's own
+  query verbatim, so the reader's chips narrow the file exactly as they narrow the table — there is
+  no second set of filters. `parseExportLocale` picks the language; unlike every filter it FALLS
+  BACK rather than refusing, because a language the catalog lacks should not fail a download.
+- Web: `AccountingExport.tsx` — one hook, mounted by the ledger (button in the filter row, beside
+  the narrowing it carries) and by Profit (page-head action cluster), both places the mockup draws
+  it. Rows come from the SERVER (254 §4): this table pages and the phone's list is a window, so a
+  file built from what the component held would be a fraction of a month with nothing to say so.
+  A UTF-8 BOM is prepended for Excel. Toast names THIS export (310 §4): `Ledger exported` /
+  `Profit statement exported`.
+- i18n: `aclColDescription`, `aclExportCsv`, `aclExportDone`, `aclExportFailed`, `acpColSection`,
+  `acpColLine`, `acpColCount`, `acpExportDone` — EN + UR, parity gate green.
+
+### §2 — the standing-rules pass
+
+`docs/382-accounting-standing-rules.md`: four surfaces (Ledger, Expenses, Overview, Profit) × every
+standing rule, each cell either how it is satisfied or WHY it cannot apply. No blank cells.
+
+**The one real gap it found was the keyboard preset**, on the two list surfaces, and it was fixed
+rather than recorded: `useListKeyboard`'s `onCreate` is now OPTIONAL. A desk that creates nothing
+(the ledger is a union of rows other screens wrote) mounts `/`, `↓`, `Enter`, the pager and the Esc
+ladder without advertising an `Alt+N` that does nothing — `'list.create'` joins the excluded set, so
+the key is neither bound nor listed in the `?` overlay. That is the rule `second: null` already
+applied one rung down. Expenses mounts the same preset with `Alt+N` = Add expense, bound only where
+`pharmacy.expense.manage` was granted. Both search fields now carry `data-list-search`.
+
+**Recorded as decisions, not omissions:** sort (a running balance is only true in one order, so a
+sortable Amount column would print a position the shop never held); phones (no phone appears on any
+of the four surfaces — a counterparty here is a name, and the number lives on the desk these rows
+drill into).
+
+`AccountingExport.tsx` is registered in `realtime-everywhere-343.spec.ts` as exempt, with its reason
+in words: it is a hook that fetches a file on a press, renders nothing and holds no rows.
+
+### Tests
+
+`apps/api/src/accounting/accounting-export-382.spec.ts` — the file read back through a CSV parser
+written for the test (never the writer's own), asserting: the eleven columns in order; one line per
+entry, newest first; words for vertical/category/description and a person for *Recorded by*; blank
+for the column that does not apply; money as bare numbers; the footer's totals equal to the sum of
+the columns above them and to the book's own `totalIn`/`totalOut`/`closing`; a comma, a doubled
+quote and an embedded newline surviving as ONE cell; an empty period still a valid file. Then the
+endpoint over a fake repo: the whole period unfiltered, the chips narrowing the FILE with the
+balance still the period's, the Urdu file, the profit statement matching `GET /accounting/profit`,
+and the locale fallback. Then the gate: both export routes carry `pharmacy.accounting.view` in
+their route metadata and the class carries `pharmacy.pos`, and the ledger export asks for exactly
+the permission the ledger READ asks for.
+
+### Gates
+
+`pnpm lint` clean (one pre-existing unrelated warning in `doctor-portal.repositories.ts`).
+`pnpm typecheck` clean, 31/31. Per CLAUDE.md the agent did not run `test:unit` / `build`.
+Vendor untouched; no schema change, so no `prisma generate` needed.
