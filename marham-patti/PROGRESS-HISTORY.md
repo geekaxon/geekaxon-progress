@@ -26120,3 +26120,80 @@ counts and sees every figure, and the footer reads "waiting for a manager to clo
 
 Gates after the fix: both suites run individually green (45/45 ui, 62/62 db); `pnpm lint` and
 `pnpm typecheck` clean.
+
+---
+
+## 378 — day-close-per-cashier-and-close — DONE (2026-09-04)
+
+**Branch:** `feature/378-day-close-per-cashier-and-close` (FEATURE). **Spec:** `specs/378-day-close-per-cashier-and-close.md`. No CODEREF in range. **Schema: none** — 376 already gave `DayPeriod.mode` and `DayPeriod.cashierUserId`; this step is the behaviour those two columns were put there for. RLS unchanged.
+
+### §1 — the drawer belongs to a person
+
+**A sale posts to the SELLER's shift, and a refund to the processor's.** `periodMoney` now narrows to
+`period.cashierUserId` when `period.mode === 'PER_CASHIER'`: sales by their own `cashierId`, returns by their
+own `processedBy` — the same attribution 376's implicit open already used. In SIMPLE mode the narrowing is a
+no-op (`shiftOf` is null), so every figure 377 measured is byte-identical. Movements were already
+period-scoped; `requireOpenPeriod` now resolves the recorder's OWN open drawer rather than whichever the
+branch happened to open first.
+
+**Switching the mode applies FROM THE NEXT OPEN.** New pure `effectiveCashHandlingMode(setting, openModes)`
+plus `PharmacyService.dayModeFor` / `dayContext`: while ANYTHING is open on the branch, the branch trades in
+that period's mode. Otherwise flipping Simple → Per-cashier at 4pm strands an open till belonging to nobody
+(its float unreachable, its sales landing on a shift never opened), and flipping back leaves two cashiers'
+drawers to a screen that thinks there is one. A shift opened in the meantime joins the old mode rather than
+starting a parallel scheme; the setting takes effect the first time the branch has nothing open at all.
+Every day path (`dayPeriodStatus`, `openDayPeriod`, `ensureOpenDayPeriod`, `requireOpenPeriod`,
+`dayPeriodCloseView`, `closeDayPeriod`, `listDayPeriods`) now resolves the four facts through one helper, so
+no path can resolve three and forget the fourth.
+
+**The owner's view.** New `GET /pharmacy/day-close/period/shifts` → `dayShiftsView`. Which shifts: NOT
+"today's" — a day is a period, not a date, and a shop trading past midnight would be cut in half by a
+calendar rule. New pure `currentShiftWindow` takes the CONTIGUOUS CHAIN back from the newest shift, stopping
+at the first shift that had already closed before the evening began; the boundary is INCLUSIVE, because a
+handover (Moiz closes 4:30, Sana opens 4:30) is the ordinary case and a strict `>` would split the evening at
+its busiest instant. Whose: `pharmacy.day.close` decides — the controller resolves it via
+`PermissionService.permissionsFor` and the service FILTERS, so a cashier's view of another person's takings
+is not prevented by a card the browser declined to draw. Where the figures come from: a CLOSED shift is read
+from its close record and never re-derived (377's rule), so the owner's list and that shift's printed report
+cannot disagree; only the open shift is measured live.
+
+**The combined total, and the line it must not print.** New pure `combineShiftTotals`: combined expected,
+combined counted, and a NET variance measured against what the COUNTED shifts expected (an open drawer is not
+a shortfall — it is a drawer nobody has reached). It carries `shortShifts` / `overShifts` / `mixed` beside the
+net precisely because **Rs 200 short and Rs 500 over do not net into "fine"**; the panel prints that sentence
+in words whenever the directions disagree.
+
+### §2 — realtime, and the standing-rules pass
+
+`day.period.updated` joins the DESK scope (`DAY_PERIOD_UPDATED`, `dayPeriodUpdatedEvent`) — the same spec-112
+bus, the same connection the day-close screen already holds, no second socket. Published on open (explicit and
+implicit), on movement, on reversal and on close, never throwing into the caller. It carries identity and a
+reason and NO money, like every other envelope on that scope.
+
+The rules table is `docs/378-day-close-standing-rules.md` — four surfaces (376's open-day panel, 377's close
+card, 378's shifts panel, the Z-report) × twelve rules, each recorded with how it is satisfied or, where it
+cannot apply, why. Two findings worth keeping: personalization here is deliberately thin (a half-typed drawer
+count restored from storage would be a defect, not a feature), and the day-close screen mounts no `list.*`
+keyboard preset because it is not a list surface.
+
+### Files
+
+- `packages/shared/src/day-shifts.ts` (new) + `index.ts` export — `currentShiftWindow`, `combineShiftTotals`,
+  `effectiveCashHandlingMode`.
+- `packages/shared/src/pharmacy-desk-live.ts` — `DAY_PERIOD_UPDATED`, `DayPeriodUpdatedEvent`,
+  `DayPeriodChangeReason`, `dayPeriodUpdatedEvent`, added to `DESK_LIVE_EVENTS`.
+- `apps/api/src/pharmacy/pharmacy.service.ts` — `dayModeFor`, `dayContext`, `publishDayPeriodChange`,
+  per-cashier `periodMoney`, `dayShiftsView` + `DayShiftRow` / `DayShiftsView`.
+- `apps/api/src/pharmacy/pharmacy.controller.ts` — `GET period/shifts`, `PermissionService` injected.
+- `apps/web/app/(app)/pharmacy/day-close/DayShiftsPanel.tsx` (new), mounted in `DayCloseClient.tsx` above the
+  close card; `apps/web/app/globals.css` 378 block; 32 new keys in both catalogues.
+- Tests: `apps/api/src/pharmacy/day-close-per-cashier-and-close-378.spec.ts`,
+  `packages/ui/src/lib/day-close-per-cashier-378.spec.ts`.
+- Docs: `docs/378-day-close-standing-rules.md`.
+
+### Gates
+
+`pnpm typecheck` — 31/31 clean. `pnpm lint` — clean (one pre-existing unused-disable warning in
+`doctor-portal.repositories.ts`, untouched by this step). `pnpm test:unit` / `build` are the controller's, per
+the standing rules. Vendor untouched; no schema change, so no migration and no `prisma generate` beyond the
+build's own.
