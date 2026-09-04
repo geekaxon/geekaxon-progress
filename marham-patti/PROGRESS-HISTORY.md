@@ -27007,3 +27007,73 @@ The `WARN`/`ERROR` lines above the failures (`bus down`, `boom: FINANCE`, `db do
 No product source file was modified. **Gates:** `pnpm lint` ✅ and `pnpm typecheck` ✅ (both clean); `test:unit` / `build` left to the controller per §3.
 
 **WORK TYPE: FIX (branch fix/387-customers-fix-round)**
+
+## 388 — rolling-month-window — DONE (2026-09-04)
+
+**Branch:** `fix/388-rolling-month-window` (FIX, merges with `DEPLOY FIX`). Spec `/specs/388-rolling-month-window.md`.
+
+**The report.** The owner picks *Jun – Aug* in August. 370 stored that as `{back:0, span:3}` — "three months
+ending this month" — so on 1 September it resolved to *Jul – Sept*: the whole window slid and June, which he
+had chosen, fell off the back. His words on 4 Sep: "when a new month starts it auto-includes — Jun – Aug
+becomes Jun – Sept." The start is his answer and must stay; only the end follows the clock.
+
+**§1 — three shapes, one resolver (`packages/shared/src/pharmacy-purchase-desk.ts`).**
+- `RememberedMonthWindow = RelativeMonthWindow | OpenMonthWindow | FixedMonthWindow`. `RelativeMonthWindow`
+  survives as the `relative` member's type (370's `{back, span}`) with `kind?: 'relative'` — optional, so a
+  value written before 388 already IS one of these to both the compiler and the parser. No stored preference
+  is migrated and nothing a reader saved is lost.
+- `resolveMonthWindow(remembered, nowIso)` handles all three and stays the only way a stored window is read:
+  `open` → `from` … the current month (collapsing to `from` alone if a hand-edited start is ahead of the
+  clock, so a window can never read backwards); `fixed` → exactly its two months; `relative` → 370's
+  arithmetic, untouched.
+- `relativeMonthWindow` → **`rememberMonthWindow`**, implementing the table: a picked range whose end is the
+  current month (or later) → `open` from its start; a range that already ended → `fixed`. Nothing stores a
+  span or a distance from today any more — preserving the distance is exactly what slid the owner's window.
+- `parseRelativeMonthWindow` → **`parseRememberedMonthWindow`**: accepts all three kinds, reads a 370-era
+  `{back, span}` with no `kind` as `relative`, orders a reversed `fixed` pair, and falls back to the caller's
+  default on anything else.
+
+**DECISION — what the `.v2` migration produces, and why.** `migrateMonthWindow` now takes `nowIso` and
+returns `{kind:'open', from: win.from}`. A `.v2` absolute pair carries no record of WHEN it was written, and
+that is the one fact the spec's rule ("open when it ended in the month it was saved") wants. It does carry
+the next best thing: the picker's `max` is the current month, so a picked range can never end after the day
+it was picked, and the commonest pick ends AT it. So the end is read as the save month. The `fixed` arm is
+kept for a pair whose end lies in a FUTURE month — hand-edited or clock-skewed, and therefore provably not
+saved at its end — rather than sweeping it forward across months nobody asked for. 370's re-anchoring (span
+kept, moved to the current month) is what threw June out and would have delivered the reported defect
+through the migration instead of through the storage.
+
+**§1 tests** — `packages/ui/src/lib/rolling-month-window-388.spec.ts` (shared package has no jest project;
+370's window tests live under `packages/ui/src/lib` for the same reason). The full spec table: Jun – Aug
+remembered on 2026-08-20 → Jun – Aug on that date, Jun – Sept on 2026-09-04, Jun 2026 – Jan 2027 on
+2027-01-10; Mar – May remembered on 2026-08-20 → Mar – May on every later date; a single current month is
+`open` too; `{back:0,span:3}` with no `kind` on 2026-09-04 → Jul – Sept; twelve malformed values fall back to
+the default; a start ahead of the clock collapses; the migration's two arms.
+
+**§2 — the kit audit.** `apps/web/lib/list-prefs.ts` (`useMonthWindowPref` / `readMonthWindow`) calls the
+renamed functions; nothing else about its storage changed and the `.v3` key is unversioned by this step,
+since a pre-388 value still parses. ON THE KIT (each reads `useMonthWindowPref`, so each inherits §1 with no
+per-screen code): Purchase, Returns, Recent sales, Accounting ledger, Accounting overview, Accounting profit,
+Expenses. `AccountingPeriodBar` is presentational — it takes `value`/`onChange` from `AccountingClient`.
+NOT ON THE KIT, checked rather than missed: **Customers and Suppliers mount no month range at all** (no
+`monthRangeLabel`, no `MonthRangePicker`, no `monthWin`), so there was nothing to move. **No screen was found
+resolving its own window** — the two `recentMonthsWindow(nowIso)` calls in Purchase and Returns are the 277 §5
+"is this window narrowed vs the default?" tint check, not a second reading of the stored preference; a test
+asserts no screen contains `resolveMonthWindow(` or `rememberMonthWindow(`. The header chip and the KPI range
+badges already render the resolved window, so they read *Jun – Sept 2026* after deploy with nothing touched.
+370 §1's date-free rule (approvals/pending KPI and pill ignore the window) was not touched.
+
+**Repointed by the rename** (the 389 lesson — source-substring tests pin yesterday's identifiers):
+`returns-date-and-slip-370.spec.ts` (imports, the three behavioural cases 388 supersedes, the migration case,
+the `prefs` substrings) and `purchases-mobile-and-supplier-tabs-277.spec.tsx` (the `writeRaw` line).
+
+**Gates:** `pnpm typecheck` — 31/31 tasks green. `pnpm lint` — 17/17 green, including web's design-drift,
+token-integrity, tenant-english-only, tenant-search-select and tenant-page-titles checks. `pnpm test:unit`
+is the controller's gate per CLAUDE.md §6. No UI/CSS/i18n change in this step, so the design self-check is
+by inspection: the only visible difference is the month the existing chip states.
+
+**Acceptance (owner, deployed staging).** Pick *Jun – Aug* on Purchase, reload → *Jun – Aug*; then read
+`mp.datalist.months.v3.<list>` in DevTools storage and confirm `{"kind":"open","from":"2026-06"}`. Nobody can
+move staging's clock, so September's resolution is proven by the §1 test instead. Repeat the stored-shape
+check once each on Returns, Recent sales and Accounting. The owner's own pre-existing *Jun – Aug*, saved in
+August, must read *Jun – Sept 2026* in the header after deploy without him touching the picker.
