@@ -26263,3 +26263,44 @@ A sale committed before 313 §2 has no payment rows at all; one stand-in row of 
 - 380 sets a row's `category` to the tenant's own expense category name; the client already prints an unknown category key verbatim and the `EXPENSE` kind, its word and its source type are all in place.
 - The endpoint's `vertical` / `account` / `category` / `counterparty` / `q` parameters are live and server-enforced; the screen does not send them (it narrows locally with the same predicate). They exist for 382's export and for the instrument.
 - Nothing writes a non-`PHARMACY` vertical yet. The column is there so Clinic and Lab have somewhere to put the fact the day they settle money of their own.
+
+---
+
+## 380 — accounting-expenses — DONE (2026-09-04)
+
+**Branch:** `feature/380-accounting-expenses` (WORK TYPE: FEATURE). Spec: `specs/380-accounting-expenses.md`. No CODEREF covers 380.
+
+**What it is.** The Accounting module's one writer. Every other money row in the app is the by-product of a document somebody else already made; an expense is the row a person types on purpose — date, one of the tenant's own categories (374), amount, the account it left (313), vertical, note, optional receipt, and `Full Name (Role)` stamped on it.
+
+### Decisions (recorded, not escalated)
+
+1. **A cash expense IS a drawer movement (377 §1), not a sixth ladder term.** Saving a cash-account expense writes a real `cash_movements` row of direction OUT against the open day, in the SAME transaction, and links it both ways (`expenses.cash_movement_id` ↔ `cash_movements.expense_id`). The expected-cash ladder therefore contains it with no change to 377 at all. To keep the rupee in the book exactly once, the accounting repository EXCLUDES every movement carrying an `expense_id` — from `periodSources` and from the opening-balance aggregates alike — and the EXPENSE row is where the ledger states it, under the shop's own category rather than a generic `Cash out`. `verify-accounting-379.ts` was extended the same way on both sides.
+2. **`EXPENSE_REVERSAL` was added to the ledger vocabulary.** 379 declared `EXPENSE` and said the vocabulary would not be re-opened; a reversal is a genuinely different event (own date, own actor, own reason) and folding it into a negative `EXPENSE` would make a book that cannot say which is which. `LEDGER_KIND_BOOK` and `kindOrder` were extended with it; both remain exhaustive by construction.
+3. **`AccountingLedgerRowInput.categoryLabel` (optional) was added.** An expense's category is the tenant's ROW, so the ledger row carries the category **id** (a rename must keep the month's expenses together) with the word beside it. Every other stream's category IS its kind and is translated from the catalog. The facet tally and the free-text search both read the label, so no screen ever prints a cuid.
+4. **Editability rule.** `expenseAction` in `@mp/shared` is the single decision: `EDIT` while the day the row was recorded in is still open (or it touched no day at all — a bank expense typed with the shop shut moved nothing anybody counted), `REVERSE` once that day has CLOSED, `NONE` for either half of a reversal pair. The dialogue's disabled Save and the service's refusal are the same function.
+5. **Edits move the drawer with them, while the day is open.** cash→cash corrects the movement in place; cash→bank REMOVES it (the rupee never left the till, and keeping it "for the trail" would leave the open day short); bank→cash writes one. After the close none of this can run.
+6. **A reversal's compensating movement lands in the day that is open NOW**, never in the closed day the original belongs to — a closed day's expected cash is a snapshot and rewriting it is exactly the silent edit this step exists to prevent. The reversal's `spent_at` is today for the same reason. A cash expense cannot be reversed with no drawer open; the refusal names what to do.
+7. **The drawer screen no longer offers Reverse on an expense-backed movement** (repository guard + hidden control in `DayPeriodPanel`): the expense is what gets reversed, or the two records stop agreeing.
+8. **Receipts ride the branding object-store seam (141)**, tenant-keyed, content-addressed by SHA-256 so re-attaching the same photo costs one object. Base64 envelope on the JSON body (no multipart in this repo), bounded to 5 MB and PNG/JPEG/WebP/PDF. `attachment` absent / `null` / present are three different answers and the DTO keeps them apart.
+9. **Numbering.** `EXP-1176` is gapless per tenant from `expense_number_sequences` under its own advisory-lock namespace (`EXPENSE_NUMBER_LOCK_NAMESPACE`), the same discipline sales, purchases and returns keep.
+10. **No new nav entry.** Navigation inside the module is the mockup's own tab strip (`<AccountingTabs>`: Ledger · Expenses today, Overview and Profit with 381) rather than a second sidebar row for a second view of one book.
+
+### Schema (additive only)
+
+`expenses` (id, tenant_id, number, spent_at, category_id, amount, account_id, vertical, note, attachment key/url/name/mime/bytes, recorded_by/at, edited_by/at, day_period_id, cash_movement_id UNIQUE, reversal_of_id, reversed_by_id UNIQUE, reversal_reason, reversed_at) and `expense_number_sequences`, both under `apply_tenant_rls()` — ENABLE + FORCE + fail-closed `tenant_isolation`. One new nullable column, `cash_movements.expense_id`, with a unique index. Migration `20260907000000_expenses` is plain DDL, no `$` interpolation, no env dependency.
+
+### Permissions / flags
+
+New `pharmacy.expense.manage` (implies `pharmacy.pos`; defaults on MANAGER and FINANCE, and TENANT_OWNER by construction). Reading the list rides `pharmacy.accounting.view`. Flag FIRST, then permission, on the controller class and every method. All three mutations are `@Audited`.
+
+### Files
+
+`packages/shared/src/expenses.ts` (new), `accounting-ledger.ts`, `permissions.ts`, `index.ts`; `packages/db` schema + migration + `advisory-locks.ts` + `index.ts` + `scripts/verify-accounting-379.ts`; `apps/api/src/accounting/expenses.{repository,service,dto,controller}.ts` (new), `accounting.{module,constants,repository}.ts`; `apps/api/src/pharmacy/pharmacy.repositories.ts` + `pharmacy.service.ts` (the movement's `expenseId` and its reversal guard); `apps/web/app/(app)/pharmacy/accounting/AccountingTabs.tsx` + `expenses/{page,ExpensesClient}.tsx` (new), `AccountingClient.tsx`, `day-close/DayPeriodPanel.tsx`, `globals.css`; EN + UR catalogs (69 new keys, at parity).
+
+### Tests written (controller runs them)
+
+`apps/api/src/accounting/expenses-380.spec.ts` — the pure model (reference, bounds, `expenseAction`, `summariseExpenses` netting a reversed pair to nothing, the filter predicate), the LEDGER union (an expense is OUT under the tenant's category and drills to itself; its reversal is IN and the whole pair leaves the balance where it was; the category chip offers the word, not the id), the DTO (whole second day, refusals, `BUSINESS` default, attachment tri-state), and the service's four rules against a fake repository (cash needs an open day, a foreign account is refused on the write, a deactivated category is refused on a new row and kept on an old one, a closed day refuses the edit and names the reversal, a pair cannot be reversed twice). `packages/db/src/expenses-isolation-380.spec.ts` — every migration in order under pglite: own-rows-only, fail-closed with no GUC, WITH CHECK on a foreign write, an UPDATE that cannot reach another tenant's row, per-tenant number uniqueness, one reversal per expense, one expense per movement, and the additive `expense_id` reading back null on a 376-shaped movement.
+
+### Gates
+
+`pnpm prisma generate`, `pnpm lint` and `pnpm typecheck` run once at the end — clean (one pre-existing unused-eslint-disable warning in `doctor-portal.repositories.ts`, untouched by this step). Unit/e2e/build left to the controller per AGENT.md §4A. Vendor untouched; no secrets; `.env.example` needed no change.

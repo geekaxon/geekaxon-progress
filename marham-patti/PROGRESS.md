@@ -7,13 +7,13 @@
 ## Current Status
 - **Project:** Marham Patti — multi-tenant white-label healthcare platform.
 - **Phase:** **PHASE 44** — Settings, Day-close, Accounting, Dashboard.
-- **Current build-step:** **379 — accounting-ledger** — DONE (2026-09-04).
-- **Last completed:** **379 — accounting-ledger** — one money book, read from the rows the app already writes, in Simple and Pro.
-- **Next:** **380 — accounting-expenses** — specs/380-accounting-expenses.md
+- **Current build-step:** **380 — accounting-expenses** — DONE (2026-09-04).
+- **Last completed:** **380 — accounting-expenses** — the money that leaves without a document, recorded once, corrected in the open.
+- **Next:** **381 — accounting-profit-and-overview** — specs/381-accounting-profit-and-overview.md
 
 ### Recent steps
+- **380 — accounting-expenses** — DONE (2026-09-04) — cash leaves the drawer as it leaves the book; a closed day is fixed by reversal.
 - **379 — accounting-ledger** — DONE (2026-09-04) — every rupee in and out on one page, each row still owned by the document it came from.
 - **378 — day-close-per-cashier-and-close** — DONE (2026-09-04) — every shift keeps its own difference; one short and one over never net into fine.
-- **377 — day-close-count-and-report** — DONE (2026-09-03) — expected adds up on screen and on paper, and a closed day stops taking sales.
 
 > Older steps in PROGRESS-HISTORY.md
