@@ -26304,3 +26304,39 @@ New `pharmacy.expense.manage` (implies `pharmacy.pos`; defaults on MANAGER and F
 ### Gates
 
 `pnpm prisma generate`, `pnpm lint` and `pnpm typecheck` run once at the end — clean (one pre-existing unused-eslint-disable warning in `doctor-portal.repositories.ts`, untouched by this step). Unit/e2e/build left to the controller per AGENT.md §4A. Vendor untouched; no secrets; `.env.example` needed no change.
+
+---
+
+## 381 — accounting-profit-and-overview — DONE (2026-09-04)
+
+**Branch:** `feature/381-accounting-profit-and-overview` · **Spec:** `/specs/381-accounting-profit-and-overview.md` · **Schema:** none · **RLS:** unchanged.
+
+### The locked arithmetic, and where it lives
+`Revenue − Cost of goods sold − Expenses = Profit`, folded ONCE in `packages/shared/src/accounting-profit.ts` and read by the endpoint and the suite alike. Decisions taken and recorded here rather than deferred:
+
+- **Revenue is what the counter BILLED** — the sale's own `total`, not its tender legs. A udhaar sale is revenue the day it is rung; the rupee that settles it later is a movement of cash. That is exactly why *Net* and *Profit* are two different cards, and the Overview prints the gap between them in one sentence.
+- **COGS at the moment of sale.** Per line: `SaleItem.unitCost` (271 §3's snapshot, 4dp) → the batch's `effectiveUnitCost` (252 §1 — the DISCOUNTED basis, which the spec locks) → `costPrice` → 0. Never the catalogue price: that is what a product costs today, and the question is about a day that has happened.
+- **A return is costed from the sale it came out of** — matched `saleId:medicineId:batchId`, then `saleId:medicineId`, then the lot. Reversing at today's cost would let a return post a profit of its own.
+- **Revenue reduction on a return is `refundTotal`**, which is already the goods' value less the restocking fee the shop kept — so no fee arithmetic exists anywhere in this step.
+- **Both halves of a document**, exactly as 379 reads them: a sale contributes where it was SOLD and un-contributes where it was VOIDED, so a period holding both nets to nothing with no special case. Same for returns (only `CREDITED` ones, as the ledger union already rules).
+- **Write-offs are expense-class** (§1), filed under their own `WRITE_OFF` row inside the Expenses term. They are IN the statement and OUT of the Overview's *Top expense categories* card — nobody chose that category — which is a large part of why Net and Profit differ.
+- **Tax never enters.** `Sale.total` carries no tax component at all (spec 20: subtotal less discount), so nothing had to be stripped; the rule is written in the fold's header so the place that must exclude a taxed stream is the place a reader is already looking.
+- **Every term hands back the rows that sum to it.** Where a source could break that (a sale whose recorded legs do not add to its total) the difference is carried into a named `UNRECORDED` residual rather than dropped. Buckets that net to zero AND hold no document are dropped; a zero-costing reversed expense pair is kept, because it is a fact about the month.
+
+### The Overview derives nothing either book already states
+Money in / out / Net come from `buildAccountingLedger` (the very ledger the Ledger tab renders); Profit from the statement; **supplier baqaya and customer udhaar from `PharmacyService.listSupplierSummaries` / `listCustomerSummaries`** — the desks' own header folds, taken whole rather than re-derived, so "matching their headers exactly" is true by construction. `AccountingModule` now imports `PharmacyModule` for that (no cycle: only `app.module` imports `AccountingModule`). Each card's two sublines PARTITION the card above them via one `MONEY_FAMILY` map, so a caption can never fail to add up to its heading.
+
+### Files
+- **shared:** `accounting-profit.ts` (new — `buildAccountingProfit`, `buildAccountingOverview`, `ProfitRow`/`ProfitTerm`, the three bucket keys); exported from `index.ts`.
+- **api:** `accounting.repository.ts` — new abstract + Prisma `profitCosts(tenantId, from, to)` reading the same document set `periodSources` reads, plus the original sales behind this period's returns (a July invoice returned in August is costed at July's cost). `accounting.service.ts` — `profit()` and `overview()`, and the `PharmacyService` dependency. `accounting.dto.ts` — `parseAccountingPeriod` lifted out of `parseLedgerQuery` so three endpoints cannot disagree about what "1–24 Aug" means. `accounting.controller.ts` — `GET /accounting/profit`, `GET /accounting/overview`, both on `pharmacy.pos` + `pharmacy.accounting.view`. `accounting.module.ts` — `PharmacyModule` import.
+- **web:** `accounting/overview/{page,OverviewClient}.tsx`, `accounting/profit/{page,ProfitClient}.tsx`, `accounting/AccountingPeriodBar.tsx` (the shared relative-period control, 370). `AccountingTabs.tsx` now renders all four tabs in the mockup's order. `AccountingClient.tsx` / `ExpensesClient.tsx` seed their period and chips from the URL once, so the Overview's drills land where they claim — and both pages gained a `<Suspense>` boundary, which `useSearchParams` requires for prerendering. The period travels as two `yyyy-mm` keys (which is what the window IS) and never as dates.
+- **css:** one appended `381` block in `globals.css` under `.mp-acp` — money cards, proportional/rank cards, the owed card, the profit statement, and the phone plan (two-by-two cards, Profit spanning). The 379 colour rule is unchanged and not restated: a movement is coloured, a POSITION (Net, Profit) never is — the Profit card and the final line are set apart by border and ground only.
+- **i18n:** 60 keys added to EN and UR (`acp*` plus `expTabOverview` / `expTabProfit`). Parity gate satisfied.
+- **tests:** `accounting-profit-381.spec.ts` — 17 cases over the pure folds: the three subtractions and both margins, every term's rows summing to it, the account split with udhaar as a row and the named residual, a return reducing revenue and reversing its cost, a non-CREDITED return moving nothing, a voided return netting, a sale voided in a LATER period reading as that period's reversal, a reversed expense pair costing zero, write-offs as expense-class, and the Overview's cards being the ledger's own with the two positions passed through. `accounting-ledger-379.spec.ts` updated for the new constructor arg and the new repo method (behaviour untouched). `realtime-everywhere-343.spec.ts` — the two new surfaces registered with `useSaleLive` + `useDeskLive`, the period bar exempt with its reason.
+
+### Gates
+`pnpm typecheck` — 31/31 green. `pnpm lint` — 17/17 green (one pre-existing unused-eslint-disable warning in `doctor-portal.repositories.ts`, untouched). `pnpm test:unit` / `build` left to the controller per the standing rule.
+
+### Notes for later
+- `overview()` reads the whole supplier and customer books to state two figures. That is the price of matching those desks' headers exactly, and it is the right trade today; if it ever hurts, the fix is a header-only fold on `PharmacyService` that both callers share — never a second fold here.
+- `revenueByAccount` shows udhaar and the unrecorded residual as rows that narrow nothing, so they open the period's ledger unfiltered rather than a chip that matches no row.
