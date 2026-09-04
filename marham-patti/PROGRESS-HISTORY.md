@@ -26829,3 +26829,181 @@ keys in both `en` and `ur`; `pinvAdjNotePlaceholder` reworded in both.
 `pnpm prisma generate` ✓ · `pnpm typecheck` ✓ (31/31) · `pnpm lint` ✓ (0 errors; the one warning is a
 pre-existing unused eslint-disable in `doctor-portal.repositories.ts`, untouched here). `test:unit`,
 `test:e2e` and `build` are the controller's per the standing rules.
+
+## 387 — customers-fix-round — DONE (2026-09-04)
+
+**Branch** `fix/387-customers-fix-round` (FIX). Spec `/specs/387-customers-fix-round.md`. No CODEREF in range.
+Seven owner findings on the customer surfaces. Nothing here changes a design; everything is a rule, a label, a
+number or a control that disagreed with its twin.
+
+### §1 — "Open the ledger" after a merge (third report)
+
+**The evidence rule could not be discharged in code, and this is the honest statement of that.** §1.1 and §1.4
+ask for a capture on the DEPLOYED staging build (console trace, network calls, screenshots at two seconds,
+desktop and mobile) and for a Playwright run against that build. This repository contains **no browser test kit
+at all** — there is no `playwright.config.*` anywhere in it, `apps/web` has no `test` script, and the agent has
+no deployed build to drive. So the runtime capture is the owner's; what was done here is the rest of §1 in
+full: both named candidates audited from source, the cause named with a line, and a fix that closes both.
+
+**Candidate (a) — `CustomersClient.tsx` `openRecord`, the line the spec cites as 773 (the file has moved since;
+it is the `setPending((cur) => data?.rows.find(...) ?? cur)` line inside `openRecord`). CONFIRMED as a real
+defect.** `openRecord` was `useCallback(..., [fail, data, openIdRef])` and resolved the row out of `data` — the
+register as it stood on the render the callback was created on. `onMerged` awaits `loadList()` and then calls
+the copy it captured BEFORE that read landed, so the survivor is looked up in the PRE-merge list. On the happy
+path (survivor present in both copies) it works by luck; whenever the captured list does not hold the id,
+`find` returns undefined, `?? cur` keeps the tombstone (or null), and the fetched book lands under a header
+that is not its own.
+
+**Candidate (b) — the mount condition. CONFIRMED, and it is the one that makes the press do NOTHING.** The
+surface mounts on `{pending && <CustomerRecord …>}` and on nothing else, while `openRecord` writes `ledger`
+unconditionally. `ledger` arriving with `pending === null` renders no surface at all: a fetched book with
+nowhere to draw it — which is exactly "press Open the ledger, nothing opens". On the phone that state is
+reachable because 372 §2 made Merge a full-page sheet over the record it was opened from.
+
+Ruled out on the way: the layer stack. `closeLayer` increments `suppressed` before `history.back()` and
+`handlePop` decrements it, so unmounting the merge sheet does not pop the record sheet under it — the 203 §2
+class of bug is not this one.
+
+**The fix, at both causes.** (1) `rowsRef = useMemoRef(data?.rows ?? NO_ROWS)`: the callback reads the register
+as it is NOW and no longer depends on `data`, so no holder of it can hold a stale copy. (2) After the read
+lands, `setPending` resolves — freshest row, else `rowFromLedger(view)`, a `CustomerRow` built from the book's
+own customer and figures (nothing computed; `paymentCount` is the ledger's own payment stream, `lastActivityAt`
+its last movement). The surface therefore does not need the register's permission to open.
+
+### §2 — refunded sale returns read on the book (Pro)
+
+New shared ledger kind **`INFO`**, a sixth kind that is not a movement: `debit = credit = 0` and the running
+balance of the row before it. `buildCustomerLedger` is NOT edited and never sees one — `mergeCustomerLedgerInfo`
+folds them in after the walk, sorting by `at` with INFO last on a shared instant. The server emits one per sale
+return that is `CREDITED`, not voided, and posted no `CREDIT` leg; the label comes off the SAME
+`customerLedgerLabel` the credit leg uses, the tender is the return's own `refundMethod` (336), and
+`infoAmount` carries what changed hands. Simple filters them out; Pro draws them with `—` in both money cells
+and a note reading "{amount} went back — no balance change"; `buildCustomerStatement` drops them, so the paper,
+its two totals and its count are all taken off the same set.
+
+**Reading recorded:** §2.1 asks for the amount "in the amount column". Pro has no amount column (that is
+Simple's one signed column, and Simple filters INFO out), so the figure is stated in the row's own note line on
+both Pro surfaces — desk table and phone card — with the muted phrase beside it.
+
+**§2.3 — the supplier ledger is audited and deliberately NOT given INFO rows.** Its premise does not hold in
+this codebase: `supplierCreditNotes` (pharmacy.service.ts) posts a `CREDIT_NOTE` movement for EVERY posted
+purchase return whatever it settled with — a purchase return reduces the payable when the stock leaves, 304
+§1.2 — so no purchase return is missing from that book. Adding an informational row there would print a second
+row for a document the ledger already names, which is the double-naming 365 forbade. Decision logged here and
+guarded by a test case rather than left silent.
+
+### §3 — receive payment dialog
+
+1. Quick-fill pills removed on the desk too (they were already off the phone, 364 §4): the row offered a chip
+   for the figure the field is pre-filled with and has selected on open. `quickAmounts` and the `<QuickAmounts>`
+   mount are gone from this dialog only; the kit component and its POS/New Purchase callers are untouched.
+2. Wrong party: the grep found exactly ONE offending string in the customer dialog — `pdPayNotePh`, *"Optional —
+   visible on the supplier statement"*. Retired for `pdPayNotePhCustomer` / `pdPayNotePhSupplier`, each dialog
+   naming its own party. Every other key this dialog renders was checked against the EN catalogue for the word
+   "supplier"; none matched, and a test now keeps it that way.
+3. `paymentActionState(customer)` in `@mp/shared` → `receive` | `receive-or-refund` | `disabled` + the reason
+   (`merged` | `inactive` | `settled` | `noCredit`). The register's action cell, the drawer footer and the
+   phone's sheet footer (one `<Panel>` foot) all read it; a disabled control carries the reason as `title` and
+   `aria-describedby`.
+4. One icon: the action column draws `Banknote` whatever the balance does; the label carries the difference.
+
+### §4 — statement
+
+1. `CustomerStatementRange` now carries `fromDay`/`toDay` (`YYYY-MM-DD`) beside the instants, and the bounds are
+   resolved in the tenant's zone by a new `zone-day.ts` (`PLATFORM_TIME_ZONE = 'Asia/Karachi'`, `zoneDay`,
+   `zoneDayStart/End`, civil-day arithmetic; `Intl` is the offset oracle, so a DST zone is the platform's tz
+   data rather than a table). The masthead formats the DAYS from their own numbers — a day formatted through an
+   instant can always drift by a zone. Unit test: 2026-09-04 in +05:00 prints `04 Sep`, the window closes at
+   `2026-09-04T18:59:59.999Z`, and the last day's evening sales are inside it.
+2. One counter: `entryCount` on the statement view, read by the dialogue's line and by the paper's masthead and
+   continuation line. The paper counted the synthetic opening row; the opening balance is a STATE, not an entry.
+3. The statement's description uses the row's own `customerLedgerLabel` output whenever the row is a return
+   (`saleReturn` added to `CustomerLedgerRowView` and carried to the paper), so the drawer and the document
+   describe one row with one sentence.
+
+### §5 — mobile sheet
+
+1. Status pill: `.mp-pur2 .sheet__hd--stack > .pill { flex:1 0 100% }` was doing two jobs — claim the line AND
+   size the box. Separated: a zero-height `::after` flex item takes the full basis, the pill is
+   `flex:0 0 auto; width:fit-content`, scoped to a new `mp-led-sheet` class so View Purchase's `.vdsub` and the
+   returns `.retsum` (which ARE full-width) keep the old rule. **Computed width, derived from the rule on a
+   360px viewport, `Baqaya`: before 268px (324px head content − 56px inset); after 74px (the word + the pill's
+   `3px 10px` padding).** Stated as derived, not measured: there is no browser in this environment.
+2. Edit footer: Deactivate is hidden on mobile only (`!mobile &&`) — it already lives under MORE in the record
+   sheet, and a third button in `.sheet__foot--row` squeezes all three at 360px. The desk dialog keeps 364's row
+   (checked, not assumed).
+3. `LedgerScrollFoot` unmounted from BOTH party sheets. The trip-wire lived inside it, so each sheet now mounts
+   the bare `useInfiniteScroll` sentinel (`.ledfoot__wire`) in its place and keeps loading on scroll. The
+   component and `useLedgerJump` stay in the kit (Accounting and Expenses still mount the bar) for the redesign
+   §5.3 names.
+
+### Gates + files
+
+`pnpm lint` and `pnpm typecheck` run once at the end: both green (one pre-existing unused-eslint-disable warning
+in `doctor-portal.repositories.ts`, untouched by this step). Tests written, not run (AGENT.md §4A).
+
+New: `packages/shared/src/zone-day.ts`, `apps/api/src/pharmacy/customers-fix-387.spec.ts`,
+`packages/ui/src/lib/customers-fix-387.spec.tsx`.
+Changed: `packages/shared/src/{pharmacy-customers.ts,index.ts}`, `apps/api/src/pharmacy/pharmacy.service.ts`,
+`apps/web/app/(app)/pharmacy/{customers/CustomersClient.tsx,suppliers/SuppliersClient.tsx}`,
+`apps/web/components/pharmacy/{CustomerStatement.tsx,CustomerStatementDocument.tsx,RecordCustomerPayment.tsx,RecordSupplierPayment.tsx}`,
+`apps/web/app/globals.css`, `packages/i18n/src/messages/{en,ur}.json` (10 keys added, `pdPayNotePh` retired).
+Existing suites updated where they asserted the old truth: `customers-merge-335.spec.ts` (the range is now the
+tenant's days), `customer-rules-364`, `customers-ledger-334`, `customers-mobile-close-372`,
+`suppliers-drawer-and-mobile-r4`.
+
+**Owner still owes §1's runtime capture and §4's byte-equal PDF hash** — both need the deployed build.
+
+---
+
+## 389 — gate-repair-387 — DONE (2026-09-04)
+
+**Branch:** `fix/387-customers-fix-round` (387's existing branch, reused per the spec — no new branch). **Type:** FIX, carries 387.
+
+The `unit` gate failed after 387 on four **source-substring tests** — tests that read a source file and assert an exact line. 387 (and, for the fourth, 386) changed those lines on purpose, so each test was repaired to the new truth. No product code was touched: §1.3's investigation found the reuse rule intact, so nothing had to be restored.
+
+**The rule recorded, for every source-substring test from here on:** such a test asserts an *intent*. When a later spec changes the text on purpose, the test is updated to the new text **in the same branch** — never reverted around, never deleted, and the spec section that changed the line is named in the test.
+
+### §1.1 — the ledger union (two tests)
+
+`packages/shared/src/pharmacy-customers.ts:74` now reads
+`export type CustomerLedgerKind = 'OPENING' | 'CHARGE' | 'PAYMENT' | 'REFUND' | 'REVERSAL' | 'INFO';`
+— **387 §2** added `'INFO'`, the sixth kind, which is not a movement: a refunded return that settled in cash or by card changed no receivable, so it is *stated* and never *posted*.
+
+- `packages/ui/src/lib/customer-advance-balance.spec.tsx` — expectation updated to the six-member line, with 387 §2's reason written beside 227/334/363's. Because this suite imports the arithmetic, the union test gained a sibling `it` that proves 387 §2's actual rule behaviourally: `buildCustomerLedger` emits no `INFO` row; `mergeCustomerLedgerInfo` folds a stated row in afterwards carrying `debit = credit = 0` and the balance of the movement before it; every movement row and the closing figure (`-5000`) come back byte-identical to the walk's own. Imports `isCustomerLedgerInfo` + `mergeCustomerLedgerInfo` from `@mp/shared`.
+- `packages/ui/src/lib/customers-ledger-parity-363.spec.tsx` — same expectation updated (structural suite, so the sibling assertion is structural too): the slice `between(shared, 'export function buildCustomerLedger(', '\n}\n')` contains no `INFO`, and `mergeCustomerLedgerInfo` is asserted to exist as a **separate** exported function that runs after the arithmetic. That is the balance walk being untouched, asserted rather than assumed.
+
+### §1.2 — the edit dialog's footer
+
+`packages/ui/src/lib/customers-close-373.spec.tsx:199` expected `{customer && customer.active ? (`. **387 §5.2** removed Deactivate from the **mobile** edit footer only — `.sheet__foot--row` lays its buttons out at half width each, so a third control wrapped Save changes at 360px, and it was a duplicate there anyway (364 §2 put Deactivate under MORE in the record sheet). **The desktop dialog was left exactly as 364 designed it**, which is the "check it, do not assume" 387 asked for, and the check is now recorded in the test:
+
+- the guard is asserted as `{!mobile && customer && customer.active ? (`, still with `className="btn--dangerquiet"` on the leading edge;
+- the footer slice is asserted to hold exactly three `<Button` (Deactivate, desk-only · Cancel · Save changes) — i.e. **on the phone it is Cancel · Save changes and nothing else**;
+- the phone's route in is asserted where it lives: the record sheet's MORE list (`className="msact msact--danger"`), which is outside the dialog.
+
+373 §2's own rule is untouched and still asserted: the Add dialog draws one switch (Allow udhaar), never reads the Active copy, and its payload cannot flip an account.
+
+### §1.3 — `<ReasonListEditor` — **OUTCOME: the mount MOVED to a wrapper (allowed). No violation; no code restored.**
+
+`packages/ui/src/lib/settings-to-mockup-374.spec.ts` opened `apps/web/app/(app)/settings/sections/ReturnsSection.tsx`. `git diff staging...HEAD` on that file is **empty** — the change is not 387's at all; it landed in **386 §2.4** (commit `8826832`, already on staging), which lifted the *wired* returns list (its endpoint, its cache invalidation, the sentence under each row) out of `ReturnsSection` into its own module `sections/ReasonList.tsx` so the new Adjustment-reasons pane could **mount** it instead of copying it. `ReasonList.tsx:28` imports `ReasonListEditor` and `:135` mounts `<ReasonListEditor` — the editor never forked, and there is still exactly one of it. So the reuse rule of 374 §1 is *upheld*, not broken, and the test was repointed rather than the code restored:
+
+- Returns is asserted to mount `<ReasonList kind="PURCHASE"` / `kind="SALE"` and to contain no `<table` of its own;
+- the wrapper is asserted to mount the editor **by component** (`import { ReasonListEditor } from './ReasonListEditor';` + `<ReasonListEditor`), never by copy;
+- `AdjustmentReasonsSection` is asserted to mount the same wrapper (`<ReasonList kind="ADJUSTMENT"`), so the third list is a third mount and not a third copy;
+- Accounting's direct mount and `export function ReasonListEditor` are unchanged.
+
+### §2 — the noise
+
+The `WARN`/`ERROR` lines above the failures (`bus down`, `boom: FINANCE`, `db down`) are the API fakes exercising their failure paths and are expected output, not failures. **Known warning, deliberately not chased here:** "A worker process has failed to exit gracefully" in `@mp/api` tests — a handle leak in the test harness, not a product defect and not in this spec's scope.
+
+### Files changed
+
+- `packages/ui/src/lib/customer-advance-balance.spec.tsx`
+- `packages/ui/src/lib/customers-ledger-parity-363.spec.tsx`
+- `packages/ui/src/lib/customers-close-373.spec.tsx`
+- `packages/ui/src/lib/settings-to-mockup-374.spec.ts`
+- `PROGRESS.md`, `PROGRESS-HISTORY.md`, `specs/389-gate-repair-387.md`
+
+No product source file was modified. **Gates:** `pnpm lint` ✅ and `pnpm typecheck` ✅ (both clean); `test:unit` / `build` left to the controller per §3.
+
+**WORK TYPE: FIX (branch fix/387-customers-fix-round)**
