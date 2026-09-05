@@ -27956,3 +27956,191 @@ optimistic edit uses. The owner's phone/desktop verification is a look, not a ga
 
 **Gates.** `pnpm prisma generate`, `pnpm lint` and `pnpm typecheck` all clean (one pre-existing
 unused-eslint-disable warning in `doctor-portal.repositories.ts`, untouched by this step).
+
+---
+
+## 400 — audit-log-to-mockup — DONE (2026-09-05)
+
+**Branch:** `feature/400-audit-log-to-mockup` · **Type:** FEATURE · **Spec:** `/specs/400-audit-log-to-mockup.md`
+**Mockups:** `audit-log-desktop.html` §A/§B, `audit-log-mobile.html` §A/§B. No CODEREF exists for 400.
+
+### What this step actually was
+The audit trail has been written since day one (spec 06) and had only ever been LISTED: four columns
+of the database's own vocabulary (`when / actorId / action / entityType·entityId`), a filter box
+asking a shopkeeper for an "entity", and a raw cuid where a person's name belongs. 400 gives it the
+mockup's reading surface — the filters, the KPI strip, the composed action sentence, the device, the
+before/after diff, the sensitive-five marking, the record link and the retention footer.
+
+### The one decision everything else hangs off
+**Module and action kind are DERIVED, and the fold lives in `@mp/shared/audit-log.ts`.** Nothing in
+the database stores "POS" or "Price changed". The API has to fold `action`/`entityType` into those
+buckets to COUNT them (the chips carry figures) and to FILTER by them; the page has to fold an
+ARRIVING live row into the same buckets to decide whether it belongs in the list on screen. Two folds
+would mean two tables and, on the first new writer, the server counting a row under Inventory while
+the screen files it under Settings. So there is one table, and both sides import it. The direct
+consequence: the derived filters are NOT pushed into SQL — that would have been a second, SQL-shaped
+copy of the very table the module exists to prevent. The cheap predicates (tenant, actor, entity,
+date window) go to Postgres; the fold runs in `AuditService.page` over a bounded window
+(`AUDIT_SCAN_MAX` = 1000 rows). Stated in the code rather than hidden: a busy shop's month fits.
+
+### New shared module — `packages/shared/src/audit-log.ts`
+- `AuditModule` (8) + `auditModuleOf(entityType, action)` — entity-type table first, action-prefix
+  table second, `null` third. `null` is a real answer: the platform writes rows a pharmacy screen has
+  no bucket for, and an unbucketed row shows under "All modules" rather than being mis-filed or lost.
+- `AuditActionKind` (9) + `auditActionKindOf(action)` — ordered rules, first match wins, so
+  `pharmacy.return.sale.void` is a void and not a sale-return creation.
+- `AUDIT_SENSITIVE_KINDS` — the five: void, reversal, password set, permission change, price change.
+  Warning tone, never danger (the mockup's first reference note): all five are authorised acts.
+- `auditDiffRows(summary)` / `auditChangedCount` — the before/after fold. Every field on either side
+  appears; unchanged ones are kept and marked `changed: false`, because a diff that hides what did not
+  move leaves the reader unable to tell "the total was not touched" from "the total was not recorded".
+  Values are flattened to strings HERE so the comparison and the rendering cannot disagree (a `1500`
+  and a `"1500"` written by two code paths are one price).
+- `auditEntityLabel(summary)` — the record's own reference (`INV-71`) read out of the summary,
+  preferring the `after` side. Never an id (270 §2).
+- `auditRecordHref(entityType, entityId)` — entity type → a route the nav registry already has. No
+  route → no link; a dead link into a screen that does not exist is worse than none.
+- `AUDIT_RETENTION_MONTHS = 24`, the wire shapes (`AuditLogRow` / `AuditLogPage` / `AuditKpis` /
+  `AuditActorOption` / `AuditDevice`), `matchesAuditFilter`, and the `audit.appended` envelope.
+
+### Schema
+`AuditLog.device Json?` + migration `20260912000000_audit_log_device` (additive; also a
+`(tenant_id, action, created_at)` index for the Action filter). §2 named `requestId` first and it is
+the wrong fact — a request id correlates the rows one request wrote and says nothing about the
+machine; the auth layer captures a user-agent and an address only for a SESSION, which is a different
+question and unanswerable six months later. §2 anticipates exactly this: "if not stored, add
+`device Json?` … and populate from this spec on". Pre-400 rows read null and the column prints an em
+dash rather than inventing a counter.
+
+### API
+- `audit.context.ts` — `device`, plus `recordAuditBefore(before)` and `refineAuditAction(action)`.
+  Both no-ops outside a request scope, so a seed or a sweep never starts failing because it called one.
+- `audit.interceptor.ts` — reads the device off every request (the same forwarded-for/socket
+  precedence `AuthController.loginContext` uses); writes `summary: { before, after }` when a before
+  was recorded and the bare result when it was not, so every audited route with nothing to say about
+  its previous state keeps a byte-identical summary; honours a refined action.
+- `audit.repositories.ts` — `device` on insert/row; `insert`/`insertScoped` RETURN the stored id and
+  timestamp (the live envelope carries the row, and a row without its id cannot be keyed or
+  de-duplicated by the page); `actors()`; `olderThan()`/`deleteOlderThan()`/`allTenantIds()` for the
+  sweep; opaque `<iso>|<id>` cursor; `orderBy [createdAt desc, id desc]` so two rows written in the
+  same millisecond cannot straddle a page boundary.
+- `audit.service.ts` — `page()` answers the rows, the four KPI figures, the actor directory and every
+  chip's count over ONE window, so nothing on the screen can disagree with anything else on it.
+  `exportCsv()` runs the identical fold, which is what makes §5's "export matches the filtered count"
+  true by construction. The CSV header was widened and `actorId`/`tenantId`-as-identity dropped: it
+  prints `when,user,role,module,action,actionKey,record,recordType,reason,device,ip,…`.
+- `audit.realtime.ts` (new) — `AuditEventPublisher` + `AuditRealtimeStream`. `AUDIT_APPENDED` is the
+  NINTH scope on the spec-112 tenant bus. The envelope carries the ROW (not 375's identity-free
+  shape) because an audit row is immutable and complete the moment it is written — a re-read could
+  only return the same bytes. Its own SSE endpoint (`GET /audit/stream`) for the only reason a stream
+  gets one here: the gate differs (`audit.view`, not `pharmacy.sell`).
+  ROLLBACK TRADE, recorded rather than hidden: `record()` announces after its own transaction has
+  committed; `write()` announces from inside the caller's, so a transaction that rolls back leaves one
+  line on one open screen until its next read. That is 184's standing rule read as written.
+- `audit.retention.ts` (new) — §4's worker. Archive → verify → delete, per month.
+  **WHERE the cold storage is:** one object per month at `audit/<tenantId>/audit-YYYY-MM.csv`,
+  written through the `ObjectStore` seam (the `stored_objects` table, 141's local analogue of a
+  bucket; pointing it at R2 later is a provider swap on the AuditModule line, not a rewrite). A month
+  is deleted only after its object has been written AND read back; the last month of a bounded read
+  may be incomplete, so it is archived but not counted finished and the next run takes it whole.
+  Scheduler rides the SAME `RETENTION_SWEEP_ENABLED` switch 62's retention job uses.
+  **Why 62's pruner was left alone:** it prunes `AUDIT_LOG` at 3650 days, the legal backstop. That
+  number is not this spec's to change, and lowering it would have replaced an archive with a hard
+  delete. 730 < 3650, so this sweep always reaches a row first and the pruner finds nothing — no
+  window in which a month can be destroyed before it is archived.
+- `audit.dto.ts` — `module`/`kind`/`q`/`cursor`. The two closed vocabularies are REFUSED on an
+  unknown value rather than ignored: silently dropping one would show an unfiltered log under a chip
+  the reader believes is applied, which is the one failure mode an audit screen must not have.
+- `notifications/realtime-bus.module.ts` (new) — the spec-112 bus extracted out of
+  `NotificationsModule`. `AuditModule` is imported by `PermissionsModule` (RBAC writes audit rows),
+  which `NotificationsModule` imports in turn, so `AuditModule → NotificationsModule` would have
+  closed a three-module cycle for one provider. The bus module imports nothing, therefore cannot be
+  in a cycle; `NotificationsModule` re-exports it so every existing consumer is untouched. One bus
+  instance, exactly as before.
+
+### The six writers §3 names (a `before` added at each)
+- customer edit — `PharmacyService.updateCustomer` records `customerView(before)` (the SAME shape the
+  result is returned in; a repo row vs a view would report every derived field as changed);
+- product edit — `updateMedicine` now reads the row FIRST (it previously read it only when the patch
+  had no column fields) and records `medicineView(previous, qty)`;
+- price change — the same writer refines the action to `pharmacy.medicine.price.change` when
+  `salePrice` or `costPrice` moved. ONE row, never two: an edit that changes a price IS a price
+  change. This is what gives the Action filter's "Price changed" chip and the warning badge something
+  to match — before 400 both were `pharmacy.medicine.update`;
+- settings save — `PharmacySettingsService.updateSettings` records the RESOLVED document (the route
+  returns a resolved one; a diff against the raw stored row would report every defaulted field as
+  newly set);
+- role/permission change — `RbacController.setKeys` now writes `{ before:{name,keys}, after:{…},
+  granted, revoked }`. 223's granted/revoked lists stay: "12 → 11" tells an auditor nothing, "lost
+  audit.view" tells them everything;
+- user edit — `AdminUserService.update` wrote `{ fields:['role'] }` (the names of what moved and none
+  of the values). It now carries a whitelisted before/after snapshot beside the field list — a
+  whitelist, not the row, because a summary that has to be masked is one that should not have been
+  assembled.
+
+### Web
+- `app/(app)/admin/audit/AuditClient.tsx` (new; `AuditExplorer.tsx` deleted). Desk: `.pghead` with the
+  read-only period chip, the ONE `PageLiveSync`, Export CSV; the four `.pkpi` tiles; the filter row;
+  the table with the composed action, the module, the device and the chevron; the retention footer.
+  Phone: `MobilePageChrome` in the shell's slot, the scrolling `.mkpis`, the search, one **Filter**
+  button → a sheet of chips, cards instead of rows, and the entry as a bottom sheet. Both frames are
+  ONE `Panel`.
+- **The period is READ here, not set here** (the mockup's third note): the chip states the window
+  `/pharmacy/accounting` remembers (`accounting.ledger` list pref) and links there to change it. No
+  picker on this screen, so it cannot disagree with the ledger. The exclusive month end is stepped
+  back 1ms because the audit bounds are inclusive.
+- The three filters are the kit's `<SearchSelect>` — the design-drift check refuses a raw `<select>`,
+  and rightly: the kit owes the keyboard, the screen reader and the phone's own picker sheet.
+- `useAuditLive` in `lib/stock-live.ts`, a fifth ENDPOINT on the one refcounted read loop. No
+  coalescing, deliberately: the other scopes coalesce because each frame triggers a re-read, whereas
+  here each frame IS the row and dropping one would silently lose a line from an audit log.
+- A 403 replaces the whole surface with the refusal sentence rather than drawing a KPI strip over a
+  log nobody may read.
+- `globals.css` — `.mp-aud` / `.mp-aud-drawer` / `.mp-aud-sheet`: the filter row, `.audact`,
+  `.audmod`, `.auddev`, `.sensmark`, `.audcard`, `.auddiff`, `.audreason`, `.audlinks`, `.audkeep`,
+  `.perchip`, `.mfiltbtn`. The atoms the drawer/sheet borrow (`.factrow`, `.pdsec`, `.vdsub`,
+  `.vddate`, `.field`, `.filterchip`, `.mchips`) had their existing selector lists EXTENDED rather
+  than copied, so there is no second definition to drift.
+- i18n: 128 `alg*` keys, EN + UR at parity.
+
+### Permission
+`audit.view` added to the MANAGER defaults (§1: "Owner by construction; Manager default on; others
+off"). The Manager runs the counters, holds the void and closes the day, and is the person asked what
+happened when a figure looks wrong.
+
+### Tests
+- `packages/ui/src/lib/audit-log-400.spec.ts` — the mapping tables, the sensitive five, the diff, the
+  entity label, the record links, the filter predicate, the live envelope, the retention constants and
+  the permission defaults, plus source assertions that the screen mounts ONE `PageLiveSync`, draws no
+  control of its own, folds through the shared table, and carries no edit/delete/bulk action.
+- `apps/api/src/audit/audit-log-400.spec.ts` — the one-window page, the derived filters, actor naming
+  (and the 307 §2 login-name-part fallback), cursor paging, the four KPI figures, the export matching
+  the filtered count, the CSV header, the live announcement carrying the stored identity, the
+  context helpers, and the archive-then-trim sweep (including "deletes nothing when the archive
+  cannot be read back" and idempotency).
+- Updated: `audit.e2e.spec.ts` (the page shape, the new CSV header, tenant isolation asserted on the
+  record rather than on a `tenantId` the wire no longer carries), `audit.service.spec.ts` (device),
+  `realtime-everywhere-343.spec.ts` (the audit exemption is SPENT — the screen subscribes now), and
+  `leftovers-and-live-sync-390.spec.tsx` (the PageLiveSync assertion follows the file rename).
+
+### Not done, and why
+§5 asks for a Playwright sweep. **This repository has no Playwright** — no config, no runner, no
+`test:e2e` script anywhere in it. The assertions §5 lists are therefore expressed as unit tests over
+the same rules (the live row carries the warning badge because `isSensitiveAuditAction` says so; the
+export matches the filtered count because both run one fold), and the browser-level sweep is left for
+whichever step introduces a browser runner. Recorded here rather than silently skipped.
+
+### Gates
+`pnpm lint` clean (one pre-existing warning in `doctor-portal.repositories.ts`, untouched by this
+step). `pnpm typecheck` clean, 32/32. `pnpm prisma generate` run via the typecheck task after the
+schema change. `pnpm test:unit` / `build` not run per the standing rules — the controller runs them.
+
+### 400 — gate fix (test:unit)
+
+Three stale unit assertions from step 400, no product change:
+
+- `audit.service.spec.ts` — `toCsv` header still expected the old id-first column list; updated to the 400 §2 set (`when,user,role,module,action,actionKey,record,recordType,reason,device,ip,tenantId,requestId,impersonatedBy,summary`). The rest of the case (ISO timestamp, RFC-4180 quoting of the summary cell) holds unchanged: no cell before `summary` can contain a comma or a quote.
+- `dashboard.e2e.spec.ts` — "a viewer without `audit.view` does not get the audit-highlights card" used MANAGER, and 400 §1 gave MANAGER `audit.view`. Switched the case to DOCTOR (has `reports.view`, not `audit.view`, not `accounts.view`), which keeps the assertion's meaning; the MANAGER case for the cash card is untouched.
+- `audit-log-400.spec.ts` — the before/after case handed `runInAuditContext` the module-level `ctx` fixture, and `recordAuditBefore` writes onto the ambient context object itself (that is exactly how the interceptor reads the pairing back at the end of the request). The mutation leaked into the later "refines nothing" case. Fixed at the fixture (`{ ...ctx }`), not at the seam: copying inside `runInAuditContext` would sever the interceptor's read of `ctx.before` / `ctx.action`.
+
+Gates: `pnpm lint` clean (one pre-existing unrelated warning in `doctor-portal.repositories.ts`), `pnpm typecheck` clean.
