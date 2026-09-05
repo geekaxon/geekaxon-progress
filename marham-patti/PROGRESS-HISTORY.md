@@ -27543,3 +27543,80 @@ EN + UR: `pdLedMoreLoad`, `pdLedMoreAllShown`, `pcusReceiveOrRefundAction`, `pcu
 
 ### Gates
 `pnpm prisma generate` ✓ · `pnpm lint` ✓ (one pre-existing warning in `doctor-portal.repositories.ts`, untouched) · `pnpm typecheck` ✓ (31/31). Targeted jest runs of every new and every touched suite green; the full `pnpm test:unit` is the controller's.
+
+---
+
+## 396 — thermal-receipt-to-mockup — DONE (2026-09-05)
+
+**Branch:** `feature/396-thermal-receipt-to-mockup` · **Type:** FEATURE · Spec: `specs/396-thermal-receipt-to-mockup.md` · Mockup: `specs/mockups/pharmacy/thermal-receipt.html`
+
+### The decision that shaped the step: the mockup is the oracle, not the golden file
+
+The spec's own warning — *"a golden that is regenerated from the code under test proves nothing"* — is the whole design of this step's tests. §8 of the mockup carries no literal byte listing; it states the payload rule instead (*"each line above is a string padded to 48 or 32 characters… bold is `ESC E 1`, double-height is `GS ! 0x10`, alignment is `ESC a`, the rule is 48 or 32 hyphens. Nothing else is sent. The preview IS the payload"*). So the byte listing IS the drawn receipt, and the oracle is the mockup's rendered lines.
+
+`packages/escpos/src/receipt-to-mockup-396.spec.ts` therefore carries the mockup's §3 sale — invoice SI-40218 at Al-Shifa Pharmacy — as three literal `readonly string[]` arrays lifted out of the HTML (80mm / 58mm / 48mm), and asserts `printedLines(renderSaleReceipt(...)) === those arrays`, line for line, trailing spaces included. All three widths match exactly. Two normalisations are applied to the mockup text and are documented in the file: the `·` between a customer's name and their number folds to `.` (`ascii.ts` — the middot is not in the printer's code page), and the mockup's blank spacer lines are drawn with a non-breaking space where paper simply feeds an empty line.
+
+Where the mockup writes a string differently per roll (`12-C Ferozepur Road` → `12-C Ferozepur Rd`, `Open daily 9am - 11pm` → `Daily 9am - 11pm`, the customer's phone dropped at 32 columns, the policy lines re-wrapped by hand), the fixture states it per roll: those are a shop's own free text typed into Settings, not something a renderer may invent. What the test measures is the LAYOUT, and the layout is exact.
+
+**Two deliberate deviations from the mockup, both recorded rather than smoothed over:**
+1. `Orig 16 Aug 6:42 PM` at 24 columns — the mockup's own reprint FOOT has a space before `PM` while its reprint HEAD three lines above prints `9:04AM` without one. The renderer uses the compact form consistently (`Orig 16 Aug 6:42PM`). Consistency beats reproducing a typo.
+2. The narrow rolls' policy block is hand-wrapped in the mockup at ~25 and ~17 characters while the same file centres a 30-character thank-you on one line at 32. There is no rule there to implement, so centred prose wraps at the full roll and the policy is treated as multi-line free text (one entry per line, as a tenant types it).
+
+### What was built
+
+**`@mp/escpos` — the renderer, rewritten to the mockup's anatomy**
+
+- `layout.ts` — the 48-column item grid as data: `ReceiptGrid { index 2, name 13, qty 6, rate 9, disc 8, amount 9 }` = 48 exactly, plus `gridRow()` (every cell padded, never tabbed — §8.2) and `splitGridName()` (first chunk into the 13-wide cell, continuations hanging at a three-space indent with one column more, which is what the mockup's `strips per box` needs). 48mm = 24 columns was already present from 395 §3.1.
+- `receipt-copy.ts` (new) — the per-roll vocabulary as one object per column count, so a reviewer reads three tables side by side instead of chasing `width < 48` branches: `Cashier`/`Cash.`, `Sales tax (taxable lines)`/`Sales tax`/`Tax`, `GRAND TOTAL`/`TOTAL`, `Total qty`/`Qty`, `Baqaya before`/`Baqaya bef.`, `batch BR-1274  exp 01/2029` / `b/BR-1274 exp 01/29` / `b/BR-1274 01/29`. Plus the three timestamp shapes: `saleStamp` (`16 Aug 2026  6:42 PM` / `16 Aug 26 6:42 PM`), `printedStamp` (zero-padded hour, because `Printed 04 Sep 26 4:42PM` is EXACTLY 24 columns and one more character would wrap the only line that says when the paper was made) and `compactStamp` for the reprint marks.
+- `commands.ts` — **the parked raster path is built.** `rasterImage(MonoBitmap)` emits `GS v 0 m xL xH yL yH d…`; a bitmap with no dots, one wider than a head can address, or one whose buffer is short returns an empty array, so the receipt falls back to the text header rather than to garbage. `decode.ts` reads it back as `«raster:232x64»` — the shape, not a wall of dots, with the hex half of the golden pair keeping every bit.
+- `render.ts` — `renderSaleReceipt` rebuilt: letterhead (logo → name double-height → address → `Ph …` → email → timings → rule → `SALES RECEIPT` → rule) · reprint block · bill block with its own label column · the six-cell item table with wrap and split-batch sub-lines · `Items n · Total qty m` · totals · payment lines · the udhaar block · `YOU HAVE SAVED` · policy lines · `Printed …` · thank-you · powered-by · Code-128. `letterhead()` and `close()` are now shared by the refund slip, the statement and the Z-report (§4's "same header/footer anatomy"); the Z-report's body is untouched.
+
+**Decisions inside the renderer, and why**
+
+- **An advance is a payment method.** The mockup prints `Cash 2,292.90 + Advance 1,455.00 = 3,747.90`, the grand total exactly. But 227 §2.4 posts an applied advance INSIDE a `CREDIT` leg, so printing both at face value counts the same rupees twice and `Paid` overshoots. The renderer applies the advance against the credit leg first and shows that leg net of it; whatever is left of the advance is a tender in its own right. Both the mockup's sale (no credit leg) and the 280 fixture (advance folded into credit) now reconcile to the total. The account block follows the same split: `after = before + udhaarThisBill + advanceTendered`, which gives the mockup's `-2,000.00 + 1,455.00 = -545.00`.
+- **A negative balance is NAMED.** `-Rs 2,000.00 (in advance)` / `-Rs 545.00 (advance)`, never a bare minus. The spec asked for the mockup's `-Rs` to be "normalised to the app form" — `signedMoney` already produces `-Rs 2,000.00` and the mockup draws the same, so the two agree and nothing moved. At 24 columns the long tag is 25 characters, so the WORD shortens (`(advance)`) and the figure never does; if even that will not fit, the tag goes and the money stays.
+- **The grid is a preference, not a promise.** A quantity like `2 strip` or a seven-figure amount does not fit the 48-column table. The row STACKS instead — exactly as 32 and 24 always do — so the money keeps the last column. One over-long cell degrades one item, not the slip. (This was a real 49-character line in the 280 fixture, caught by the width sweep.)
+- **`Counter Counter 1`** — the stored counter name already carries the word, so the label is stripped when the value repeats it.
+- **A quotation states no money.** No tender lines, no `Paid`, and above all no `CHANGE Rs 0.00` on a document nobody has paid for.
+- **The barcode degrades to its number** (§1.7): with `barcode: 'none'` the invoice number prints as a readable centred line and no `GS k` goes out.
+- Centred lines are space-padded on BOTH sides to the full roll (§1 callout 2) instead of using `ESC a 1`, which also brought the Z-report's variance banner onto the same grid as everything else.
+
+**Tests**
+
+- `receipt-to-mockup-396.spec.ts` — 21 tests: the three widths line-for-line; the advance sample; the reprint marks at all three widths (head and foot); what each roll drops; the barcode degradation; the logo raster (present / absent / refused).
+- `receipt-width-396.spec.ts` — §1's sweep: eleven documents × three rolls, every printed line checked `length ≤ cols`, every rule and every money line `length === cols`. It is a sweep rather than a per-document assertion because the failure it guards against is a line added months from now that nobody thought to measure.
+- Goldens re-baselined and EXTENDED: `sale-48`, `refund-48`, `zreport-48` and `mockup-sale-{80,58,48}` are new; every existing file was reviewed as a diff (see below). `golden.spec.ts`'s header now says out loud that the goldens are a regression net and `receipt-to-mockup-396.spec.ts` is the oracle.
+- Updated to the new anatomy: `properties.spec.ts` (five assertions — the double-height total is now found by what it SAYS, since the letterhead name is tall too; the split-batch item is one number with two figure lines; `Previous udhaar` → `Baqaya before`/`Total Baqaya`; the non-ASCII name may wrap so it is checked piece by piece; the header assertions inverted, since 80mm carries the six-cell table and 58mm carries `Qty x Rate`).
+
+**Golden diff, reviewed line by line.** Every file gained: the centred letterhead padded to the roll, a `Ph ` prefix, the header rule, a bold centred title, and the new foot (policy lines, blank, `Printed …`, blank, thank-you, powered-by). The sale goldens additionally moved from `Date` first to `Invoice` first, from a two-column item list to the six-cell table with an item/qty summary, from `Previous udhaar` to the four-line Baqaya block, and gained `YOU HAVE SAVED`. The Z-report goldens changed ONLY in header, footer and the variance block's centring — its content is untouched, as §4 requires. The refund slip additionally reads its clock the way the sale receipt does (`15 Aug 2026  4:20 PM`, not `2026-08-15 16:20`): a shop whose two slips state the same day differently is two documents.
+
+**`@mp/shared` / `@mp/brand`** — `ReceiptItem` gained `batchNo`/`expiry` (the split-batch sub-line), `ReceiptPayment` gained `label`/`reference` (the wallet's own name — `JazzCash 0301-8842190` at 48 columns, `JazzCash` below), `ThermalReceiptInput` gained `phone`/`email`/`timings`/`printedAt`/`thermalLogo`. `StoreProfile` gained `receiptTimings` and `receiptEmail`, both blank by default and both on the letterhead JSON (220 §3's no-schema-change rule); `LetterheadStore` mirrors them.
+
+**§2 — the logo, and where the seam is.** The pure package emits bytes from dots and may never touch a canvas; the rasterising is `apps/web/lib/receipt-logo.ts`, which draws the tenant's Insignia at 40% of the roll's true dot width (230 / 154 / 115 dots at 80 / 58 / 48mm, the mockup's own numbers), thresholds it with Floyd–Steinberg dithering (a thermal head has one colour; a hard threshold turns a gradient lockup into a slab), and caches per (url, roll). Every failure path — no canvas, a logo that will not load, a tainted cross-origin read — returns `null`, and `null` means the shop's NAME prints as text, which is the default anyway. **A logo is never a reason a sale does not print.** The SWITCH is the server's answer: `buildReceipt` sets `thermalLogo` only when `store.receiptLogoEnabled`, so a client cannot turn it on. `pos-print-wiring-282.spec.ts`'s seam list gained the file with a note explaining why it is on the seam side of the line.
+
+**§5.1 — the finding 385 §3 left open.** Recent Sales' reprint handed bytes to a printer and left a LIST on screen: a shop with nothing paired got the browser dialog offering to print a table of sales, or — under `surfaceDialog` — silence. The reproduced slip is now mounted in the same `<ThermalReceipt>`/`<Paper>` surface the POS prints from, the print fires from the effect that follows the mount (opening the dialog before the surface paints prints the page behind it), and the dialog is `browserPrintDialog` rather than `surfaceDialog`. New `.rsales-reprint` scrim in `globals.css`, using the same `rgba(14,20,22,.5)` the sheets draw and collapsing to nothing under `@media print`.
+
+**§2 — the two header fields the mockup adds** are on Settings → General beside the logo switch: the free-text opening-hours line ("a pharmacy's hours are a sentence, not a schema") and the counter email. Both blank by default — a shop that has typed no hours prints no hours line and the rule sits straight under the phone, which is the header most sales actually print. EN + UR copy added to both catalogs (parity suite green).
+
+New `packages/ui/src/lib/thermal-receipt-to-mockup-396.spec.ts` covers the half that cannot be proved by rendering bytes: the two store fields and their whitelist, the logo switch being the server's, the 40% ceiling and the dither, and the reprint surface. `recent-sales-close-367.spec.tsx`'s "ONE PRINT RENDERER" assertion was updated to the mounted-then-printed shape (still exactly one `print({ kind: 'sale' … })` call site).
+
+### Gates
+`pnpm lint` and `pnpm typecheck` both clean across all 31 tasks (the one remaining lint warning is a pre-existing unused eslint-disable in `apps/api/src/doctor-portal/doctor-portal.repositories.ts`, untouched by this step). `@mp/escpos`'s own suite: 214 tests, 9 suites, green. Targeted runs of the affected suites elsewhere — `pos-print-wiring-282`, `recent-sales-{screen,close-367,desktop-391}`, `settings-{to-mockup-374,mobile,testing-pass-375}`, `alignment-and-print-sweep-356`, `print-and-mobile-parity-347`, `mobile-platform-polish`, `brand-shell`, the i18n parity suite, and the API's `unit-aware-purchases-returns-reports` / `payments-round-2-318` — all green. The full gates are the controller's.
+
+### What this step did NOT do
+The Z-report's BODY is unchanged (§4: "unchanged in content, new header/footer") — the mockup's `SALES BY METHOD` ladder and its `*** SHORT BY Rs 400.00 ***` banner are a different shape from 110's block and are not in this step's scope. The refund slip's body likewise keeps 336/370's settlement lines rather than adopting the mockup's per-line `reason:` rows, which the current `RefundSlipDoc` cannot express per line without a model change §4 does not ask for. The customer statement inherits the new header and foot and is otherwise untouched. §6's owner verification — the same sale printed on the 58mm Bluetooth printer and the 80mm USB printer, photographed beside the mockup — is hardware and belongs to the owner; it is not a code gate and does not hold the step.
+
+## Gate fix (2026-09-05) — 396's reprint scrim moved out of the tail of globals.css
+
+`pnpm test:unit`: `@mp/ui` `dialog-rule-and-statement-365.spec.ts` failed on
+"un-does every clip and scale at print time" — that assertion slices the stylesheet from the LAST
+`@media print {` and expects the statement dialog's overrides there. Step 396 appended
+`.rsales-reprint` plus its own `@media print` block to the end of `apps/web/app/globals.css`, so
+the slice began at the receipt scrim's block instead and found none of the `.mp-stmtdlg` rules.
+
+Fix: relocated the whole 396 §5.1 section (comment + `.rsales-reprint` / `.rsales-reprint__inner`
++ its print block) to sit directly after the thermal `.paper` print rules (~line 6459), which is
+where the paper kit it wraps already lives. No declaration changed; the classes are unique to 396
+so cascade order is unaffected. Added three lines to the section comment recording that the
+statement dialog's print block is pinned as the file's last one, so a later step does not append
+past it again. `pnpm lint` and `pnpm typecheck` both clean.
