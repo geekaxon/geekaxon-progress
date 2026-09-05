@@ -28144,3 +28144,84 @@ Three stale unit assertions from step 400, no product change:
 - `audit-log-400.spec.ts` — the before/after case handed `runInAuditContext` the module-level `ctx` fixture, and `recordAuditBefore` writes onto the ambient context object itself (that is exactly how the interceptor reads the pairing back at the end of the request). The mutation leaked into the later "refines nothing" case. Fixed at the fixture (`{ ...ctx }`), not at the seam: copying inside `runInAuditContext` would sever the interceptor's read of `ctx.before` / `ctx.action`.
 
 Gates: `pnpm lint` clean (one pre-existing unrelated warning in `doctor-portal.repositories.ts`), `pnpm typecheck` clean.
+
+## 401 — zero-downtime-release-pipeline — DONE (2026-09-05)
+
+A release stopped being an event. The new build now starts beside the old one on its own ports, proves itself healthy, takes the traffic when one nginx include file is rewritten, and the old one stops thirty seconds later — three environments, three branches, one script, one typed version.
+
+**Branch:** `feature/401-zero-downtime-release-pipeline` · **Spec:** `/specs/401-zero-downtime-release-pipeline.md` · **Type:** INFRA.
+
+### The one decision everything else hangs off
+
+Blue/green lives in `deploy.sh`, not in a new orchestration layer. Every environment already had one script, one `./.env` and one PM2 config; adding a second tool would have meant two places that know what a deploy is, and the PuTTY fallback would have rotted within two releases. So the slot lives in three files that already existed — `deploy.sh` (which slot, which ports, when to flip), `ecosystem.config.js` (the process names and ports for the slot being acted on), and each server's `./.env` (the four ports and the include path) — and the runbook's manual path is the *same script*, not a parallel procedure.
+
+### Blue/green in `deploy.sh` (§2)
+
+- `.deploy/live-slot` records which slot is serving; `.deploy/previous-slot` is what `--rollback` goes back to; `.deploy/rc-counter` increments the staging `rc.<n>`. All three are gitignored — which slot is live is a fact about one server, never about the repository.
+- Order: pull → install → prisma generate → **release rules** → **rehearsal** → drift gate → `migrate deploy` → seed (never on live) → build the **idle** slot → start it → health-check **both** tiers on their own ports → Lighthouse (opt-in per box) → rewrite the nginx include → `nginx -t && nginx -s reload` → restart the worker → stop the old slot after 30 s.
+- The flip is one include file per environment holding two `upstream` blocks (`mp_api_<env>` / `mp_web_<env>`). The vhost never changes again.
+- Before flipping, the new slot is asked to identify itself: `GET /health` must report the slot we meant to build into. A green light on the right port answered by a process that thinks it is the other slot is exactly the mix-up a flip would make permanent.
+- `./deploy.sh --rollback` flips back and restarts the old slot. It touches no git, no database and no build, because the old slot was *stopped*, not deleted.
+- **Backwards compatible on purpose:** an environment whose `./.env` has no slot ports still deploys the single-slot way it always did. An environment is upgraded by editing its `.env`, not by a flag day.
+
+### Three environments, three branches (§1, §3)
+
+- `deploy-dev.yml` (push to `develop`), `deploy-staging.yml` (push to `staging`), `deploy-production.yml` (`workflow_dispatch`). All three run on a **self-hosted runner** on the box rather than SSH-ing in from a GitHub-hosted one: no Actions minutes, no private key in a repository secret.
+- Live: the typed `confirm` input must equal `v<version>` read off `staging`; a mismatch or an existing tag fails before any step. The job declares `environment: production`, so adding a required reviewer on a Pro plan makes the same workflow wait for the click with no workflow change.
+- The live job fast-forwards `release` from `staging` (`--is-ancestor` or refuse — never a merge invented in CI), tags, takes a superuser dump by full path into the dated backups folder, **fails if it is missing or under 1 MB**, anonymises it, runs `deploy.sh release`, and back-merges into `develop` so a hotfix cannot regress on dev.
+- `deploy.sh` still refuses `main` / `master` / `production` / `prod`.
+
+### Versioning (§4)
+
+- Root `package.json` → **1.0.0**. `@mp/shared/release.ts` is the one definition of what an environment, a slot and a version are: `formatVersion` (live `1.0.0`, dev `1.0.0-dev.<sha>`, staging `1.0.0-rc.<n>`), `bumpVersion`, `idleSlot`, `slotProcessNames`, `slotPortKeys`, `describeRelease`.
+- `GET /health` now answers `{status, buildId, ts, version, env, slot, builtAt}`. The three original fields are untouched — deploy.sh and the 398 print helper have mirrored that shape since they were written. `builtAt` is recovered from the `BUILD_ID`'s timestamp half, so no second variable can drift from it.
+- **Settings → Personal → About** (new registry entry `about`, `Info` glyph, both platforms) reads those four facts from `/health` rather than from a `NEXT_PUBLIC_` variable baked into the bundle — which would be wrong for exactly the ten seconds a blue/green flip is interesting. The vendor console prints the same line on each tenant's Details card. Both go through `apps/web/lib/release.ts`, one fetch per tab.
+- The 398 print helper already reported `HELPER_VERSION` on its own `/health`; nothing needed changing there.
+
+### The rules, made greppable (§5)
+
+- `scripts/release-rules.cjs` — pure, CommonJS, no dependencies, required by both the CI step and the unit suite. `scripts/check-release-rules.cjs` is the CLI, run by CI **and** by `deploy.sh` (a hand-deploy from PuTTY never went through CI).
+- **Add-only migrations:** `DROP TABLE`, `DROP COLUMN`, `ALTER COLUMN … TYPE` fail unless the file carries `-- allow-destructive: <spec>`. Comments are stripped before matching, so a mention in a comment is not a finding, and a statement split across lines still is.
+- **Grandfathered, by name, in one place:** `20260730000000_consent_enum_types` and `20260821000000_supplier_terms_days_and_purchase_due_at` both retype columns with a `USING` cast. They are pinned in a list rather than edited, because a migration file's checksum is recorded in `_prisma_migrations` — adding the directive to an applied migration would read as drift and abort the very next deploy.
+- **No production data below live:** a workflow that names `secrets.PROD_*` / `PROD_DATABASE_URL` outside `deploy-production.yml` fails.
+- **Dark launch** was already a hard failure (232 §1.4, asserted against the live registry). Deliberately NOT re-implemented — two gates for one rule is how one of them quietly stops being maintained.
+- **Idempotent backfills:** `rehearse-release.sh` now applies the new migrations **twice** on the scratch database and then asserts `migrate status` reports nothing pending.
+
+### Anonymisation
+
+- `scripts/anonymise-dump.sh` restores a dump into a scratch database, applies `scripts/anonymise.sql`, dumps it back out as `<name>-anon.sql`, and drops the scratch database. The original file is never modified; a failure leaves no output behind.
+- `anonymise.sql` walks `information_schema` and matches on the COLUMN NAME (both `customerPhone` and `customer_phone`), so a personal column added by a future spec is anonymised without anyone remembering to update a list. Shapes are preserved — a phone stays an 11-digit `03…`, an email stays an address — so validators and unique constraints behave as they do on real data.
+- **Deliberate exception:** a bare `name` column on a NON-person table (tenant, branch, product, category, unit, role) is left alone. Hashing them turns every rehearsal report into unreadable noise, which is how a rehearsal stops being read. Person tables are named explicitly.
+- `rehearse-release.sh` gains `RELEASE_REHEARSAL=1`, set by `deploy.sh` and nothing else. It does not loosen the guards, it TRADES them: the reference URL may be production-shaped (it is only ever parsed, never connected to), and in exchange the backup must be a file whose name says `anon`.
+
+### `check-env.sh` learned the slots
+
+Any slot port declared means all four are required, each a distinct usable port, plus `NGINX_INCLUDE`. Two slots sharing a port is the failure that *looks* like success: the deploy would health-check the port the old build is already answering on and flip onto it.
+
+### Decisions recorded rather than escalated
+
+- **The Lighthouse gate on the box is opt-in** (`LIGHTHOUSE_GATE=1`). It runs against the idle slot exactly as §2.1 says, but Lighthouse needs a real Chrome and the app servers do not have one; the authoritative gate stays CI's `lighthouse` job, which blocks the merge that would reach a slot at all. Turning it on is one line in that environment's `.env`.
+- **The deploy workflows run on `self-hosted`** rather than `ubuntu-latest` + SSH. That is what §6.2's runner registration is for, and it is why §6.1's billing suspension stops mattering.
+- Directories are `vars.DEV_DIR` / `STAGING_DIR` / `PROD_DIR` with the current paths as defaults, so the owner can move a checkout without editing a workflow.
+
+### Files
+
+`deploy.sh` (rewritten around slots), `ecosystem.config.js`, `package.json` (1.0.0), `.gitignore`, `.github/workflows/{ci,deploy-dev,deploy-staging,deploy-production}.yml`, `scripts/{release-rules.cjs,check-release-rules.cjs,release-notes.cjs,anonymise-dump.sh,anonymise.sql,check-env.sh,rehearse-release.sh}`, `packages/shared/src/release.ts` + `index.ts`, `apps/api/src/health/health.controller.{ts,spec.ts}`, `apps/web/lib/release.ts`, `apps/web/app/(app)/settings/{registry.tsx,sections/AboutSection.tsx}`, `apps/web/app/globals.css` (About card anatomy), `apps/web/app/(vendor)/vendor/tenants/[id]/page.tsx`, `packages/i18n/src/messages/{en,ur}.json` (13 About keys + `vendor.detail.release`), `packages/ui/src/lib/release-pipeline-401.spec.ts`, `docs/RELEASE-RUNBOOK.md` (rewritten), `docs/releases/v1.0.0.md`.
+
+### Tests
+
+`packages/ui/src/lib/release-pipeline-401.spec.ts` — 36 tests. Written like 232's: against the REAL files, asserting the properties that make the pipeline safe. The load-bearing ones prove the gates BITE — a destructive migration with no directive is a finding, a staging workflow naming a production secret is a finding, `deploy.sh` health-checks before it flips and refuses a slot reporting the wrong name, and each grandfathered migration is on the list because it really is destructive. Plus 3 new cases on the health controller.
+
+### Not done, and why — [HUMAN_REQUIRED], §6
+
+None of these can be done in code from this checkout:
+
+1. **GitHub → Billing:** clear the Actions suspension.
+2. **Register the box as a self-hosted runner** as the `agent` user (all three deploy workflows say `runs-on: self-hosted`).
+3. *(Pro plans only)* GitHub → Settings → Environments → `production` → add a required reviewer.
+4. **`bot.js` is not in this repository.** §1.1's `MERGE_TARGET` / `DEPLOY_WORKFLOW` constants, and the `DEPLOY DEV` / `DEPLOY STAGING <slug> <branch>` / `DEPLOY PRODUCTION` commands, are the owner's edit.
+5. **Create `develop` from `staging`**, and give each environment's `./.env` the four slot ports + `NGINX_INCLUDE` (template in the runbook §1), create the include file, add the two `upstream` references to each vhost, and run the first deploy by PuTTY once so `.deploy/live-slot` exists.
+
+### Gates
+
+`pnpm lint` and `pnpm typecheck` — clean (one pre-existing unrelated warning in `doctor-portal.repositories.ts`). Targeted jest runs on the new and touched suites (release-pipeline-401, health.controller, i18n parity, the six settings suites) — all green. `node scripts/check-release-rules.cjs` — clean over 115 migrations and 4 workflows.
