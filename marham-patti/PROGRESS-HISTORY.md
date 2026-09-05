@@ -27455,3 +27455,45 @@ of the screen file, or pinning the alerts screen's pre-393 URL and effect shapes
 
 **Gates.** `pnpm lint` clean, `pnpm typecheck` clean; the 31 UI suites that touch the inventory
 screen pass locally. No app source was changed.
+
+## 394 — customers-to-mockup-round-2 — DONE (2026-09-05)
+
+**Branch:** `feature/394-customers-to-mockup-round-2` (WORK TYPE: FEATURE). Spec: `specs/394-customers-to-mockup-round-2.md`. No CODEREF covers 394 (the companions stop at 121).
+
+### §1 — statement range row (`customer-desktop.html` §G, `customer-mobile.html` §K)
+`CustomerStatement.tsx` drew two arrangements for one choice: 26px `.tbl-toolbar__mini` chips on the desk, scrolling `.filterchip` pills in `.mstmtbar` on the phone. Both are replaced by the file's own `.rangerow` on **both tiers** — row 1 is one `.segctl` of `This month · Last month · Last 90 days · Custom` with `n entries · m pages` ranged right on the same line; row 2 (`.rangecustom`) appears only under *Custom*, two `<DatePicker>` fields at exactly `1fr 1fr` with `.rangecustom__dash` absolutely placed in the 26px gap so neither bound can take width from the other. `.segctl--4` (314 §3) is what fits four labels on 360px. The sheet count is new and is the DOCUMENT's own settled pagination, not a second guess at it: `CustomerStatementDocument` grew an `onPages?` callback reported from an effect after its measuring loop settles. 387 §4's date/count rules and 196's "never a native date input" are untouched. `.mstmtbar`, `.prevbar`, `.prevbar__chips/__sp/__cnt/__dates` and the `.tbl-toolbar__mini.is-active` treatment are removed from `globals.css` with the markup that wore them; `.prevdesk` (the paper's box) is untouched.
+
+### §2 — mobile ledger footer + sticky month headers
+387 §5.3 retired the glass `.ledfoot` bar on both party sheets and left a bare sentinel behind. This step mounts the designed replacement, in the kit so both books share it:
+- `LedgerMore` (`LedgerDrawerKit.tsx`) — the file's `.ledmore` row: `Showing N of M` left, `Load N more · Load all` right; loading state turns the position line into the loader and disables both buttons; end state drops the buttons and reads `All N entries shown`. It carries the trip-wire (`.ledfoot__wire`, hook callback ref) that the bare sentinel carried, so infinite scroll is unchanged — the buttons are the explicit path the owner asked for, not a replacement for the thumb. Page size stays the list kit's `PURCHASE_MOBILE_PAGE` (12), so the label is parameterised rather than the mockup's literal 40.
+- `monthHeads()` + `<LedgerMonth>` — one pass over the drawn window returning the label to print above each row or `null`. `.mledmonth` is `position:sticky; top:0`. The ledger card had to stop clipping inside a sheet (`.sheet__body .mledger { overflow:visible }`) or the card itself would be the sticky scrollport and it never scrolls; its first/last children carry the 15px radius instead. Rows are wrapped in `<Fragment>` so no DOM node is added when a row shares its month, which keeps `.mledrow + .mledrow`'s hairline intact.
+- Jump-to-date moved to the calendar icon in the search row: `MobileFilterRow` grew optional `jumpDays`/`onJump` and hosts `<LedgerJump>` in a positioned `.mfiltrow__jump` wrapper opening downwards. Landing is still `useLedgerJump` (kept for exactly this), with `ledgerBoxRef` on each sheet's tabpanel.
+- The supplier sheet inherits all of it unchanged — same component, same month headers, same footer, only the references differ.
+
+### §3 — mobile sheet header
+387 §5.1 fixed the pill's WIDTH but kept 351 §1's third head row. The file does not wrap the badge at all: `.mp-led-sheet .sheet__hd--stack` is now `flex-wrap:nowrap`, the `::after` break item is `content:none`, the pill is `order:1` content-width and the ✕ `order:2`, and `.t` takes the rest with the name truncating. Markup and tab order untouched — `order` alone moves the pill, because the frame renders `headExtra` after the dismiss button. §5.1's `fit-content` stands; only the row it stands on changed. The two suites that pinned the old declarations (372, 387) were re-pointed at the new ones.
+
+### §4 — mobile merge (`customer-mobile.html` §H)
+- `<Panel>` grew a `sheetRail` slot rendered between `.sheet__hd` and `.sheet__body`; the merge's rail is the DESK's `<MergeSteps>` with a `rail` modifier, so it no longer scrolls away with the record list. `.mgsteps--rail` bleeds to the `.sheet--full` 16px frame and draws only a `border-bottom` (the head already rules a hairline).
+- No icon in the phone's header (the desk dialog keeps its medallion).
+- Step 1 is a list: new `MergeRecordRow` → `.mgrows`/`.mgrow`, edge-to-edge 60px rows with avatar, name, phone, balance and purchase count. The hard `.slice(0, 25)` came off the narrowing itself; the phone windows by `MERGE_MOBILE_PAGE` (20) with `useInfiniteScroll` and an `.infload` foot, the desk keeps `DESK_MATCH_CAP` (25).
+- **Tapping a record advances to step 2.** One handler, `pickOther(id, advance)`, pressed by both tiers — the phone passes `true`, the desk `false`, because a 720px dialog shows the list and the footer at once and jumping the reader forward would take the list away. *Continue* is unchanged and is the path back into step 2 for an operator returning to step 1.
+- The success sheet's *Open the ledger* is untouched and still hands the register the survivor (387 §1 / 364 §3), re-asserted in this step's suite.
+
+### §5 — register table action
+The in-advance row already wore the Banknote (387 §3.4). Two changes: the `aria-label` is now `pcusReceiveOrRefundAction` (`Receive or refund for {name}`) rather than `Refund {name}`, matching the file's label, and the `title` names the ACTION on a live control (`Receive or refund` / `Receive payment`) while still carrying `payWhy`'s refusal on a dead one — it previously had a tooltip only while disabled.
+
+### Decisions recorded
+- **`LedgerScrollFoot` stays in the kit.** Accounting and Expenses still mount it and this step has no mandate over those screens; §2's "replace the retired footer" is about the two party sheets, which is where `LedgerMore` is mounted.
+- **The range button stays in the search row beside the new jump button.** §2 places the jump on "the calendar icon in the search row" and says nothing about removing the last-days range, which is a different narrowing.
+- **The merge sheet keeps `fullscreen`** (372 §2's owner reversal). §4 asks for a full-height sheet with a back arrow; the fullscreen variant is exactly that and already supplies the back control. No second dismissal was added to the kit's fullscreen head.
+- **No pixel measurements were invented for the §3 record.** 356 §2's before/after is stated as the structural change (the head loses its third row; the pill's `fit-content` width is unchanged) rather than as numbers no browser in this session produced.
+
+### i18n
+EN + UR: `pdLedMoreLoad`, `pdLedMoreAllShown`, `pcusReceiveOrRefundAction`, `pcusStatementPages`, `pcusStatementPage1`, `pcusMergeLoadingMore`.
+
+### Files
+`apps/web/components/pharmacy/LedgerDrawerKit.tsx`, `Panel.tsx`, `MergeCustomers.tsx`, `CustomerStatement.tsx`, `CustomerStatementDocument.tsx`; `apps/web/app/(app)/pharmacy/customers/CustomersClient.tsx`, `apps/web/app/(app)/pharmacy/suppliers/SuppliersClient.tsx`; `apps/web/app/globals.css`; `packages/i18n/src/messages/{en,ur}.json`; new `packages/ui/src/lib/customers-round-2-394.spec.tsx`; re-pointed `customers-mobile-close-372`, `customers-fix-387`, `customers-merge-and-statement-335`, `suppliers-drawer-and-mobile-r4`, `supplier-ledger-to-mockup-319`, `dialog-rule-and-statement-365`.
+
+### Gates
+`pnpm lint` and `pnpm typecheck` clean (the one pre-existing `@mp/api` unused-disable warning is unchanged). The new suite renders `LedgerMore`'s three states, its trip-wire, the search-row picker landing on a live day and refusing a dead one, and `monthHeads`' breaks; the rest is grepped, because "the supplier sheet inherits this unchanged" is a claim about which component two screens mount and no screenshot can settle it. The controller runs the full gates.
