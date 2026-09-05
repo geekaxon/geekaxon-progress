@@ -27827,3 +27827,132 @@ print-helper 27, ui helper spec 29, i18n 38, api 395 spec 22, ui printing specs 
 Install on a Windows PC with the POSPRO PTP-60 on USB → Settings → Printing → Wired (helper) →
 Test print prints silently; unplug → next print falls back to the dialog with the toast. Photos,
 plus the three screenshot placeholders in `docs/PRINT-HELPER.md`.
+
+---
+
+## 399 — notifications-centre — DONE (2026-09-05)
+
+**WORK TYPE: FEATURE (branch feature/399-notifications-centre)** — stacked on the unmerged
+`feature/398-usb-print-helper`.
+
+**Problem.** 292 gave the shop a bell, a `Notification`/`NotificationReceipt` model and a live
+stream, and never gave it a page. `/admin/notifications` wore the word "Notifications" in the
+Administration group but opened 09's message-TEMPLATE manager — channel/language bodies, a
+preview, an approval and a delivery log — behind `notifications.manage`. So a salesman had a bell
+full of unread rows and nowhere to open them, and an owner looking for "what happened today" found
+a template editor.
+
+**Change.** The centre from `notifications-desktop.html` (5 sections) and `notifications-mobile.html`
+(§A/§B), built on 292's model. No second notification store, no second stream.
+
+**§1 route + nav.** `/notifications` (new page + client island). `/admin/notifications` is now a
+`redirect()` and `NotificationManager.tsx` is deleted. The nav registry entry moves to the new
+href and **drops `requiredPermission`** — the centre is PERSONAL (each reader sees only their own
+receipts, which is the entire authorization story since 112), so it carries no flag and no
+permission and joins `UNGATED_NAV_HREFS`. Its badge is `countKey: 'notifications'`, a new
+`NavCountKey` that is deliberately NOT in the `/pharmacy/nav/counts` payload: the shell merges the
+bell's own live unread count in, because a sidebar figure a minute behind the bell two inches above
+it is its own bug. The mobile More sheet's account row is ungated the same way and carries the
+count + attention flag.
+
+**§2 the page.** `.pghead` + `Mark all read` + the ONE `PageLiveSync` pair; the chip row
+All · Unread · Sales · Stock · Udhaar · Day close · Returns · System; one flat `.ntflist` grouped
+Today / Yesterday / Earlier with a sticky day header; hover checkbox → batch `Mark read` / `Delete`;
+row click opens `href` when set, else the drawer.
+
+**THE MAPPING TABLE (§2 asked for it recorded here):**
+
+| chip | kinds |
+|---|---|
+| Sales | `SALE_SYNCED`, `SALE_SYNC_FAILED`, `SALE_ON_OTHER_COUNTER` |
+| Stock | `LOW_STOCK`, `EXPIRY_NEARING` |
+| Udhaar | `CREDIT_OVER_LIMIT`, `SUPPLIER_PAYMENT_DUE` |
+| Day close | `DAY_CLOSE_VARIANCE` |
+| Returns | — (no kind raises one yet) |
+| System | `RX_READY`, and every kind that lands nowhere |
+
+Two judgement calls in it. `SUPPLIER_PAYMENT_DUE` sits under **Udhaar** rather than a payables chip
+the spec does not list: udhaar is money owed, and a counter does not keep one word for what a
+customer owes the shop and another for what the shop owes its supplier — the notification's own
+body already says *baqaya*. **Returns keeps its chip with nothing in it**, because §2 lists the
+chip: it reads a truthful `0` and shows the caught-up empty state, which beats a chip that appears
+the day the first return notification ships. `RX_READY` falls to System by the spec's own rule
+("a kind with no chip lands in System"), which is also the fallback for any kind added later.
+
+**DELETE IS A DISMISSAL, and that was the design decision of the step.** A notification is a FACT
+about what the shop did, and the same row was fanned out to every other recipient; deleting it
+because one manager pressed Delete would erase the fact for all of them and from the record. So
+`NotificationReceipt` gains a nullable `dismissed_at` (migration
+`20260911000000_notification_receipt_dismissed`, additive only, plus a
+`(tenant_id, user_id, dismissed_at)` index; the table's existing FORCED tenant RLS covers the new
+column). Dismissed receipts leave that user's list, unread count and bell; the `Notification` is
+untouched, and the other recipient's copy is proved untouched by a test.
+
+**§3 drawer / bell / preferences.** The 700px drawer and the phone's bottom sheet are ONE `Panel`
+(229 §3): full body, the params as a key/value grid, `Mark unread` as the quiet undo, and a primary
+action that names the RECORD (`Open sale INV-40261`) rather than saying "Done". The bell popover —
+both the desk `notifmenu` and the phone sheet — now shows the last five with `See all` →
+`/notifications` and `Preferences` → `/settings?s=notifications`. The old grant-gated "View all"
+is gone; there is no duplicate settings UI on this screen, only the link to 374's pane.
+
+**§4 API.** `GET /notifications?filter&cursor&limit`, `POST /notifications/read` (`{ids}` or
+`{all:true}`), `POST /notifications/unread`, `POST /notifications/dismiss` — all on the EXISTING
+`RealtimeController`. Its prefix moved from `notifications/realtime` up to `notifications` and every
+pre-399 route re-states `realtime/` on its own decorator, so all eleven existing URLs are
+byte-identical and no client changed. No `@RequirePermission` anywhere on it. The page read is one
+cursored query (cursor = the receipt id, not a timestamp — two events in the same millisecond would
+make a timestamp cursor skip or repeat) plus one `GROUP BY kind` tally, folded into chip figures by
+the shared `chipCountsFromKinds`, so the chip numbers and the rows under them are the same answer.
+`parseReceiptSelection` accepts `{all}` only for mark-all-read: "unread everything" and "delete
+everything" are the two an accidental click would most regret. An empty selection is a 400, not a
+silent success; ids are capped at 200.
+
+**REALTIME.** Read-state changes ride the notifications stream as an EIGHTH scope on the same bus
+(`publishReadState` / `subscribeReadState`, exactly how 184 added stock and 210 balances — never a
+second realtime system), merged into the SSE source and filtered by the SAME `isRecipient`
+predicate: the event names one target user and no roles, so one manager clearing their list cannot
+move a pharmacist's dot, and it cannot cross tenants. The frame carries the authoritative unread
+count so a bell SETS its badge rather than guessing a delta.
+
+**WEB CLIENT REBUILT (§4's "the bell, the list and a second tab agree").** `apps/web/lib/notifications.ts`
+was a hook that opened a socket and kept a list PER CALLER — the desktop popover, the mobile bell,
+and now the page and the sidebar badge would have been four sockets to one URL with four counts
+that drift the moment one marks something read. It is now a module store with one refcounted
+connection, and that connection is `stock-live`'s ONE read loop (343 §2) reached through the new
+`subscribeNotificationStream` / `NOTIFICATION_STREAM_PATH`. The private frame parser, the private
+backoff and `res.body.getReader()` are gone from it, so `apps/web/lib/notifications.ts` came OFF the
+343 §2 READERS allowlist. A reconnect re-reads the window (anything raised while the socket was
+down was never delivered).
+
+**Files.** `packages/shared/src/notification-centre.ts` (new: chips, the mapping table, the ONE
+predicate, day bucketing, the read-state envelope, the page wire shape) + index export;
+`packages/shared/src/nav-registry.ts`; `packages/db/prisma/schema.prisma` + the migration;
+`apps/api/src/notifications/notifications.realtime.{controller,dto,service,repositories,bus}.ts`;
+`apps/web/app/(app)/notifications/{page,NotificationsClient}.tsx`;
+`apps/web/app/(app)/admin/notifications/page.tsx` (redirect; manager deleted);
+`apps/web/lib/{notifications,stock-live}.ts`;
+`apps/web/components/shell/{AppShell,TopbarActions,NotificationBell}.tsx`;
+`apps/web/app/globals.css` (the `.mp-ntf` kit — only `.ntflist`, `.ntfrow`, `.ntfbatch`, `.ntfview`
+and the preferences line are new; the page head, chips, empty state, drawer and sheet are mounted
+from the existing kits, and the `.check` atom joins `.mp-ret`'s selectors rather than restating
+them); EN+UR catalogs (47 new keys at parity, plus the nav subtitle, which described the template
+manager).
+
+**Tests.** `packages/ui/src/lib/notification-centre-399.spec.ts` (28 — the mapping table, the one
+predicate, chip arithmetic, the local-day bucket, the read-state guard, plus the screen measured by
+grep: the route, the redirect, the deleted manager, the ungated nav entry, a SALESMAN reaching it,
+the shell badge, the assembled frames, the bell's five-and-two-exits, the one connection and the
+four routes). `apps/api/src/notifications/notifications-centre-399.spec.ts` (18 — chip counts,
+filtering, cursoring without skip or repeat, receipt scoping across users AND tenants, dismissal
+leaving the other recipient's copy standing, and the read-state frame reaching one user and nobody
+else). Updated: the 390 live-sync spec's page list (the manager it named is gone; the new client
+takes its place) and the 343 realtime audit (new entry, `Hook` widened, READERS trimmed).
+
+**Not done, and why.** §6 asks for a Playwright run (mark all read → bell 0 → second tab agrees).
+There is no Playwright harness in this repo and no `test:e2e` script; the equivalent is proved at
+the unit level — mark-all-read returns `unread: 0` AND publishes that count on the stream the other
+tab is subscribed to, and the client applies a read-state frame through the same function its own
+optimistic edit uses. The owner's phone/desktop verification is a look, not a gate (AGENT.md §2).
+
+**Gates.** `pnpm prisma generate`, `pnpm lint` and `pnpm typecheck` all clean (one pre-existing
+unused-eslint-disable warning in `doctor-portal.repositories.ts`, untouched by this step).
