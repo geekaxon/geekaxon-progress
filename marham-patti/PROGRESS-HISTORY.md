@@ -27077,3 +27077,58 @@ by inspection: the only visible difference is the month the existing chip states
 move staging's clock, so September's resolution is proven by the §1 test instead. Repeat the stored-shape
 check once each on Returns, Recent sales and Accounting. The owner's own pre-existing *Jun – Aug*, saved in
 August, must read *Jun – Sept 2026* in the header after deploy without him touching the picker.
+
+---
+
+## 390 — leftovers-and-live-sync — DONE (2026-09-05)
+
+**Type:** FIX + small feature. Branch `fix/390-leftovers-and-live-sync`. Spec `/specs/390-leftovers-and-live-sync.md`. No CODEREF covers 390 (the companion files stop at 113–121).
+
+### §1 — the Owner holds every permission in code, not in a row
+
+`packages/shared/src/permissions.ts` gains `OWNER_ROLE_NAME`, `roleHoldsEveryTenantKey(role)` and `sessionHoldsPermission(role, keys, key)` — the ONE predicate both tiers answer with. The Owner holds every `TENANT`-scoped key from the catalogue plus whatever the stored set carries; an unknown key is never invented, and a `NON_TENANT` key is never granted (the tenant/platform wall is untouched).
+
+- **Server** (`apps/api/src/permissions/permission.service.ts`): `permissionsFor()` returns `new Set(permissionKeysByScope('TENANT'))` before its first repository call, and `can()` short-circuits at the choke point itself (`getPermission(key)?.scope === 'TENANT'`) so the Owner's answer is readable as repo-free where every guard reads it.
+- **Client** (`apps/web/lib/permissions.tsx` `hasPermission`, and `nav-registry.ts` `isNavItemVisible`) call the same shared predicate off the session's role — no round trip. Flag precedence is unchanged and pinned by a test: `/pharmacy/accounting` is invisible to an Owner whose tenant lacks `pharmacy.pos`.
+- **Reconcile stops failing silently.** `reconcileOneSystemRole` now wraps its work and rethrows a `RoleReconcileError` carrying the keys that did not land; the loop logs `Reconcile of system role X failed — N key(s) not granted [...]` at `error` level and raises the new platform event `ROLE_RECONCILE_FAILED` (PLATFORM_HEALTH · CRITICAL · `platform.admin`, i18n EN+UR added). **Decision recorded:** `PermissionsModule` cannot import the vendor module (the vendor module imports it — a cycle), and `PermissionsModule` boots FIRST, so a DI-provided sink would be null exactly when the boot reconcile runs. The console therefore REGISTERS itself: `PermissionService.setReconcileFailureSink()` is called from `VendorModule.onApplicationBootstrap`, and failures raised before registration are buffered and flushed on it. A sink that throws is caught and warned — a notification must never break the boot it reports on.
+
+### §2 — /dashboard, /accounts, Billing
+
+Deleted: `app/(app)/dashboard/page.tsx`, `app/(app)/accounts/page.tsx`, `app/(app)/billing/{page,BillingClient}.tsx`, and `lib/retired-route.ts` (its only two callers were the redirects). Both URLs are now the app's 404. Nav: `/billing` removed from `NAV`, from `UNGATED_NAV_HREFS` and from `STAFF_TAB_PRIORITY`; `billing.manage` STAYS in the catalogue (additive-only) with an `UNUSED AFTER 390` note naming Lab/Clinic as the steps that decide the API module's fate. The `billing/BillingClient.tsx` row left `realtime-everywhere-343.spec.ts`'s audit table with the file (the table and the tree are asserted equal).
+
+**Finding — the fourth literal 385 §1.3 missed.** `packages/ui/src/lib/surface-routing.ts` `tenantRoleHome()` still returned `/dashboard` for every staff role, and it is EDGE code (`@mp/ui` has no `@mp/shared` dependency), so deleting the redirect page would have broken login for every staff member. Fixed as a named constant `TENANT_STAFF_HOME = '/pharmacy/dashboard'`, pinned equal to `STAFF_HOME` by the 390 test. `manifest-staff.webmanifest`'s `start_url` was already `/pharmacy/dashboard` (385); `id` is deliberately left at `/dashboard` — changing a manifest `id` orphans the installed app.
+
+### §3 — Pro and Simple show the same entries
+
+387 §2.2 and §2.4 are REVERSED per the owner's decision ("the difference is only in look, not in entries"). `CustomersClient` drops the `mode === 'pro' || !isCustomerLedgerInfo(...)` filter; Simple's signed column draws `—` for an INFO row rather than a signed zero (the note beneath it names the amount that changed hands, and it is drawn in the shared `<RefCell>` above the one-column/three-column branch, so both views carry it). `buildCustomerStatement` no longer filters: `const book = entries.slice()`. Opening, closing, debits and credits are byte-identical (an INFO row is `debit = credit = 0` carrying the previous balance); only `entryCount` grows, to the number of rows actually on the page. The A4 document already prints `—` for a zero money cell, so the paper needed no change. **Supplier side:** already compliant — 387 §2.3 audited it and found no missing rows to state (`supplierCreditNotes` posts a `CREDIT_NOTE` for every posted purchase return whatever it settled with), and the supplier ledger never carried a mode filter. One component, one rule, no edit needed.
+
+### §4 — page-live-sync
+
+New `apps/web/components/shell/PageLiveSync.tsx`: the marker + 44px Sync button as ONE component, built from `recent-sales-desktop.html` §A2 / `recent-sales-mobile.html` §A. Props are the three facts a live hook already returns (`{connected, refused, lastEventAt}`); `pageLiveTone()` answers `refused` FIRST (a settled state, not a pending one) and the label is composed in `pageLiveLabel()` and nowhere else — desktop `{state} · last change {time}`, phone `{state} · {time}`, state alone before the first event. Sync runs the 322 §1 `refreshScreen()` registry, is disabled while it turns, opens nothing, and its tooltip becomes `Synced 09:41` after a run. `usePageLive(ownLastEventAt?)` gives a page with no live state of its own a marker off the same refcounted connection (299 §3); the dashboard passes its own `liveAt`, which is the last FIGURE that moved rather than the last frame that arrived.
+
+CSS is unscoped (`.plsync`, `.rtdot`, `.rtdot--wait`, `.rtdot--off`, `.syncbtn`, `.mic.is-syncing`, `.plsync--m`, the `.mhdr` wrap rule and `.pghead__acts:has(.plsync)`) because it is a shell component, mounted everywhere. i18n: `plsyLive`, `plsyReconnecting`, `plsyOff`, `plsyStateLast`, `plsyStateShort`, `plsySync`, `plsySyncing`, `plsySynced` (EN+UR).
+
+Mounted, exactly once each, on: Dashboard, Recent sales, Inventory, Stock alerts, Purchases, Suppliers, Customers, Returns, Day close, Accounting (Ledger, Overview, Expenses, Profit), Notifications, Audit log. `MobilePageChrome` gained `live`/`liveLang` props so the phone's app bar carries the same pair (Customers, Inventory, Stock alerts, Purchases, Returns, Suppliers, Recent sales). POS is excluded per the spec.
+
+**The two duplicates §4.4 forbids are gone.** The dashboard's `.rtdot` left the attention strip (it read as a fact about the strip; it is a fact about the page) and Recent Sales' `.liveind` pill was replaced — the pill's CSS, its `.mliverow` mobile row and the now-orphaned `mp-sale-ping` keyframes were deleted rather than left to be re-mounted by accident. `liveFeedState()` stays in `@mp/shared` with its own tests; its fourth state (`stale`) has no surface, because §4 defines three.
+
+**Deviation recorded:** the Audit log and Notifications have no page header of their own until 399/400 draw them to their mockups. They were given the same `.pghead` / `.pghead__acts` row every other page uses, carrying nothing but the pair (plus a two-line scoped CSS rule), so those steps inherit the vocabulary rather than replacing a one-off.
+
+### ARCHITECTURE
+
+§8 gains the owner-by-construction rule (catalogue-derived, both tiers, flag gate unchanged, reconcile failures announced). §2 gains principle 14 — one live label per page.
+
+### Tests
+
+New `packages/ui/src/lib/leftovers-and-live-sync-390.spec.tsx` (§1 owner-by-construction as arithmetic + the source facts; §2 the three retired routes and the one staff home; §3 the statement fold with every figure held still; §4 the three states, the single label composer, the Sync wiring, the mockup anatomy and one mount per page). Repaired for the reversals: `customers-fix-387.spec.ts` (statement now prints INFO rows, arithmetic asserted unchanged), `customers-fix-387.spec.tsx` (no mode filter), `recent-sales-screen.spec.tsx` (the pill left the screen's scope), `surface-routing.spec.ts` (staff land on `/pharmacy/dashboard`).
+
+### Gates
+
+`pnpm lint` and `pnpm typecheck` run once at the end: GREEN (31/31 typecheck, 17/17 lint; the single remaining lint warning is the pre-existing unused eslint-disable at `doctor-portal.repositories.ts:220`). Per CLAUDE.md §6 the agent does not run `test:unit`/`e2e`/`build`; every grep-based assertion in the new and repaired specs was verified against live source by script before the commit.
+
+### Owner verification still outstanding (§1/§4 acceptance, needs staging)
+
+- Staging Owner sees Accounting in the menu and the ledger loads, with no reseed and no role edit.
+- Kill the API for 10 s → every open page reads *Reconnecting…*; restart → *Live* within 5 s; Sync re-issues the page's queries once (network tab).
+- Installed staff PWA opens on the dashboard after the service-worker update (recorded on a phone).
+- Rafeeq: Simple and Pro both list RET-S-4/5/6; the statement lists all three; closing balance unchanged across all four surfaces; both instruments PASS.

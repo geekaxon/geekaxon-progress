@@ -32,6 +32,7 @@
 11. **Two-tier i18n — with a surface exception.** The i18n **framework is always in place**; strings resolve through it on every surface. **Language coverage is per surface:** the **vendor console is English-only** (71) and, from Phase 15, the **tenant staff app is English-only too** (owner decision — no language switcher, no RTL on tenant surfaces; English values only, the framework retained so a future language is additive, never a rebuild). Where a surface *is* bilingual, UI text → **English + Urdu** (parity gate) and AI-generated/conversational output → **English + Urdu + Roman Urdu**.
 12. **Production & real data are human-gated.** Agent works on `staging`/dummy only. `main` deploys ONLY on the owner's explicit Telegram command.
 13. **Specs are authoritative.** Current `specs/NN-*.md` is the source of truth; missing → `[HUMAN_REQUIRED]`.
+14. **One live label per page (390 §4).** A page that subscribes to the realtime bus mounts `<PageLiveSync>` — the marker and the Sync button, one component, in the page-header action row (and in the mobile app bar). The marker's three states and their wording are decided inside that component from `{connected, refused, lastEventAt}`; no screen composes its own. **A second live label anywhere on a page fails the spec.**
 
 ## 3. Always-on infrastructure (never a feature flag, never sellable as optional)
 
@@ -78,6 +79,8 @@ Production `<PROD_APP_HOST>`, Staging `<STAGING_APP_HOST>`. All tenants resolve 
 ## 8. Roles (RBAC; `RolesGuard` + `@Roles()` + permission catalog)
 
 `SUPER_ADMIN` (AboveNext, cross-tenant, NON_TENANT keys), `TENANT_OWNER`, `ADMIN`/`MANAGER`, `DOCTOR`, `RECEPTION`, `NURSE`, `LAB_TECH`, `PATHOLOGIST`, `PHARMACIST`, `SALESMAN`, `CASHIER`, `FINANCE`/`ACCOUNTANT`, `PHLEBOTOMIST`, `RIDER`, `PATIENT`. Custom tenant roles supported (SaaS). Permissions are catalog-driven string keys, seeded + reconciled on boot. **Permissions are gated behind flags** (a role only matters for a capability the tenant has).
+
+**390 §1 — THE OWNER HOLDS EVERY TENANT KEY BY CONSTRUCTION, IN CODE.** `TENANT_OWNER` is answered from the catalogue — every `TENANT`-scoped key — before any repository read, on the server (`PermissionService.can` / `permissionsFor`) and on the client (`usePermission`, `<Can>`, the nav filter), through the one shared predicate `sessionHoldsPermission`. No stored row, no reconcile and no reseed stands between an owner and their own tenant. The flag gate is unchanged: flag FIRST, then permission (§4), so a capability the tenant has not bought is still off for the Owner. A boot reconcile that cannot grant a system role its defaults logs the role AND the missing keys and raises `ROLE_RECONCILE_FAILED` to the vendor console — it never skips silently.
 
 ## 9. Auth
 
@@ -806,4 +809,22 @@ _End ARCHITECTURE.md — detail per step in `specs/NN-slug.md` (private repo). K
 388. `388-rolling-month-window` — 370's `{back, span}` slid the owner's *Jun – Aug* to *Jul – Sept*; what he asked for is *Jun – Sept*. **Three remembered shapes, one resolver:** presets stay relative, a range ending this month is `open` (start fixed, end follows the clock), a range ending earlier is `fixed`. Old stored values read unchanged.
 
 > **STANDING LESSON FROM PHASE 45:** **read the source before the spec.** Each of the four "still broken" reports had its cause visible in a file that could be named — a registry entry, a missing wrapper, a hook below a `return`, a `<=` — and the spec that names the line costs the bot one attempt instead of three. And: **a retired screen is a redirect**; a second nav entry is a second screen.
+
+**PHASE 46 — DESIGN BLOCK AFTER THE PHASE 45 TEST (390–401). HTML mockups are the design target from here; no PNGs.**
+
+390. `390-leftovers-and-live-sync` — **the Owner holds every permission in code** (`can()` answers from the catalogue for `TENANT_OWNER`; the stored set is for everyone else) after a reseed left the Owner without `pharmacy.accounting.view`; `/dashboard` and `/accounts` 404 and the staff manifest's `start_url` moves; Billing leaves; **Pro and Simple show the same rows** (look only — the owner's rule); and **`PageLiveSync`** — the dashboard's `Live · last change` marker plus a Sync button — is one shared component every bus-subscribed page mounts.
+391. `391-recent-sales-desktop-to-mockup` — the Today card replaces the past-due card (udhaar has no due date, so nothing on the screen may say overdue); badge on line 2; Actions = View + Refund; **search reaches inside the sale** (product lines, exact amount); Receive payment in the drawer mounts the customers' dialog and allocates to the invoice — one payment path.
+392. `392-recent-sales-mobile-to-mockup` — the same rules in the phone's sheets.
+393. `393-stock-alerts-to-mockup` — three tabs (Low · Out · Near expiry, disjoint by 386's function), Inventory's own chips, Inventory's own drawer lifted to a shared module.
+394. `394-customers-to-mockup-round-2` — statement range row; mobile ledger footer = month headers + Load more / Load all (supplier sheet inherits); merge page with step rail and auto-advance; Banknote for advance refunds.
+395. `395-settings-roles-users-printing` — role `homeHref` (the landing page per role, `STAFF_HOME` the fallback only); full user edit; **Set password** = temporary, shown once, `mustChangePassword`, its own permission, audited; Printing section with **Connection** (Bluetooth · Wired dialog · Wired helper) and **Paper width** (48 · 58 · 80) per printer.
+396. `396-thermal-receipt-to-mockup` — `@mp/escpos` rewritten to the mockup's anatomy at **48/58/80mm = 24/32/48 columns**, every line filling its width; logo as the 1-bit bitmap behind General's switch; items table; `You have saved`; udhaar block in the app's words; Code-128 with text fallback; **goldens re-baselined from the mockup's byte listings, never from the code under test**; Recent sales reprint finally mounts a surface.
+397. `397-sale-invoice-a4` — the purchase sheet's twin, mounted from the sheet kit with 396's document model so thermal and A4 cannot disagree.
+398. `398-usb-print-helper` — a loopback-only helper on the shop PC that writes 396's bytes to a USB printer; token-paired; falls back to the dialog with a named reason.
+399. `399-notifications-centre` — `/notifications` on 292's model and stream; receipts carry read/dismiss; the bell, the list and a second tab agree live.
+400. `400-audit-log-to-mockup` — filters, KPIs, the sensitive five in warning tone, before/after diff (writers that recorded only `after` now record `before`), 24-month retention.
+401. `401-zero-downtime-release-pipeline` — **blue/green slots** in `deploy.sh` with an nginx include flip and a 30-second grace; rehearsal before migrations on production; GitHub Actions on a self-hosted runner with a one-click production approval; **semantic versions** from the root `package.json`, tagged, visible in Settings → About and `/health`; add-only migrations enforced in CI; **v1.0.0** is the 374–401 promote. Releases go out at any hour — features arrive dark behind flags, so no tenant needs a window.
+
+> **STANDING RULES FROM PHASE 46:** *"By construction" is code, not a comment* — a guarantee about a role lives in the guard. *One live label* — `PageLiveSync`, never a per-screen chip. *The mockup is the oracle for a printed byte* — goldens come from the design's listing, and a golden regenerated from the renderer proves nothing. *A release is invisible* — two slots, a health check, a flip; the old slot is the rollback.
+
 
