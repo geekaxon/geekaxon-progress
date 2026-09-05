@@ -27665,3 +27665,165 @@ The spec's own framing is that the sale invoice is the purchase sheet's twin —
 - **Owner, still to do by hand:** print a Paid sample and a Credit sample, and hash the mobile and desktop PDF downloads of the same sale.
 
 WORK TYPE: FEATURE (branch feature/397-sale-invoice-a4)
+
+## 398 — usb-print-helper — DONE (2026-09-05)
+
+**Branch:** `feature/398-usb-print-helper` · **Type:** FEATURE · Spec: `/specs/398-usb-print-helper.md` · No CODEREF.
+
+**What the step is.** A browser cannot print silently to a USB thermal printer. 281 shipped the
+Bluetooth path (the handheld roll printers staff carry to the shelves) and 131 the browser
+dialog; the 80mm box wired to the back-office PC had neither. 398 gives it a small service that
+runs ON that PC, receives the exact bytes 396 renders, and writes them to the port. **One
+renderer stays true — the helper never formats anything**, which is the property that keeps the
+counter PC's receipt and the handheld's receipt the same receipt.
+
+### §1 — `apps/print-helper`, a new workspace app
+
+New package `@mp/print-helper`, **zero runtime dependencies** (asserted in the spec file), Node
+builtins only. `src/`: `version.ts` (the one place the version, host `127.0.0.1`, port `9131` and
+the token header live), `origins.ts`, `token.ts`, `paths.ts`, `devices.ts`, `printer.ts`,
+`log.ts`, `tray.ts`, `http.ts` (the router, PURE), `server.ts` (the Node plumbing), `main.ts`.
+Everything that decides anything is a pure function, which is why §1.3's guards are asserted in
+CI rather than "verified by reading the code".
+
+**DECISION — packaging: `node --experimental-sea`, not `pkg`.** `pkg` was archived in 2024 and
+its newest prebuilt base is older than this repo's `node >=20`; SEA's base is the SAME `node`
+the repo pins, which is what matters for a file that sits unattended on a shop PC for years.
+Cost: SEA cannot bundle a native addon, and it cannot cross-compile (the Windows `.exe` is built
+on Windows, the Linux binary on Linux). `scripts/build-sea.mjs` + `scripts/sea-config.json`;
+`postject` is fetched by `npx` at build time rather than declared as a dependency, so a
+build-only tool never ends up inside the artefact.
+
+**DECISION — device access: raw port writes, not `usb`/`escpos-usb`.** Both are native addons
+over libusb; on Windows libusb can only claim an interface bound to WinUSB, so using them means
+running Zadig on the shop PC and REPLACING the vendor driver — after which the printer
+disappears from every other program on that machine, INCLUDING the browser's print dialog, which
+is the fallback this whole step depends on. They also cannot be bundled into a SEA. ESC/POS is a
+byte stream with no handshake, so `write()` is the whole protocol. Discovery: Windows via
+`reg query HKLM\HARDWARE\DEVICEMAP\SERIALCOMM` (COM/LPT — a cheap USB thermal printer, the
+POSPRO PTP-60 included, installs as a virtual COM port); Linux via `/dev/usb/lp*`, `/dev/ttyUSB*`,
+`/dev/ttyACM*`, `/dev/rfcomm*`. Escape hatch for a driver that exposes no port:
+`MP_HELPER_EXTRA_DEVICES`. The two decisions hold each other up.
+
+**DECISION — the tray.** A real notification-area icon needs a native addon, and §1.1 asks for a
+single executable; the two cannot both be true. So `tray.ts` owns the tray as STATE (version,
+token, last print) and it is shown through two toolkit-free surfaces: `GET /` on loopback (a
+plain status page the Windows installer pins to the notification area — the shell draws the
+icon) and `print-helper status` on a console. Both read the same state, so they cannot disagree.
+
+**Endpoints.** `GET /health` → `{ok, version, authorized, lastPrint}`; `GET /printers`;
+`POST /print {printerId, bytes(base64), width}`. **`/health` is the one endpoint that answers
+without a token, deliberately**: it is what tells "the helper is not running" from "the token is
+wrong", and an owner cannot have pasted a token before they have read one.
+
+**Security, four guards in order.** (1) `Host` must be loopback — closes DNS rebinding, which
+loopback binding alone does not; (2) origin allowlist; (3) per-install token; (4) the named
+printer must be one this machine actually listed, so a token-bearing page cannot name a path and
+have the helper write bytes into it. `listen(port, HELPER_HOST)` binds `127.0.0.1` EXPLICITLY —
+a bare `listen(9131)` would put the shop's printer on the shop wifi.
+
+**Origins — the `HOSTNAME_MAP` lesson.** The helper cannot import `@mp/config` (single file, no
+workspace around it), so it keeps the same discipline the only way it can: ONE constant
+(`ALLOWED_ORIGIN_SUFFIXES`), suffix-matched at a label boundary so `evilmarhampatti.com` fails,
+`https` only, plus `MP_HELPER_ORIGINS` for a self-hosted tenant and `MP_HELPER_DEV=1` for
+`localhost:3000`. No host string anywhere else in the app.
+
+**Token.** 32 bytes `randomBytes` → base64url (not a UUID: 122 bits and it looks like an id
+people paste into tickets; not a PIN: this port is reachable by any page in the browser).
+Compared with `timingSafeEqual`. Stored `0600` in `%ProgramData%\MarhamPatti\print-helper` on
+Windows — NOT `%APPDATA%`, because the service runs as LocalSystem with no user profile and the
+token must survive the cashier logging out — and `/var/lib/marham-print-helper` under systemd.
+
+**Log.** One file per LOCAL day, seven kept, pruned by a pure `prunable()` that never returns a
+name it does not recognise (this function deletes things). Nothing in `log.ts` throws: a full
+disk costs a log line, never a receipt. One line per print — port, ok/failed, byte count, roll.
+No receipt contents, no customer, no prices.
+
+**Installers.** `install-windows-service.ps1` (`sc.exe`, `start= auto`, failure restarts, prints
+the token at the end — no wrapper: the helper already runs in the foreground and exits on
+SIGTERM, which is all a Windows service needs) and `marham-print-helper.service` for systemd.
+
+### §2 — the transport
+
+`packages/ui/src/lib/print-transport.ts` gained **`PrintSink`** — the two-method contract both
+paths implement — so `printOrFallback` (and therefore every printing surface) did not have to
+learn a second shape. `PrintTransport implements PrintSink`; `HelperTransport` is the new one:
+`health()`, `printers()`, `remember()/forget()`, `send()`. `printOrFallback` now takes a
+`PrintSink` and passes a `PrintJobHint {width}` through.
+
+- `PRINT_HELPER_ORIGIN = 'http://127.0.0.1:9131'` — the literal IP, **never `localhost`**, which
+  resolves to `::1` first on modern Windows while the helper binds `127.0.0.1`; the refusal that
+  produces looks exactly like "not installed" on a PC where it plainly is.
+- **The pairing is per BROWSER, not per tenant** (`HELPER_STORAGE_KEY = 'mp.print.helper.v1'`,
+  unscoped). The token and the port describe a MACHINE; the same PC may serve two shops and the
+  same shop is open on a phone with no helper at all. Scoping it would push a per-install secret
+  into every tenant's storage.
+- `state: 'ready'` means CONFIGURED, not "a socket is open" — there is no socket, every job is
+  one POST. Waiting for a health check would send the FIRST sale after every page load to the
+  dialog on a counter that is wired and working. `send()` reports the truth either way.
+- A refused connection returns the SENTINEL `HELPER_NOT_RUNNING` rather than the browser's
+  `TypeError` text, precisely so the toast can be translated. `HELPER_NOT_PAIRED` likewise.
+- `base64FromBytes` is chunked: `btoa(String.fromCharCode(...bytes))` overflows the stack at
+  exactly the size a receipt with a rasterised logo reaches.
+
+`apps/web/lib/print-document.ts`: `PrintPolicy` gained `connection`; `printDocument` picks the
+sink via `sinkFor()` (helper only when the printer says `WIRED_HELPER` **and** a helper was
+supplied), and `fallbackReason()` turns the sentinels into `setgPrintHelperDown` /
+`setgPrintHelperUnpaired`. A helper-wired shop printing from a phone falls to the Bluetooth sink
+and through it to the dialog — the same honest answer as a helper that is switched off.
+`apps/web/lib/printing.ts`: `helperFor()` (one per browser, unscoped, beside the scoped
+`printerFor()`), `useHelper()`, `loadPrintPolicy` now reads `connection` in the same fetch as the
+roll, `printTestPage` takes a `PrintSink`.
+
+**395 §3.2's grey lifts with ONE LINE**: `isPrinterConnectionAvailable` in `@mp/shared` now
+answers `PRINTER_CONNECTIONS.includes(connection)`. The segmented control in the pane did not
+change at all — that is what writing it as a predicate at 395 bought. The predicate STAYS (it is
+where the next connection arrives, and it still refuses a value this tier has never heard of);
+`PrintersService.validate` keeps the refusal with a message that no longer names the helper.
+
+### §3 — Settings, docs, i18n
+
+New **Print helper (this PC)** card in `PrintingSection`, drawn only when a printer is actually
+wired that way (on a phone there is no helper to talk about). Badge names the running version
+(§3 / 401), token field (**never pre-filled from storage** — this pane is opened on a shared
+counter screen and the tray on that PC is where the token is read), Pair / Check / Forget, and a
+`SearchSelect` of the ports the helper sees. The health check runs on demand, never on mount for
+a device with no helper: a console full of red on a screen that is working is how a real fault
+gets missed. Test print now reaches `WIRED_HELPER` instead of being greyed against it.
+
+`docs/PRINT-HELPER.md` — install (both platforms), pair the token, choose the printer, test
+print, what happens when it is not running, where the version and the logs are, upgrading,
+building. Screenshot placeholders marked for the owner to take on the Ganatra PC (§3/§4).
+
+22 new i18n keys, EN + UR, parity gate green.
+
+### Tests
+
+- `apps/print-helper/src/usb-print-helper-398.spec.ts` — 27: origin allowlist incl. the
+  look-alike-domain bug, dev origins, CORS, loopback-Host/DNS-rebinding, token entropy and
+  constant-time compare, `/health` with and without a token, `/print` byte-for-byte fidelity,
+  the three rolls, the path-traversal refusal, malformed/oversize bodies, a port that refuses,
+  the two device parsers, log retention, tray text, and where an install keeps its secret.
+- `packages/ui/src/lib/usb-print-helper-398.spec.ts` — 29: the `PrintSink` contract, the
+  per-browser unscoped pairing, health telling "not installed" from "wrong token", bytes
+  unchanged through the POST, 200 KB base64, the fallback-with-a-named-reason, `printDocument`
+  routing per connection, and repo-level claims (no runtime deps, the recorded decisions, the
+  explicit loopback bind, the guide's four headings).
+- Updated: `printing-settings-281.spec.ts` (the `printerId` assertion now distinguishes a BLE
+  device id from the helper's local PORT id, and asserts the port never travels to the API),
+  `pos-print-wiring-282.spec.ts` (`connection` on the policy), `role-home-and-printing-395.spec.ts`
+  (all three connections available; an unknown one still refused).
+
+### Gates
+
+`pnpm lint` — clean (one pre-existing warning in `doctor-portal.repositories.ts`); the web
+design-drift check caught a `NativeSelect` in the new card, swapped for `SearchSelect` per
+94 §2.1 / 212 §7.1. `pnpm typecheck` — clean, 32/32. Targeted jest runs green:
+print-helper 27, ui helper spec 29, i18n 38, api 395 spec 22, ui printing specs 121.
+`pnpm install --offline` added the new workspace package (19 projects).
+
+### Left to the owner (§4 sweep, hardware)
+
+Install on a Windows PC with the POSPRO PTP-60 on USB → Settings → Printing → Wired (helper) →
+Test print prints silently; unplug → next print falls back to the dialog with the toast. Photos,
+plus the three screenshot placeholders in `docs/PRINT-HELPER.md`.
