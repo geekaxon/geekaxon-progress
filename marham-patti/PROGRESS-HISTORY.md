@@ -27348,3 +27348,110 @@ default branch is written out and only the opt-in path interpolates.
 
 ### Not done here
 §6's owner phone pass and the 360px Playwright sweep are instrument runs, not code.
+
+## 393 — stock-alerts-to-mockup — DONE (2026-09-05)
+
+**Branch:** `feature/393-stock-alerts-to-mockup` (FEATURE). Spec `/specs/393-stock-alerts-to-mockup.md`. No CODEREF covers 393.
+
+### The lift (§3) — where the drawer lived, and where it lives now
+`PharmacyInventoryClient.tsx` (4,706 lines) held the Inventory SCREEN *and* every part behind it.
+393 §3 asks the alerts screen to open **the** Inventory view drawer — not a copy — so the parts had
+to become reachable. Split, verbatim, into a new sibling module:
+
+* **From** `apps/web/app/(app)/pharmacy/inventory/PharmacyInventoryClient.tsx`
+  **to** `apps/web/app/(app)/pharmacy/inventory/inventory-shared.tsx`:
+  the wire shapes and row helpers (`InventoryRow`, `MedicineDetailView`, `FormDraft`, `stockBar`,
+  `rowToDraft`, `draftChain`, …), the row atoms (`StatusPill`, `StockBar`, `ExpCell`, `RowActions`,
+  `TypeChipButton`, `Pager`, `EmptyBlock`, the skeletons), and the four surfaces —
+  `DetailDrawer`, `FefoOrder`, `QuarantineCard`, `ProductForm`, `AdjustDialog` — plus their helpers.
+  Nothing about any of them changed; the screen imports them back.
+* **New** in that module: `useInventoryDetailHost()` — the drawer + form + dialog and every write
+  behind them (detail read, adjustment, FEFO re-order and reset, quarantine release, create/update,
+  and the two inline "+ add new" writes) as ONE thing a screen mounts. Inventory hands it the
+  catalogue lists it already holds; the alerts screen hands it nothing and it reads
+  `GET /pharmacy/medicines/categories` + `/units` lazily, only if a form is actually opened.
+* **New** in that module: `ProductTypeChips` — the `All · Medicines · General items` trio that was
+  inline JSX inside Inventory's chip row. Both screens mount the one component now.
+
+The client dropped from 4,706 to ~1,460 lines and is the screen alone.
+
+### The screen (§1/§2/§4)
+* Three tabs (`?tab=low|out|expiry`) on the mockup's `.segctl`, each with its count in `.segctl em`.
+  `out` renders the payload's existing `lowStock.outOfStockRows` — 386 §1 had been sending it since
+  that step and nothing drew it. Its reorder banner is `.reorderline--out` and totals the same
+  per-row `costToReorder`, which at qty 0 IS `min × cost`. Near expiry shows no banner.
+* Inventory's chip row under the tabs on all three, travelling as `?productType=` — the same word
+  the export filter and the API use. Near expiry adds `Expiring soon · Expired`; the Expired chip
+  and the EXPIRED bucket tile are reconciled to one filter, so no contradictory pair is reachable.
+  Every chip count is folded from ONE `base` set (the tab's rows after search only), so
+  `All = Medicines + General items` and `Expiring soon + Expired = All`.
+* Row click / Enter opens the drawer through the shared `rowOpenProps` on all six list renderings
+  (two tables, two card grids, two phone lists). A near-expiry row is a batch; it opens the
+  PRODUCT's record. Edit and Adjust stock come from the drawer's own footer, unchanged.
+* Empty copy taken from the mockups verbatim: *Nothing to reorder* / *Nothing out of stock* /
+  *Nothing expiring in 90 days*, with the files' own icons.
+* Mobile: `.segctl--m` three-way control at 44px, both chip rows in `.mchips`, cards open the
+  shared bottom sheet (the host is handed `isMobile`).
+
+### Decisions recorded
+* **The drawer's condition line is now the mockup's `.drwbanner`**, not a generic `.alert`. Its head
+  word comes from the SAME `statusOf` call that feeds the stock card's pill (one `pillRow`, printed
+  twice), so §3's "banner and pill agreeing" holds by construction rather than by coincidence. It
+  gained the file's "N to reach minimum" through `lowStockShortfall`.
+* **Low stock and Out of stock share one list-prefs key** (`pharmacy.alerts.low`). They are the same
+  table over two disjoint slices of the same desk — same columns, same sort keys — so an owner who
+  sorts the desk by cost finds it sorted on both halves. Near expiry keeps its own key.
+* **`NearExpiryItem` gained `productType`** (`pharmacy.service.ts`), because the chip row reaches
+  the third tab and a batch could not answer "medicine or general item?" without it. Optional on
+  the client type; a pre-393 payload reads as a medicine rather than vanishing from a filter.
+* **§5's "nav urgency count equals Low + Out" is asserted as an invariant on the PREDICATES**, not
+  as a change to 212 §1.1's resolution order (which returns the first non-zero state, never a sum).
+  `navCounts` folds `inventoryOutOfStock` with `isOutOfStock` and `inventoryToReorder` with
+  `belowMinStock` — the tabs' own two functions — so the badge and the tabs count the same two
+  disjoint sets and their sum is the reorder desk. No API contract was changed for this.
+* An empty shelf's stock bar keeps the mockup's 3px sliver rather than a 0% track.
+
+### Files
+`apps/web/app/(app)/pharmacy/inventory/inventory-shared.tsx` (new), `PharmacyInventoryClient.tsx`,
+`alerts/StockAlertsClient.tsx`, `apps/web/app/globals.css` (segctl-count, segctl--m,
+reorderline--out, drwbanner), `apps/api/src/pharmacy/pharmacy.service.ts`,
+`packages/i18n/src/messages/{en,ur}.json` (+9 keys, both catalogues),
+`packages/ui/src/lib/stock-alerts-to-mockup-393.spec.ts` (new),
+and two existing specs re-pointed at the lifted module
+(`inventory-mobile-to-mockup.spec.ts`, `stock-alerts-screen-polish.spec.ts`).
+
+### Gates
+`pnpm typecheck` — 31/31 pass. `pnpm lint` — 17/17 pass, 0 errors (one pre-existing unused
+eslint-disable warning in `apps/api`, present on `main` too, left alone). Unit/e2e/build left to
+the controller per the standing rules. Design self-check by inspection against
+`inventory-desktop.html` (Low stock / Out of stock / Near expiry + States) and `inventory-mobile.html`.
+
+## Gate fix — 393 (`pnpm test:unit`), 2026-09-05
+
+**What broke.** Step 393 lifted the inventory drawer, the add/edit form, the stock-adjustment
+dialog, the chip row and the row atoms out of `PharmacyInventoryClient.tsx` into
+`inventory-shared.tsx`, and rewrote the alerts screen around three tabs and two chip rows. The
+code is right; 17 older UI source-assertion suites (41 tests) were still reading those claims out
+of the screen file, or pinning the alerts screen's pre-393 URL and effect shapes.
+
+**The fix, code only — no product change.**
+- Specs whose claim is about the SCREEN AND ITS PARTS now read the two files as one surface
+  (`read(INVENTORY) + read(INVENTORY_SHARED)`), which is exactly the text they used to read:
+  `print-and-mobile-parity-347`, `batch-pricing-and-expiry-342`, `invoice-cascade-283`,
+  `inventory-polish-321`, `inventory-customer-pays-327` (its CATALOGUE slice deliberately stays
+  on the screen file — that is what the list and card views are now), `inventory-mobile-to-mockup`,
+  `inventory-desktop-r2-and-global-fixes`, `inventory-desktop-polish-r2`, `names-and-identity-311`
+  (via a `readSurface` helper so both censuses and the negative half keep covering both files),
+  `client-nav-and-layer-gestures`, `realtime-and-interaction-312`, `realtime-completion-299`.
+- Specs whose claim is about a lifted COMPONENT read the shared module directly:
+  `mobile-and-global-polish` (FEFO), `purchases-mobile-r2-265` (pickers, Barcode fields),
+  `mobile-picker-and-list-fixes` (Adjust stock's pickers), `pos-and-global-fixes-r8` (the money-box
+  audit follows Inventory's boxes into the shared form).
+- Four assertions were restated against 393's new shapes, keeping the original claim:
+  the alerts tab is read by a total `readTab()` over three tabs and written back as
+  `q.set('tab', next.tab)`; its window restarts on `[tab, bucket, expChip, typeChip, debounced,
+  pageSize]`; its live re-read is the `refreshAll` pair (list + open drawer); `openAdjust` takes a
+  nullable id and still only sets state; and the phone's tab row is `{segmentControl(true)}`.
+
+**Gates.** `pnpm lint` clean, `pnpm typecheck` clean; the 31 UI suites that touch the inventory
+screen pass locally. No app source was changed.
