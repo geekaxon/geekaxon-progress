@@ -27497,3 +27497,49 @@ EN + UR: `pdLedMoreLoad`, `pdLedMoreAllShown`, `pcusReceiveOrRefundAction`, `pcu
 
 ### Gates
 `pnpm lint` and `pnpm typecheck` clean (the one pre-existing `@mp/api` unused-disable warning is unchanged). The new suite renders `LedgerMore`'s three states, its trip-wire, the search-row picker landing on a live day and refusing a dead one, and `monthHeads`' breaks; the rest is grepped, because "the supplier sheet inherits this unchanged" is a claim about which component two screens mount and no screenshot can settle it. The controller runs the full gates.
+
+---
+
+## 395 — settings-roles-users-printing — DONE (2026-09-05)
+
+**Branch:** `feature/395-settings-roles-users-printing` · **Type:** FEATURE · Phase 46 (design block).
+**Spec:** `specs/395-settings-roles-users-printing.md`. Mockups: `settings-desktop.html` §F + *Edit user — one 720px dialog*; `settings-mobile.html` §E/§F/§G. No CODEREF covers 395.
+
+### §1 — Roles → Default page
+- **Schema:** `AppRole.homeHref String?` (`app_roles.home_href`), nullable, no backfill — NULL is the truth about every role that predates this step.
+- **`homeHrefFor(session)`** and **`homeHrefOptions(me, { name, keys })`** added to `packages/shared/src/nav-registry.ts`. `STAFF_HOME` is now the FALLBACK only, exactly as its own 385 §1.3 comment predicted.
+- **The fallback is a re-check at READ time, not a validation at save time.** Permissions move after a choice is made, so a role that later loses the key for its landing page falls back at sign-in rather than landing on a 403. An href the registry no longer carries falls back the same way.
+- **`homeHrefOptions` takes the ROLE's name as well as its keys.** Caught by the first run of the new suite: the Owner holds every tenant key by construction (390 §1), so evaluating the option list against the READER handed an owner editing Cashier the whole registry — and would have let them land a cashier on a screen the same form had closed.
+- API: `PermissionService.setRoleHome` (validates the href against `NAV`, adopts a shared platform role first like every other role edit) and `homeHrefForUser`. `PUT /rbac/roles/:id` takes `name` + `homeHref` in ONE call because the pane has one Save; audit `rbac.role.home_set` with before → after. Adoption carries the platform default's `homeHref` into the copy.
+- `/auth/me` now returns `homeHref` and `mustChangePassword`. Login (`StaffLoginForm.finish`) and the tenant gate resolve through `postLoginTargetFor(me, role)`; the guard's `?next` still outranks the role's home.
+- **Owner/Cashier defaults are NOT seeded.** The spec names them as the intended values; seeding them would have written a choice into every existing tenant's roles that nobody made. `STAFF_HOME` (the dashboard) is what an unset Owner already lands on, and the Cashier's POS is one select away in a pane that now exists.
+- **The PWA `start_url` stays `/pharmacy/dashboard`.** A static webmanifest is fetched before any session exists, so it cannot be role-aware; a cold PWA open with no session goes through `/login`, which resolves through `homeHrefFor`, and one with a live session lands on `STAFF_HOME` — the correct fallback, never a 403. Making the Dashboard page bounce would have broken deliberate navigation to it.
+
+### §2 — Users → full edit + Set password
+- Edit is the file's 720px dialog on the desktop (`.mp-fdlg`, the shared `--dialog-w` class from 365 §1 — not a hand-rolled width) and a FULL-PAGE SHEET on the phone (§E), replacing the list rather than dimming it. One `EditUserForm` component, two frames.
+- `PATCH /admin/users/:id` extended with `active` (routed through `deactivate`/`reactivate`, so the dialog obeys the same lockout floor, kills the same sessions and writes the same audit row as the list action) and an email-uniqueness re-check that names the colleague who already holds the address (new `AdminUserRepo.findByEmail`).
+- **New permission `users.password.set`** (TENANT). Owner by construction; NOT added to ADMIN or MANAGER defaults, per the spec.
+- `POST /admin/users/:id/password/temporary` → `{ password, setAt, setBy }`. `generateTemporaryPassword` lives in `@mp/shared` (pure, injected RNG; the API passes `node:crypto`), 12 chars from an ambiguity-free alphabet grouped `XXXX-XXXX-XXXX`, guaranteed to satisfy `passwordMeetsPolicy`. Stored hashed, `mustResetPassword` set, every session revoked, returned ONCE — there is no companion GET because nothing server-side keeps the plaintext.
+- Audit `users.password.set` carries actor, target and the request's User-Agent, and never any part of the password (asserted). `GET /admin/users/:id/password/last-set` reads the "Last set by … · date" line back off the TRAIL rather than off a column, so there is no second copy to disagree.
+- **Forced change:** `MustChangePasswordGate` wraps the app OUTSIDE `PinGate` — replacing a credential a colleague minted comes before confirming which colleague you are. It reuses `/auth/staff/password/change` (which proves the current password — here, the temporary one) and the one shared checklist. Sign out is always available: a gate is not a lockout.
+- **The mockup's "Counter" field is rendered as the user's BRANCH.** The user row carries a branch and no counter, and counter selection is a per-session choice at the till (spec 100) — a stored per-user counter would be a value nothing in the app reads. Flagged to the controller.
+
+### §3 — Printing
+- New `Printer` model + `PrinterConnection` enum (`BLUETOOTH | WIRED_DIALOG | WIRED_HELPER`), `paper_width` INTEGER (48/58/80) defaulting to 80. **281 stored no printer server-side at all** (a Web Bluetooth device id is per browser profile), so there was nothing to backfill: the table starts empty and the DEFAULTS are the backfill. `apply_tenant_rls('printers')`, isolation proven in `packages/db/src/printers-isolation.spec.ts`.
+- `printers.repository/service/controller` in the pharmacy-settings module (reads flag-gated, writes `pharmacy.settings.manage` + `@Audited`), announcing the new `'printer'` settings master on the 375 stream.
+- `WIRED_HELPER` is drawn and disabled until 398 — and REFUSED server-side too, because a greyed button is a courtesy and a direct API call is not.
+- `@mp/escpos` `PaperWidth` gained **48 (24 columns)**; `hasItemColumns(48)` is false, so an item row stacks. 58 and 80 are untouched.
+- `printRenderOptions` now takes the PRINTER (or a bare width); `PrintPolicy.paperWidth` fetched alongside the settings document. Order: caller override → printer → document → 80.
+- The pane's store-level width Seg is GONE (the letterhead's number is still edited in Receipts / Sales & tax — one control per stored value); the pairing card, drawer switch and behaviour Seg stay.
+
+### Specs told the new truth (they pinned the old one)
+- `printing-settings-281.spec.ts` — the roll moved off the tenant onto the machine; test print is per printer through its own connection.
+- `settings-testing-pass-375.spec.ts` — Settings now opens exactly ONE form dialog (Edit user) and it rides `.mp-fdlg`; Printing subscribes for the PRINTER LIST only and never re-seeds the form under an edit.
+- `realtime-everywhere-343.spec.ts` — PrintingSection moved from `exempt` to `hooks: ['useSettingsLive']` with the reason.
+- `pos-print-wiring-282.spec.ts` — `PrintPolicy` fixtures carry `paperWidth: null`.
+
+### New suites
+`apps/api/src/permissions/role-home-and-printing-395.spec.ts` (17), `apps/api/src/admin/set-password-395.spec.ts` (11), `packages/ui/src/lib/settings-roles-users-printing-395.spec.ts` (20), `packages/escpos/src/layout-48mm-395.spec.ts` (3), `packages/db/src/printers-isolation.spec.ts` (4).
+
+### Gates
+`pnpm prisma generate` ✓ · `pnpm lint` ✓ (one pre-existing warning in `doctor-portal.repositories.ts`, untouched) · `pnpm typecheck` ✓ (31/31). Targeted jest runs of every new and every touched suite green; the full `pnpm test:unit` is the controller's.
