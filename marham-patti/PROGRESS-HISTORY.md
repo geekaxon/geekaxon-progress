@@ -27267,3 +27267,84 @@ pre-existing unused eslint-disable in `doctor-portal.repositories.ts`, untouched
 
 Gates: `pnpm lint` clean (one pre-existing unused-disable warning in doctor-portal),
 `pnpm typecheck` clean.
+
+## 392 — recent-sales-mobile-to-mockup — DONE (2026-09-05)
+
+**Branch:** `feature/392-recent-sales-mobile-to-mockup` · **Type:** FEATURE · spec `/specs/392-recent-sales-mobile-to-mockup.md` · mockup `specs/mockups/pharmacy/recent-sales-mobile.html` §A–§D. No CODEREF covers 392.
+
+391's rules in the phone's components. Everything 391 decided is INHERITED — same `headline` fold,
+same chip row, same `retdoc--stack` lockup, same `canReceive` predicate, same customers' payment
+dialog — so nothing on this tier is a second copy of a rule the desk already keeps.
+
+### §1 — the list (§A / §D)
+- **The card is the mockup's card.** `.pcard__top` is now mark · `.pcard__id` (number, the state
+  badge stacked under it, the customer + moment line, then `Matched: …`) · settlement pill · a
+  44px `⋯`. Under it `Total` as the anchor, then `Paid` / `Balance` (`—` on a voided sale), then
+  the `.msig` signal chips (settled / udhaar / returned / reversed) and the item count.
+- **The card's icon-button row is gone.** It carried Print — which 391 §2.2 took off the desktop
+  row on the grounds that a reprint is an audited act against the invoice a reader is looking at —
+  and a Pay button that walked to the CUSTOMER rather than taking money against this invoice, which
+  is exactly what 391 §4.3 moved into the sheet's footer. Both defects were mobile-only survivors.
+- **`⋯` opens the file's action sheet** (`MobileSheet` + `.msactions`/`.msact`): View · Refund,
+  Refund disabled with 391's two sentences in the row's own sub-line rather than a tooltip a thumb
+  cannot open. Print is not on it. The sheet shuts before it hands the tap on, so the view sheet
+  never opens over a stacked layer.
+- **List view mounted** behind the SAME `<ViewToggle>` and the same `useListViewPref` the desk
+  uses — card on mobile, list on desktop, one stored word. `.msale` rows already existed.
+- **Export** joined the phone's `.miconacts` rail, pressing the same `exportCsv` over the same
+  filtered rows. **KPI strip** to §A's four tiles (This month · Owed · Today · Returned), all four
+  off the one `recentSalesHeadline` fold. **Quick acts** row (New sale / New return) as §A draws it.
+- Under a live query the chrome's sub-line states the answer's size (`3 of 96 sales contain a
+  matching item`), which is what the desk states beside its search box.
+
+### §2 — the view sheet (§B)
+- **The phone now reads the DRAWER's items table.** It drew a private `.mvline` card stack that
+  flattened batch / unit / qty / unit price into one grey sentence — six facts spelled two ways on
+  two tiers, and no sideways scroll at all. One `vlines vlines--sale vlines--stick` mount answers
+  both tiers now; the sheet states `min-width:560px` (the `--sale` modifier clears the purchase
+  table's 1040px, so without it the six columns squeezed instead of scrolling). `soldAsLabel` and
+  the `.mvline` markup went with it. 391 §4.2's arithmetic rule is unchanged and shared.
+- **Footer as the file's grid.** `Void · Print · Receive payment · Return` — 2×2 with four,
+  1×3 when Receive payment is absent because nothing is owed. `footCount` is computed from the very
+  predicates that draw the buttons, so the grid can never disagree with what is in it. Labels are
+  §C1's short ones (`Print`, `Return`); the desk's thermal/A4 segment does not come to the phone
+  (its A4 half is disabled pending 396, so it would be two thirds of a control).
+- `<Panel>` gained ONE prop, `footClassName`, forwarded to the sheet's footer only. Absent → the
+  `--row` default, byte-identical for every existing caller; the desktop frames are untouched.
+
+### §3 / §5
+Already assembled by 391 and left alone: `RecordCustomerPayment` is mounted with `mobile={isMobile}`
+and the invoice, so §C's `Applies to INV-…` sheet and its `allocateTo` post are the customers'
+screen's, unchanged. `PageLiveSync` reaches the phone through `MobilePageChrome`'s `live` prop —
+one live marker on the page, and the phone mounts none of its own.
+
+### Incidental
+The 30-second `setNow` interval and `agoLabel` went: the only relative time on the screen was
+"7 min ago" on the phone's card, and §A prints the moment itself. `CUSTOMER_HREF` went with the
+card's Pay button.
+
+### Files
+`apps/web/app/(app)/pharmacy/recent-sales/RecentSalesClient.tsx`,
+`apps/web/components/pharmacy/Panel.tsx` (`footClassName`),
+`apps/web/app/globals.css` (+392 block: `.pcard__more` / `.pcard__paid`, list-row void tone,
+`.mp-rsales-sheet .vlines--sale` width, `.sheet__foot--grid{,2,3}`),
+`packages/i18n/src/messages/{en,ur}.json` (13 keys),
+`packages/ui/src/lib/recent-sales-mobile-392.spec.tsx` (new),
+`packages/ui/src/lib/recent-sales-close-367.spec.tsx` + `recent-sales-desktop-391.spec.tsx`
+(re-pointed at what 392 deliberately changed: one `printInvoice` call site, four `rowOpenProps`
+mounts, and the drawer-footer order case scoped to the DESKTOP footer now that a second one exists
+in the same component).
+
+### Gates
+`pnpm lint` PASS (incl. design-drift, token-integrity, tenant-search-select). `pnpm typecheck` PASS.
+`packages/ui` jest: 197/197 suites, 5188/5188 tests PASS. `pnpm test:unit` / `pnpm build` left to
+the controller per the standing rule.
+
+Five suites failed on the first pass and were fixed in the CODE, not the case: `<Panel>`'s sheet
+footer had become one interpolated className, and 244/260/265/354 and the mobile-sheet reference
+case all read the literal `<div className="sheet__foot sheet__foot--row">{foot}</div>` as the
+family's contract. They are right — "absent → byte-identical" has to be literally true — so the
+default branch is written out and only the opt-in path interpolates.
+
+### Not done here
+§6's owner phone pass and the 360px Playwright sweep are instrument runs, not code.

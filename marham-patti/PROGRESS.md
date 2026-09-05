@@ -7,9 +7,9 @@
 ## Current Status
 - **Project:** Marham Patti — multi-tenant white-label healthcare platform.
 - **Phase:** **PHASE 46** — Design block (390–401), all `feature/*`.
-- **Last completed:** **391 — recent-sales-desktop-to-mockup** — DONE.
-- **Next:** **392 — recent-sales-mobile-to-mockup** — specs/392-recent-sales-mobile-to-mockup.md
-- **Group order:** 392 up to 401, one step per session. Never skip a number.
+- **Last completed:** **392 — recent-sales-mobile-to-mockup** — DONE.
+- **Next:** **393 — stock-alerts-to-mockup** — specs/393-stock-alerts-to-mockup.md
+- **Group order:** 393 up to 401, one step per session. Never skip a number.
 - **MOCKUPS:** `specs/mockups/pharmacy/*.html` is the design target — copy, states, layout.
 - **ASSEMBLED, NOT BUILT:** mount the kits that exist; a fresh copy of one fails the spec.
 - **ONE LIVE LABEL:** bus-subscribed pages mount `PageLiveSync`; a second live chip fails.
@@ -17,8 +17,8 @@
 - **After this:** Pharmacy audit, consistency audit, Lab, Clinic.
 
 ### Recent steps
-- **391 — recent-sales-desktop-to-mockup** — DONE (2026-09-05) — Today replaces overdue, search reaches inside the sale, money taken in the drawer.
+- **392 — recent-sales-mobile-to-mockup** — DONE (2026-09-05) — The phone's card, its ⋯ sheet and a footer that fits four buttons.
+- **391 — recent-sales-desktop-to-mockup** — DONE (2026-09-05) — Today replaces overdue, search reaches into the sale, money in the drawer.
 - **390 — leftovers-and-live-sync** — DONE (2026-09-05) — Owner holds every key in code; one live marker per page.
-- **389 — gate-repair-387** — DONE (carried 387).
 
 > Older steps in PROGRESS-HISTORY.md
