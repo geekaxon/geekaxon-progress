@@ -32,7 +32,6 @@
 11. **Two-tier i18n — with a surface exception.** The i18n **framework is always in place**; strings resolve through it on every surface. **Language coverage is per surface:** the **vendor console is English-only** (71) and, from Phase 15, the **tenant staff app is English-only too** (owner decision — no language switcher, no RTL on tenant surfaces; English values only, the framework retained so a future language is additive, never a rebuild). Where a surface *is* bilingual, UI text → **English + Urdu** (parity gate) and AI-generated/conversational output → **English + Urdu + Roman Urdu**.
 12. **Production & real data are human-gated.** Agent works on `staging`/dummy only. `main` deploys ONLY on the owner's explicit Telegram command.
 13. **Specs are authoritative.** Current `specs/NN-*.md` is the source of truth; missing → `[HUMAN_REQUIRED]`.
-14. **One live label per page (390 §4).** A page that subscribes to the realtime bus mounts `<PageLiveSync>` — the marker and the Sync button, one component, in the page-header action row (and in the mobile app bar). The marker's three states and their wording are decided inside that component from `{connected, refused, lastEventAt}`; no screen composes its own. **A second live label anywhere on a page fails the spec.**
 
 ## 3. Always-on infrastructure (never a feature flag, never sellable as optional)
 
@@ -79,8 +78,6 @@ Production `<PROD_APP_HOST>`, Staging `<STAGING_APP_HOST>`. All tenants resolve 
 ## 8. Roles (RBAC; `RolesGuard` + `@Roles()` + permission catalog)
 
 `SUPER_ADMIN` (AboveNext, cross-tenant, NON_TENANT keys), `TENANT_OWNER`, `ADMIN`/`MANAGER`, `DOCTOR`, `RECEPTION`, `NURSE`, `LAB_TECH`, `PATHOLOGIST`, `PHARMACIST`, `SALESMAN`, `CASHIER`, `FINANCE`/`ACCOUNTANT`, `PHLEBOTOMIST`, `RIDER`, `PATIENT`. Custom tenant roles supported (SaaS). Permissions are catalog-driven string keys, seeded + reconciled on boot. **Permissions are gated behind flags** (a role only matters for a capability the tenant has).
-
-**390 §1 — THE OWNER HOLDS EVERY TENANT KEY BY CONSTRUCTION, IN CODE.** `TENANT_OWNER` is answered from the catalogue — every `TENANT`-scoped key — before any repository read, on the server (`PermissionService.can` / `permissionsFor`) and on the client (`usePermission`, `<Can>`, the nav filter), through the one shared predicate `sessionHoldsPermission`. No stored row, no reconcile and no reseed stands between an owner and their own tenant. The flag gate is unchanged: flag FIRST, then permission (§4), so a capability the tenant has not bought is still off for the Owner. A boot reconcile that cannot grant a system role its defaults logs the role AND the missing keys and raises `ROLE_RECONCILE_FAILED` to the vendor console — it never skips silently.
 
 ## 9. Auth
 
@@ -826,5 +823,18 @@ _End ARCHITECTURE.md — detail per step in `specs/NN-slug.md` (private repo). K
 401. `401-zero-downtime-release-pipeline` — **blue/green slots** in `deploy.sh` with an nginx include flip and a 30-second grace; rehearsal before migrations on production; GitHub Actions on a self-hosted runner with a one-click production approval; **semantic versions** from the root `package.json`, tagged, visible in Settings → About and `/health`; add-only migrations enforced in CI; **v1.0.0** is the 374–401 promote. Releases go out at any hour — features arrive dark behind flags, so no tenant needs a window.
 
 > **STANDING RULES FROM PHASE 46:** *"By construction" is code, not a comment* — a guarantee about a role lives in the guard. *One live label* — `PageLiveSync`, never a per-screen chip. *The mockup is the oracle for a printed byte* — goldens come from the design's listing, and a golden regenerated from the renderer proves nothing. *A release is invisible* — two slots, a health check, a flip; the old slot is the rollback.
+
+**PHASE 47 — FIX ROUND AFTER THE PHASE 46 TEST (402–408).**
+
+402. `402-release-ops-fixes` — the first blue/green deploy on staging adopted the legacy ports and health-checked the old process: `deploy.sh` now adopts legacy processes as blue and builds green (a zero-stop first deploy, which live needs), the health check asserts the slot **and** build id it just built, and `check-env` rejects `NODE_ENV≠production` and any scheme-less `*_URL`.
+403. `403-live-sync-and-offline` — `PageLiveSync` shows the time data last changed (event or refresh), Sync ends with a check mark, **Offline is the marker's fourth state** and the global Offline badge is deleted; mobile drops the marker for a single shell-mounted offline banner and one "Back online" toast.
+404. `404-mobile-list-paging` — one paging hook for every mobile list: 50 per page, cursor pagination, prefetch at 70 %; ledger sheets return to a plain infinite list; the date icon opens a bottom sheet.
+405. `405-recent-sales-round-3` — *Fully returned* is derived from line quantities (the status flag was never set); *Return sale* opens step 2 preselected; desktop and mobile follow Purchases' chrome; **sales history import** — rows with no lines, no stock, no ledger, no day-close effect, badged Imported.
+406. `406-stock-alerts-and-customers-polish` — chips on all three alert tabs, inline expiry chips, full-width segments; customer drawer/sheet alignment and footer rules; merge rail + sticky search; Accounting opens on Overview.
+407. `407-pos-print-screen` — the POS print screen from the mockup; the on-screen preview draws the **renderer's own lines** and the A4 preview mounts 397's document, so what is shown is what prints.
+408. `408-install-qr-and-thermal-logo` — `/install` page, QR in Settings and the vendor console, counter poster, login footer link; thermal logo uploaded as PNG/SVG and converted server-side to the 1-bit bitmap 396 prints, with a live preview and threshold.
+
+> **STANDING RULES FROM PHASE 47:** *A preview is the renderer's output* — never a second drawing. *A status flag is derived, never trusted* — full/partial comes from quantities. *The first deploy on a box with legacy processes is a migration*, and the script does it.
+
 
 

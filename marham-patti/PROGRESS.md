@@ -6,18 +6,20 @@
 
 ## Current Status
 - **Project:** Marham Patti — multi-tenant white-label healthcare platform.
-- **Phase:** **PHASE 46** — Design block (390–401) complete. Released as v1.0.0.
-- **Last completed:** **401 — zero-downtime-release-pipeline** — DONE (v1.0.0, three environments).
-- **Next:** none — build order complete
-- **OWNER FIRST:** Actions billing, a self-hosted runner, the `develop` branch and the slot ports in each `.env`.
-- **MOCKUPS:** `specs/mockups/pharmacy/*.html` is the design target.
-- **ASSEMBLED, NOT BUILT:** mount the kits that exist; a fresh copy fails the spec.
-- **ONE LIVE LABEL:** bus-subscribed pages mount `PageLiveSync`; a second live chip fails.
-- **After this:** Pharmacy final audit, consistency audit, Lab, Clinic.
+- **Phase:** **PHASE 47** — Fix round after the Phase 46 test (402–408). 402–404, 406 on `fix/*` (`DEPLOY FIX`); 405, 407, 408 on `feature/*` (`DEPLOY FEATURE`). Target branch is still `staging`.
+- **Last completed:** **402 — release-ops-fixes** — DONE (first slot deploy no longer stops the counter).
+- **Next:** specs/403-live-sync-and-offline.md
+- **Group order:** 402 → 403 → 404 → 405 → 406 → 407 → 408. One step per session. Never skip a number.
+- **MOCKUPS:** `specs/mockups/pharmacy/*.html` is the design target — copy, states, layout.
+- **FOUND IN SOURCE:** sale `full` from status not quantities (405 §1); POS preview draws the pre-396 receipt (407 §1).
+- **ONE RENDERER:** the print preview draws the renderer's lines; a second drawing fails the spec.
+- **ONE PAGING HOOK:** 50 per page, cursor, prefetch — every mobile list reads it (404).
+- **ONE MARKER:** four states in `PageLiveSync`; no Offline badge anywhere; mobile has the banner, not the marker (403).
+- **After this:** owner's 401 steps (GitHub runner, bot target, dev deploy) → v1.0.0 promote → Pharmacy audit → consistency audit → Lab → Clinic.
 
 ### Recent steps
-- **401 — zero-downtime-release-pipeline** — DONE (2026-09-05) — The new build starts beside the old one, proves itself, then takes over.
-- **400 — audit-log-to-mockup** — DONE (2026-09-05) — The trail reads like a page now: who did what, from which counter, and what moved.
-- **399 — notifications-centre** — DONE (2026-09-05) — The bell finally has a page, and marking things read agrees everywhere at once.
+- **402 — release-ops-fixes** — DONE (2026-09-06) — adopt the old processes as blue, prove the slot you built, stricter env check.
+- **401 — zero-downtime-release-pipeline** — DONE (2026-09-06).
+- **390–400** — DONE.
 
 > Older steps in PROGRESS-HISTORY.md
