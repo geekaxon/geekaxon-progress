@@ -28986,3 +28986,155 @@ schema change, so no `prisma generate`.
 Real hardware: the installer on a real Windows box, a real spooler with a real roll, the silent
 sale, the service stopped → dialog with toast, and the dialog test print producing two lines with
 the printer stopping after the cut.
+
+---
+
+## 411 — thermal-receipt-to-golden (2026-09-06) — FIX, branch `fix/411-thermal-receipt-to-golden`
+
+**Why a third attempt.** 396 asked for the mockup's anatomy and its suite passed, and the slip the
+owner printed on 6 Sep still came off the machine with the pre-396 layout. The reason a whole spec
+could pass while the paper stayed wrong is that the tests asserted *about* the output — that a line
+existed, that a total was somewhere on it — rather than asserting the output itself, and the one
+place the mockup's rows were written down was a hand-typed copy inside a spec file. 411 removes the
+interpretation.
+
+### §1 — the goldens, and the test that decides
+* `packages/escpos/scripts/extract-goldens.mjs` walks `specs/mockups/pharmacy/thermal-receipt.html`
+  and writes `specs/411-goldens/thermal-goldens.txt` — all **40 samples**, every row, in a
+  `<flags> <text>` format (`b` bold, `d` double-height, `L` logo raster, `C <n>` barcode). Trailing
+  spaces are stripped (invisible on paper, and the mockup pads some samples and not others);
+  leading spaces are not, because they are how every centred and right-aligned line is built.
+* `--check` re-extracts and fails on any drift, so a hand-edited golden cannot pass. The check runs
+  as the first case of `goldens-411.spec.ts`, i.e. on every CI run.
+* `renderLines(fixture, cols)` (new, `packages/escpos/src/render-lines.ts`) renders the document to
+  ESC/POS **and reads the rows back out of those very bytes** via 407's `receiptLines`, so a row the
+  test compares is a row the printer is told to print — §1.3's "the bytes test is derived from the
+  lines", satisfied by construction rather than by agreement.
+* `test-goldens-411.ts` is a fixture per sample. Samples 13–25 and 29–40 assert **exact** equality
+  (every row, in order, nothing before/between/after); samples 4–12 and 26–28 are excerpts the
+  mockup drew of one part of the anatomy (a header with no title band under it, an item table with
+  no totals above it) and assert their rows appear **in order, character for character**; samples
+  1–3 are the column rulers and are checked against `columnsFor`/`rule`.
+* `specs/411-goldens/quotation-80mm.txt` is hand-authored from §3 (there is no quotation in the
+  mockup) and its header says so.
+
+### Two documented departures from "verbatim"
+1. **`Discount` → `Item discounts`** (`Item disc.` at 24 columns, which shortens the word and never
+   the figure, exactly as `Cashier` → `Cash.` there). This is §2's own instruction; it is applied
+   inside the extraction script as a declared `SPEC_EDITS` table so the file and a fresh extraction
+   still agree, and the money column does not move.
+2. **The mockup's typographic glyphs are ASCII-folded** (`·` → `.`, en/em dashes, curly quotes).
+   U+00B7 is a box-drawing character in the printer's PC437 table; a golden nothing can print is not
+   an acceptance criterion. The fold is length-preserving, so no column moves.
+
+### What the renderer had to change to match
+* **Emphasis is one thing, never two.** The mockup sets the sale slip's name, `GRAND TOTAL`,
+  `YOU HAVE SAVED`, `NET REFUND` and `VARIANCE` DOUBLE-HEIGHT and not also bold; the refund slip and
+  the Z-report take bold on the name instead. `CHANGE` and the item-table heading gained the bold
+  they were missing.
+* **Totals:** `Item discounts` (Σ line discounts) and `Bill discount` (sale-level, only when
+  non-zero) as two rows. They read `itemDiscount` / `saleDiscount`, which 326 already put on
+  `ThermalReceiptModel`, so the screen and the paper state one split rather than two.
+* **The returns line comes from Settings.** `returnsWindowDays` added to `ThermalReceiptInput`;
+  `buildReceipt` resolves it per branch. `> 0` prints `Returns within N days with this receipt`
+  (broken per roll, as the mockup breaks it); zero or absent prints no line at all — a slip that
+  promises a return the shop does not take is worse than one that stays silent.
+* **The refund slip was rebuilt** to the mockup: the sale's own bill block and item table, per-item
+  reason lines in the counter's words (`reasonText`), a per-item restocking row, then
+  `Value of goods returned` · `Sales tax refunded` · `Restocking fee` · `NET REFUND`, then
+  `Refunded in CASH` · `By …` · `Original receipt surrendered at the counter`. 370's split
+  settlement lines are untouched.
+* **The Z-report's per-till path was rebuilt**: `SALES BY METHOD` with a count beside each wallet's
+  money (`ZReportMethod[]`, so a shift can finally name JazzCash), a sub-rule over `Gross sales`, the
+  refunds row, then a `CASH DRAWER` ladder that adds up on paper (float + cash sales − refunds −
+  paid out = expected), `VARIANCE` double-height in all three states with one banner sentence under
+  it, and two signature rules. The 377 period-close path is unchanged.
+* **A quotation** stops at the total under ONE rule (the deployed slip printed two), and prints no
+  savings block: nothing was bought, so nothing was saved. It carries the website line (`appUrl`).
+* Multi-line `timings` now centre line by line, as the address always has.
+* New per-roll copy for all of the above lives in `receipt-copy.ts`'s three word tables, plus
+  `shiftStamp` (the Z-report's right-aligned clock), `soldStamp` and `footStamp`.
+
+### Housekeeping
+* `receipt-to-mockup-396.spec.ts` no longer holds three hand-typed copies of the mockup's rows —
+  that copy IS how the paper drifted. It keeps the claims a row diff cannot make (no line exceeds
+  its roll, an advance is a payment method, a reprint is marked at both ends, the barcode degrades
+  to its number, the logo is dots).
+* `test-mockup-396.ts` is now a thin alias over the 411 fixtures: one copy of the mockup sale.
+* The 280 byte goldens under `src/__golden__` were re-baselined (`UPDATE_GOLDEN=1`). They are a
+  regression net captured from the renderer, never the oracle.
+
+### §4 — 48 mm
+The 407 print screen's width segment now offers `A4 · 80 · 58 · 48` unconditionally. It used to show
+48 only where a printer had already declared that roll, so a shop that had just plugged a two-inch
+handheld in could not preview on it — and 24 columns is the layout most likely to be wrong.
+Settings → Printing already offered all three per printer (`PRINTER_PAPER_WIDTHS`).
+
+### Gates
+* `pnpm lint` — clean (one pre-existing unused-disable warning in `doctor-portal.repositories.ts`,
+  untouched by this step). `pnpm typecheck` — clean.
+* `@mp/escpos` suite: **281 passed, 281 total**. `extract-goldens.mjs --check`: goldens match the
+  mockup (40 samples).
+* The 411 suite, all diffs empty:
+
+```
+    ✓ the goldens still match a fresh extraction from the mockup 
+    ✓ every sample in the file has a fixture 
+    ✓ the grid — 48 columns at 80mm, 32 at 58mm, 24 at 48mm 
+    ✓ the quotation — 80mm 
+    ✓ sample 04 · Text only . 80mm no timings 
+    ✓ sample 05 · Text + timings . 80mm free text 
+    ✓ sample 06 · Logo + timings . 80mm 40% = 230 dots 
+    ✓ sample 07 · Text only . 58mm no timings 
+    ✓ sample 08 · Text + timings . 58mm wraps at 32 
+    ✓ sample 09 · Logo + timings . 58mm 40% = 154 dots 
+    ✓ sample 10 · Text only . 48mm no timings 
+    ✓ sample 11 · Text + timings . 48mm wraps at 24 
+    ✓ sample 12 · Logo + timings . 48mm 40% = 115 dots 
+    ✓ sample 13 · Sale receipt . 80mm 48 characters 
+    ✓ sample 14 · Sale receipt . 58mm 32 characters 
+    ✓ sample 15 · Sale receipt . 48mm 24 characters 
+    ✓ sample 16 · No discount . 80mm 48 characters 
+    ✓ sample 17 · No discount . 58mm 32 characters 
+    ✓ sample 18 · No discount . 48mm 24 characters 
+    ✓ sample 19 · Logo header + savings . 80mm 48 characters 
+    ✓ sample 20 · Logo header + savings . 58mm 32 characters 
+    ✓ sample 21 · Logo header + savings . 48mm 24 characters 
+    ✓ sample 22 · Advance part-used . 80mm 48 characters 
+    ✓ sample 23 · Sale receipt - reprint . 80mm 48 characters 
+    ✓ sample 24 · Sale receipt - reprint . 58mm 32 characters 
+    ✓ sample 25 · Sale receipt - reprint . 48mm 24 characters 
+    ✓ sample 26 · Long product names . 80mm 48 characters 
+    ✓ sample 27 · Long product names . 58mm 32 characters 
+    ✓ sample 28 · Long product names . 48mm 24 characters 
+    ✓ sample 29 · Refund slip . 80mm 48 characters 
+    ✓ sample 30 · Refund slip . 58mm 32 characters 
+    ✓ sample 31 · Refund slip . 48mm 24 characters 
+    ✓ sample 32 · Z-report - balanced . 80mm 48 characters 
+    ✓ sample 33 · Z-report - balanced . 58mm 32 characters 
+    ✓ sample 34 · Z-report - balanced . 48mm 24 characters 
+    ✓ sample 35 · Z-report - short . 80mm 48 characters 
+    ✓ sample 36 · Z-report - short . 58mm 32 characters 
+    ✓ sample 37 · Z-report - short . 48mm 24 characters 
+    ✓ sample 38 · Z-report - over . 80mm 48 characters 
+    ✓ sample 39 · Z-report - over . 58mm 32 characters 
+    ✓ sample 40 · Z-report - over . 48mm 24 characters 
+Tests:       41 passed, 41 total
+```
+
+### Decisions recorded, and what is NOT done
+* The mockup's own 80 mm samples write two cells differently from their 58/48 twins — the long-name
+  strip count as `2 str` where the narrow rolls say `12 str`, and the insulin quantity as `vial`
+  where they say `3 vial`. The goldens are the acceptance, so the fixtures state each roll as the
+  designer drew it and the comment says why; the LAYOUT is what the test measures.
+* §2 lists `www.marhampatti.com` under the powered-by mark. No sample in the mockup draws it, so it
+  is an optional `appUrl` on the identity: the quotation golden carries it (§3 asks for it there
+  explicitly) and the forty extracted samples do not, which keeps both files honest.
+* The refund slip and the Z-report render every new field the mockup shows, but their CALLERS do not
+  yet supply all of them: the day-close model has no per-method breakdown, no Z number and no
+  paid-out figure, and the returns flow captures a reason CATEGORY rather than a sentence. Both
+  renderers degrade to exactly what the data supports (the Z-report falls back to Cash/Card/Udhaar
+  rows with no count column), and the 280 fixtures prove it. Filling those in is a change to the
+  day-close and returns models, not to the paper.
+* §5's second piece of evidence — a photo of the owner's 80 mm slip beside the mockup's sample — is
+  an owner action and is not in the repo.
