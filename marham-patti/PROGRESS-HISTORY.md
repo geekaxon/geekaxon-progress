@@ -28655,3 +28655,141 @@ destination chip, the action/facts cards, the phone tier, the kit and the two ca
 **Gates:** `pnpm lint` and `pnpm typecheck` clean. The targeted suites were run rather than the whole
 tree: escpos (243), i18n (38), the 69 `@mp/ui` specs that read any file this step touched (2068) and
 `realtime-everywhere-343` — all green after the repairs above.
+
+## 408 — install-qr-and-thermal-logo — DONE (2026-09-06)
+
+**Type:** FEATURE · branch `feature/408-install-qr-and-thermal-logo` · spec `/specs/408-install-qr-and-thermal-logo.md` · no CODEREF covers 408.
+
+### §1 — Install on phone
+
+- **`/install`** — a public, tenant-branded page at the top level of the app (outside every
+  authenticated route group, so no guard and no login). It is ASSEMBLED, not built: the app already
+  has exactly one public tenant-branded shell (`AuthShell` — resolved lockup, scoped palette,
+  Powered-by, mobile composition, all server-rendered), so the page mounts it and owns only the
+  steps. `InstallSteps.tsx` is the one client island: *Open the app* when installed, a real
+  **Install** button when Chrome has fired `beforeinstallprompt`, and both step lists always
+  rendered with the device deciding only their ORDER. `usePwaInstall` gained
+  `getInstalledRelatedApps` — `display-mode: standalone` only answers "am I running inside the app
+  right now", which is false on the very tab someone opens after installing.
+- **The QR is generated server-side, as SVG, by one route** — `app/install/qr.svg/route.ts`, using
+  the `qrcode` dep already in the repo. No external service is ever called: a shop's own hostname
+  is not something to hand a third party to draw, and a printed poster must not stop working when
+  someone else's uptime does. With no query it encodes the REQUEST host; with `?slug=` it resolves
+  that tenant's shared-host address from `PLATFORM_BASE_DOMAIN` (the vendor console's case). The
+  URL maths is pure and shared: `installUrl` / `tenantInstallUrl` / `INSTALL_PATH` in
+  `@mp/ui/surface-routing`, always `https`, host normalised, `null` rather than a URL with a hole.
+- **Settings → General → Install on phone** (`InstallPhoneSection`) — the QR, the link with Copy,
+  *Share on WhatsApp* (a plain `wa.me` link; nothing talks to WhatsApp), and *Print counter poster*.
+  The poster (`InstallPosterDocument`) is the SHEET KIT's paper at A5: `.docsheet` inside
+  `PrintDocShell`, scope `mp-pur2 mp-inst`, with the trim overridden in two dimensions. Its `@page
+  { size:A5 }` is mounted WITH the component — a stylesheet rule would have silently retrimmed
+  every A4 invoice in the app. The poster is handed the card's own `qrSrc`, so it cannot drift.
+- **Login footer** — `Install the app on your phone →` in `AuthShell`'s column, a plain link, so the
+  sign-in surface pays no JavaScript for it.
+- **Vendor console** — the same code on the tenant detail page's Details card, by slug.
+- Middleware needed NO change: the tenant/public surfaces already allow every non-vendor path, and
+  `qr.svg` is short-circuited as a non-page request before surface routing runs.
+
+### §2 — Thermal logo
+
+- **One artefact, and that is the whole design.** `@mp/shared/thermal-logo.ts` (pure, browser-safe,
+  no canvas/zlib/DOM) owns the rules: 203 dpi, 40 % of the paper → **230 dots at 80 mm, 154 at
+  58 mm**, ≥ 400 px source, PNG/SVG only, a clamped threshold band, a hard `thresholdMono` with **no
+  dithering**, and `encodeMonoBmp`/`decodeMonoBmp`. A 1-bit BMP's pixel array IS the packed bitmap,
+  so ONE stored file serves both consumers — the printer reads the bits, the settings card previews
+  the same bytes in an `<img>`. That is what makes *"this is exactly what the printer prints"* true
+  by construction rather than by promise. It also answers the owner's format question: the printer
+  wants a monochrome BMP, the app makes it, tenants never upload one.
+- **Where the conversion runs, and why.** The API has no rasteriser and cannot get one without a
+  native dependency; the repo's ONE server rasteriser is `next/og` (already used by the PWA icon
+  generator). So `apps/web/lib/thermal-logo-server.tsx` draws the artwork at the exact dot width via
+  `ImageResponse`, decodes that PNG with a narrow `node:zlib` decoder (8-bit, non-interlaced — it
+  decodes what the rasteriser emits and refuses the rest rather than half-understanding it), and
+  thresholds it. `app/brand/thermal-logo/route.ts` is the entry point. It lives under `/brand/` and
+  NOT `/api/` because the reverse proxy hands `/api/` to the API server. It grants nothing: the
+  caller's own bearer is forwarded to the API's permission-gated endpoints, which do the writing.
+- **Storage** — `POST/GET/DELETE /personalization/thermal-logo` plus
+  `POST /personalization/thermal-logo/bitmap`. Three new asset variants (`thermal`, `thermal58`,
+  `thermal80`), deliberately NOT in `BRAND_SLOTS`, so the Appearance screen never grows a sixth
+  tile. Asset ROWS rather than letterhead JSON because bytes belong there and because they must
+  survive a letterhead save. The DTO decodes the BMP and refuses anything that is not 1-bit at
+  exactly the roll's cap — the converter is a server, but it is still a caller. `image/bmp` was added
+  to the API's RAW-BODY types only; the tenant upload whitelist (`ALLOWED_ASSET_MIME`) still refuses
+  BMP. Deliberately NOT `@RequireFeature(fullPersonalization)`: a receipt logo is a printing
+  setting, not premium white-labelling.
+- **The switch moved** out of `StoreSection` into the new `ThermalLogoSection`, beside the bitmap it
+  turns on — 374 shipped a switch with nothing to switch on. Same stored field, same default (off).
+- **The threshold is remembered** on the letterhead (`receiptLogoThreshold`, clamped) and written by
+  the server that made the bitmaps. That created a SECOND writer of a column that is replaced whole,
+  so `saveStoreDoc` gained `ownedStoreKeys`: a pane declares the store fields it owns, every other
+  field is re-read immediately before the write. Without it a stale Store form would have silently
+  reverted a threshold and left the stored dots disagreeing with the slider that made them.
+- **396's header reads the stored bitmap.** `storedThermalLogo` fetches the BMP and decodes it (no
+  canvas, no dither, deterministic); `print-document.ts` now makes the choice ONCE in `saleLogo` —
+  stored bitmap wins, 396's browser rasterisation of the Insignia stays as the untouched fallback for
+  every tenant who has not uploaded one. `pharmacy.service.ts` offers `thermalBitmaps` only when the
+  switch is on. Both branches yield `null` on any failure, and `null` prints the shop's name as text.
+
+### Tests, gates, notes
+
+- `packages/ui/src/lib/install-qr-and-thermal-logo-408.spec.ts` — the QR encodes the tenant host
+  (both resolvers, https, port/case, empty-host null); the dot caps (230/154), the row scaling and
+  its ceiling, and the source refusals with intrinsic size read from PNG IHDR and SVG viewBox; the
+  threshold monotonically inks more of a ramp and CHANGES the bytes; a flat grey field is all-or-
+  nothing (a dither would scatter — this proves there is none); transparent is paper; BMP round-trip
+  is lossless at a width where the wire stride (3 B) and the BMP stride (4 B) disagree; plus the
+  wiring greps that a screenshot cannot see (one QR generator, preview reads the stored URL, printer
+  prefers it, switch moved, owned-keys merge, EN+UR parity).
+- Three STALE source assertions in older suites were refreshed with the reason recorded inline:
+  374's "the switch is in the Store pane", 396's `PRINT_DOCUMENT` logo call site (now `saleLogo`),
+  and 375's pane inventory (`InstallPhoneSection` reads nothing, so it is excused from the loading
+  skeleton audit; General's note now names four panes).
+- Gates: `pnpm lint` and `pnpm typecheck` both clean (one pre-existing unrelated warning in
+  `doctor-portal.repositories.ts`). No schema change, no migration, no new dependency.
+- **NOTE for the controller:** the spec cites `install-desktop.html` / `install-mobile.html` as
+  mockups; neither exists in `specs/mockups/`, and the settings mockups carry no *Install on phone*
+  or *Thermal logo* card. Both surfaces were therefore built to the established design system
+  (`.setcard` / `SwitchRow` / `Applies` in Settings, the auth column for `/install`, the sheet kit
+  for the poster) rather than guessed at. If those mockups arrive later, the CSS is scoped to
+  `.instcard` / `.thlogo` / `.inst-poster` and is the only thing that would need to move.
+
+### 408 — gate fix (2026-09-06)
+`pnpm test:unit` failed on `apps/api/src/pharmacy/realtime-everywhere-343.spec.ts` §1: the 343 audit
+table enumerates every `.tsx` under `apps/web/app/(app)`, and step 408 added two panes without
+recording them — `settings/sections/InstallPhoneSection.tsx` and
+`settings/sections/ThermalLogoSection.tsx`. Both audited as EXEMPT: the install card renders the
+shop's own address from the request host (no scope publishes a hostname), and the thermal-logo card
+is a settings FORM (upload + threshold) where 375 §1's rule holds — a live re-read would discard
+unsaved work. Verified neither file imports `lib/stock-live` nor calls `useNotificationFeed(`, so
+the "an exempt surface does not quietly subscribe" test holds. Also corrected GeneralSection's now
+stale exemption text ("two panes" -> "four panes"), since 408 mounted both new panes inside it.
+Gates: `pnpm lint` clean (0 errors; one pre-existing unused-disable warning in
+doctor-portal.repositories.ts, untouched), `pnpm typecheck` clean.
+
+### 408 — install-qr-and-thermal-logo — GATE FIX (test:unit), 2026-09-06
+
+`pnpm test:unit` failed on four @mp/ui source-assertion suites, all of them collateral from the
+408 CSS block and the receipt-logo switch move — no product behaviour was wrong.
+
+1. **365 §3** (`dialog-rule-and-statement-365.spec.ts`) reads the LAST `@media print {` block in
+   `globals.css` and expects the statement dialog's un-clip rules there. 408 had appended a second
+   print block at EOF (the A5 poster's `559 × 794 !important`), which became the last one. The A5
+   exception now lives INSIDE the A4 document print block, immediately under the
+   `width:794px !important; height:1122px !important` rule it excepts — three classes beat two, so
+   it wins there — and the trailing print block is gone. `.mp-pur2.mp-inst .docsheet` keeps its
+   screen rule verbatim, so 408's own assertion is untouched; 261 §2 and 272 read that same block
+   with positive `toContain`s and are unaffected.
+2. **378 / 391** slice `globals.css` from their own banner to EOF and forbid a hand-written
+   `max-width:<n>px` (378) and any hex literal (391) after it — the discipline every step since
+   has kept. The 408 block broke both: `.inst-poster__mark` capped at `280px` (now `60%`, the
+   sheet's own terms) and four colour literals. The two white plates (QR, 1-bit preview) and the
+   poster's step numerals now use `var(--grey-0)`, which is the ramp rather than a semantic alias
+   and so stays white in the dark theme — the `html.dark .tipbox` precedent. Same pixels, both
+   themes, on paper as on screen.
+3. **374 §4** asserts every pane carrying an inheritable value prints an `<Applies>` line. 408 moved
+   the receipt-logo switch (and with it the pane's only such line) out of `StoreSection` into
+   `ThermalLogoSection`; the assertion now follows the line to its new home instead of naming the
+   pane it used to sit in.
+
+Gates: `pnpm lint` and `pnpm typecheck` pass. Files: `apps/web/app/globals.css`,
+`packages/ui/src/lib/settings-to-mockup-374.spec.ts`.
