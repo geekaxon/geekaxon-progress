@@ -28420,3 +28420,126 @@ the header on every page and over a sheet, and reconnecting shows one "Back onli
   kit's own scrim; no foot states a position or offers a page anywhere on the phone.
 
 WORK TYPE: FIX (branch fix/404-mobile-list-paging)
+
+---
+
+## 405 — recent-sales-round-3 — DONE (2026-09-06)
+
+**Type:** FEATURE. Branch `feature/405-recent-sales-round-3`. Spec `/specs/405-recent-sales-round-3.md`. No CODEREF covers 405.
+
+### §1 — "fully returned" is a quantity fact, not a status flag
+- `packages/shared/src/document-returns.ts` gains `documentFullyReturned(lines)` and
+  `documentFullyReturnedFromLines(documentLines, returnedLines)` — the latter groups BOTH streams by
+  `medicineId` first, which is what makes a sale line split across batches one question instead of two.
+- `packages/shared/src/pharmacy-returns.ts` — 302's `fullyReturned` now DELEGATES to it. The name stays
+  (302's callers say it), the answer is the generic vocabulary's, so purchase fold / sale fold / status
+  write cannot answer three ways.
+- `pharmacy.service.ts`:
+  - `saleReturns(...)` signature changed: takes the sale's `saleItems` and drops `status` from its sale
+    argument. `full` is now `documentFullyReturnedFromLines(saleItems, standing returns' items)`, where
+    "standing" is `returnStands` (a rejected/voided return holds nothing). Both call sites
+    (`recentSaleRows`, `returnableSale`) already had the items in hand — no extra read.
+  - `createSaleReturn`'s completion path and `resettleOriginalSale` both set `SaleStatus` from the SAME
+    predicate. The old `returnedTotal >= soldTotal` sum-vs-sum reading is gone from the file.
+  - `saleDetail`'s `returned.full` banner now reads `row.returns?.state === 'FULLY_RETURNED'` instead of
+    the status flag — the drawer's badge and its banner were two readings of one invoice.
+- `returnableSales` (the search list) still reads the flag: it is now written by the predicate, and
+  deriving quantities there would cost a read per sale on a search screen.
+
+### §2 — Return sale, straight to step 2
+- `NewSaleReturnClient.tsx` — the mount effect reads `?sale=` **or** `?invoice=` and calls `pick(id)`;
+  `pick` IS step 2 (`returnFlowStep` reads the chosen document). The link WINS over a restored draft,
+  exactly as the purchase flow's `?pi=` does; the draft is not destroyed.
+- `RecentSalesClient.tsx` — `NEW_SALE_RETURN_HREF` now emits `?invoice=` (the key §2 names). `?sale=` is
+  still read, so a bookmarked pre-405 link still lands on step 2. **Decision:** the emitter changed rather
+  than the reader alone, because §2 states the key literally; back-compat cost one `??`.
+- The action is `Return sale` (i18n values of `prsActionRefund` / `prsRefundFor` changed; keys kept, since
+  the catalogue is additive-only). **ABSENT, not disabled,** on voided / fully returned / imported rows —
+  in the table row, the desk card, the phone sheet and both drawer footers. `prsRefundVoided`,
+  `prsRefundReturned` and `prsRefundUnavailableFor` are now unused by the client; left in the catalogues.
+
+### §3/§4 — like Purchases
+- Import · Export moved OUT of the table toolbar into `.pghead__acts` beside the breadcrumbs, through
+  Purchases' own `ImportExportActions`. The phone's icon rail draws the same pair instead of a hand-rolled
+  Download button.
+- **Print is back in the actions column** (and on the desk card). It is not a second print path: `printRow`
+  fetches the sale's detail and hands it to the SAME `printInvoice`, which grew an optional
+  `{ row, detail }` override so the row and the open drawer assemble one document from one set of facts.
+- Table footer (`Showing n–m of N` + pagination) already existed — verified, not rebuilt.
+- Mobile: header sub is now `71 invoices · Rs 4,57,134.90 taken` (`prsMSub` / `prsMSubEmpty`), and the month
+  chip MOVED from `.mviewrow` into a `.mfiltrow` beside the search field, as Purchases mobile has it. One
+  new CSS rule gives `.monthpick--m` the search field's 46px inside that row (273 §4's alignment defect).
+- KPI order on the phone is now the desk's: This month · Today · Owed · Returned. **The mockup draws
+  Owed before Today; §4 says "KPI order = desktop" and the spec is authoritative.**
+
+### §5 — sales history import
+- **Schema (migration `20260913000000_sale_source_imported`)**: `enum SaleSource { POS IMPORTED }`;
+  `Sale.source` (default POS), `Sale.importedNo`, `Sale.importedNote`, `@@unique([tenantId, importedNo])`.
+  Additive with defaults — every existing sale reads exactly as it did. Postgres does not collide NULLs, so
+  the unique index is inert for POS sales and is what makes "duplicates by invoice_no refused" survive a race.
+- **Where the file's `paid` goes — the decision this section turns on.** An imported row stores
+  `creditAmount = total − paid` so it can STATE what the old invoice was paid, and the "no ledger entry" rule
+  is enforced at the FOLDS instead: `listCreditSales` / `listCreditSalesFor` (the customer ledger's debit
+  stream) filter `source = POS`. Rejected alternative: `creditAmount = 0`, which would have needed no fold
+  change but would print "Paid in full" over history the shop knows was not.
+- Day close: `periodMoney` filters imported rows out of the period's sales, `dayStats` out of the invoice
+  count, and `countSalesSince` (the open-shift banner) out of its count. History is dated when it HAPPENED,
+  which for a file loaded this morning can be today.
+- `apps/api/src/pharmacy/sale.importer.ts` — the `sale` spec-12 entity, gated on the new `sales.import`.
+  Six columns; one row per invoice (a repeated number is a per-row error, since this importer has no lines
+  to group); `paid > total` refused; an unknown `customer_phone` is an ERROR, never an auto-created customer
+  (the purchase importer's rule about unknown suppliers); blank phone = walk-in. `groupSummary` names the
+  invoice numbers already imported before anything is written. Registered in `pharmacy.module.ts`.
+- `PharmacyService.recordImportedSale` is the one place the no-side-effect rule lives; `repo.createImportedSale`
+  claims a gapless `INV-{n}` under the same advisory lock as `createSale` and then does a single insert with
+  no line loop — no batch, no on-hand, no `StockMovement`, no event published.
+- Read-only: `voidSale` and `createSaleReturn` refuse an imported sale with named constants
+  (`IMPORTED_SALE_VOID_REFUSAL` / `..._RETURN_REFUSAL`); `returnableSales` drops them from the search.
+- UI: `Import sales` opens the `CatalogueIO` three-step wizard on the `sale` entity; rows wear an
+  `Imported` `pill--archived` mark (`ImportedSaleMark`) with the rule in its tooltip; `saleNo` on an imported
+  row is the shop's OWN `invoice_no`, not the `INV-{n}` this app issued.
+- Permission `sales.import` added to `packages/shared/src/permissions.ts` with the `pharmacy.pos` module
+  implication. **No role default written** — TENANT_OWNER holds every TENANT key by construction, which is
+  the audience §5 names.
+
+### §6 — tests
+- New `apps/api/src/pharmacy/recent-sales-round-3-405.spec.ts`: the predicate (partial → full → a second
+  return finishing it → a split line → a cancelled return); the badge on a real sale with the status flag
+  DELIBERATELY never written (which is the finding's own condition); the step-2 route at both ends; the
+  import's row shape, idempotency, refusals, tenant scoping; and the no-side-effect rule MEASURED — stock
+  rows and movement rows unchanged, the customer's outstanding still the bare opening balance after Rs 15,000
+  of unpaid imported history, and the open shift's sale count unmoved by a row dated today.
+- Superseded assertions updated in place, each with a note saying which 405 section overruled it:
+  `recent-sales-desktop-391.spec.tsx` (Print left the column → View · Print · Return sale; disabled-with-reason
+  → absent), `recent-sales-mobile-392.spec.tsx` (sheet action absent; the phone rail draws the pair),
+  `recent-sales-close-367.spec.tsx` (one `printInvoice` FUNCTION, now two call sites).
+- Sale literals in `day-close-count-and-report-377.spec.ts` / `-378.spec.ts` gained the three new columns.
+
+### Gates
+- `pnpm prisma generate` — OK (run twice; the schema changed twice).
+- `pnpm typecheck` — 32/32 tasks pass.
+- `pnpm lint` — 18/18 tasks pass; design-drift, token-integrity and the four tenant checks all green. The one
+  remaining warning is pre-existing and untouched (`doctor-portal.repositories.ts:220`, unused eslint-disable).
+- `pnpm test:unit` / `test:e2e` / `build` not run, per the standing rule — the controller runs them.
+
+WORK TYPE: FEATURE (branch feature/405-recent-sales-round-3)
+
+### 405 — recent-sales-round-3 — gate fix (2026-09-06)
+`pnpm test:unit` failed on `apps/api/src/pharmacy/recent-sales-round-3-405.spec.ts` →
+"405 §5 — imported history is read-only › keeps it out of the returnable-sale search entirely":
+`TypeError: this.settings.resolve is not a function`. The suite's `makeService` passed
+`{} as unknown as PharmacySettingsService`, but `PharmacyService.returnableSales` resolves the
+shop's settings for the return window (`returnWindowState(..., settings.returnsWindowDays)`).
+Fix (test-only): `makeService` now builds the same settings stub the 302 returns suite uses —
+`{ resolve: async () => ({ ...PHARMACY_SETTINGS_DEFAULTS }) }` — instead of an empty object.
+No production code changed; no behaviour change.
+Gates: single-suite jest 36/36 pass; `pnpm lint` clean (one pre-existing unrelated warning in
+doctor-portal.repositories.ts); `pnpm typecheck` clean.
+
+### 405 — recent-sales-round-3 — unit-gate fix (2026-09-06)
+`pnpm test:unit` failed on one @mp/ui suite: `ledger-truth-310.spec.ts` §2 asserts the source text
+of the sale read model's plural-fold call. 405 §1 gave `saleReturns` a fourth argument (the invoice's
+own lines, so "fully returned" is decided by quantities), so the literal `…(tenantId, sale, held),`
+no longer appears. Updated that one assertion to the current call and noted why; the intent it guards
+(plural fold, singular `ReturnedLinkView` shape stays removed) is untouched. No product code changed.
+Verified: the 310 suite (25 tests) passes; `pnpm lint` and `pnpm typecheck` clean.
