@@ -28577,3 +28577,81 @@ Five owner-found defects, all of them in SHARED parts rather than in one screen.
 **Decision recorded:** §3.1 reverses 394 §3 on the owner's instruction — the mockup still draws the pill beside the ✕, and the spec is authoritative over the mockup.
 
 WORK TYPE: FIX (branch fix/406-stock-alerts-and-customers-polish)
+
+---
+
+## 407 — pos-print-screen — DONE (2026-09-06)
+
+**Branch:** `feature/407-pos-print-screen` (FEATURE). Spec: `/specs/407-pos-print-screen.md`. No CODEREF.
+
+**The finding, restated.** The POS's post-sale preview was hand-built HTML — a SECOND drawing of a
+sale whose real layout had moved on twice (396's roll, 397's sheet). Every improvement to the paper
+since 396 was invisible at the counter, and every disagreement between screen and paper was
+invisible to us. The same slip was mounted by the quotation flow and by Recent Sales' reprint, so
+there were three doors onto one wrong drawing.
+
+**§1 — one renderer, two outputs.**
+- `packages/escpos/src/lines.ts` (new): `receiptLines(bytes)` reads a finished byte stream back into
+  the lines it prints — the characters exactly as padded, plus bold / double-height / underline /
+  align, plus the logo and barcode as shapes. Built on `decodeLines`, deliberately: the goldens are
+  `decode()`, so `receiptLineText(receiptLines(b))` **is** `printedLines(b)` by construction rather
+  than by agreement. Exported from the package index alongside the bytes.
+- `packages/escpos/src/preview-lines-407.spec.ts` (new, 12 tests): that equality at 48 / 58 / 80,
+  no line wider than the roll, the padding preserved, GRAND TOTAL bold + double-height and the row
+  under it neither, the barcode carried as a shape with `SI-40218` on it, and REPRINT on a reprint.
+- Seam (`apps/web/lib/print-document.ts`): `documentLines()` (pure, never throws — a preview may not
+  crash a committed sale's screen), `documentPreviewLines()` (the same with the tenant's logo
+  rasterised the way a real print rasterises it) and `documentWidth()`. 282 §3's rule is unchanged:
+  no screen imports `@mp/escpos`, and the guard test still passes with the new screen in the scan.
+- `@mp/ui` print kit: `<PaperLines>` — the strip when its content is the renderer's output. Sized in
+  `ch` from `--rcpt-cols`, `white-space: pre`, double-height as `scaleY` (a head grows the cell down,
+  never across, or the money column breaks).
+
+**§2 — the screen.** `apps/web/app/(app)/pharmacy/pos/PrintScreen.tsx` (new): top bar
+(`Sale INV-… · Rs … · Paid`, or the quotation and its validity), the `A4 · 80 · 58 · 48` segments
+(48 only where a printer declares that roll — 395 §3.1), a destination chip read from the printer's
+stored connection (paired handheld / this PC's helper / browser dialog), the preview, and beside it
+the action card (Print · Print & new sale · New sale (no print) · Send on WhatsApp (PDF) · Save PDF ·
+reprint-mark toggle) and the facts card (customer, tenders, change, udhaar after this bill — all out
+of `saleSettlement`, nothing re-added). The phone gets the preview full-width, the segments above it,
+`Print`/`New sale` sticky under the thumb and the rest behind a ⋯ sheet on the kit's option list.
+
+**Decisions recorded.**
+- **The width segments re-render; they do not re-fetch.** The POS used to GET
+  `/receipt?width=` for every width change. The roll is a RENDER option, so the preview now renders
+  the model already on the screen, and `Print` sends at the chosen width. `PrintCallOptions.width` /
+  `renderDocument`'s width widened from `ReceiptWidth` (58|80) to `PrinterPaperWidth` (48|58|80) —
+  a preview that could show 48 but not print it would be showing paper nobody can produce.
+- **A4 is a segment, not a dialogue.** 397's `PrintDocShell` over the POS is gone; the sheet is
+  `SaleInvoiceDocument` at 70% inside `.pscr__a4 mp-inv2 mp-pur2 mp-print-surface`, so the same
+  nodes serve the preview, `window.print()` and `renderSheetsToPdf`. Save PDF / WhatsApp switch to
+  the A4 segment first and wait four frames for 397's measured pagination to settle: a file whose
+  page boundaries were read mid-loop would not be the document on the screen.
+- **WhatsApp, honestly.** A browser cannot attach a file to a `wa.me` link. Where the device can
+  share files (a phone) the PDF goes through `navigator.share`; otherwise it is SAVED and the chat
+  opens with the message, and a toast says the file is in Downloads. A cancelled share is not
+  reported as a failure.
+- **The reprint mark moves the MODEL, not the preview.** The toggle rebuilds the `SaleReceiptDoc`,
+  so the strip, the sheet and the bytes all carry it — a toggle that only changed the preview would
+  be this step's own defect in miniature.
+- **The second drawing is deleted, not left dormant.** `pos/ThermalReceipt.tsx` is removed;
+  `pos/QuotationSheet.tsx` keeps only 318 §5's cart→model builders and lost its own A4/thermal
+  layout. Recent Sales' reprint scrim mounts the print screen with the mark already on (its inner
+  box widened 30rem → 62rem for the two-column desk tier).
+- **No approval was sought for any of the above** (AGENT.md §2): the deletions and the WhatsApp
+  fallback are design calls, recorded here.
+
+**Stale source assertions repaired** (the cost of moving a screen in this repo):
+`thermal-receipt-to-mockup-396`, `sale-invoice-a4-397` (×2), `recent-sales-screen`,
+`customer-advance-balance`, `dialogs-and-drawer-facts-354`, and the `realtime-everywhere-343`
+exemption map (PrintScreen added, ThermalReceipt removed, QuotationSheet re-described).
+
+**Copy:** `pharmacyPos.print.*` — 18 keys, EN + UR, parity asserted.
+
+**Tests written:** `packages/escpos/src/preview-lines-407.spec.ts` (12),
+`packages/ui/src/lib/pos-print-screen-407.spec.ts` (26 — §1's one-drawing claim, the segments, the
+destination chip, the action/facts cards, the phone tier, the kit and the two catalogues).
+
+**Gates:** `pnpm lint` and `pnpm typecheck` clean. The targeted suites were run rather than the whole
+tree: escpos (243), i18n (38), the 69 `@mp/ui` specs that read any file this step touched (2068) and
+`realtime-everywhere-343` — all green after the repairs above.
