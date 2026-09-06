@@ -29243,3 +29243,156 @@ conditional (line 60 `ROLLS`, line 127 `documentWidth`, line 221 CSS are unrelat
 
 Gates: `pnpm lint` clean (one pre-existing unused-eslint-disable warning in
 apps/api/src/doctor-portal/doctor-portal.repositories.ts, untouched), `pnpm typecheck` clean.
+
+---
+
+## 413 — mobile-and-list-polish — DONE (2026-09-06)
+
+**Branch:** `fix/413-mobile-and-list-polish` · **Type:** FIX · `DEPLOY FIX` · Spec: `/specs/413-mobile-and-list-polish.md` (no CODEREF covers 413).
+
+### §1 — "Live updates off" was a 404, and the cause was NOT the one the spec guessed
+
+The spec's reading was that 405 restructured the Recent sales routes and moved the stream path. It did
+not. Both halves held the right string the whole time: the web subscribed to
+`/pharmacy/recent-sales/stream` and the API published `@Sse('stream')` under
+`@Controller('pharmacy/recent-sales')`, and a grep of either side agreed with the other.
+
+The actual defect: in `PharmacyRecentSalesController`, `@Get(':id')` was declared ABOVE the `@Sse`
+handler. Nest registers routes in declaration order and Express matches in registration order, so
+`GET /pharmacy/recent-sales/stream` was handled by `recentSaleDetail(tenantId, 'stream')` — "no such
+sale", i.e. a 404 — for every subscribe this screen has ever attempted. The route existed and was
+unreachable, which is exactly why nobody found it by reading. The marker was telling the truth.
+
+Fixed by moving the `@Sse` handler above the parameterised sibling (the audit controller already
+states this rule in its own comment). Then §1.1's structural half:
+
+* **NEW** `packages/shared/src/live-streams.ts` — one constant per stream path, exported through
+  `@mp/shared`: `POS_STREAM_PATH`, `RECENT_SALES_STREAM_PATH`, `SETTINGS_STREAM_PATH`,
+  `NOTIFICATION_STREAM_PATH`, `AUDIT_STREAM_PATH`, `VENDOR_NOTIFICATION_STREAM_PATH`, plus the
+  `LIVE_STREAM_PATHS` list and `sseRoute(prefix, path)`.
+* `sseRoute` cuts the controller prefix off the front of the full path and THROWS if the two
+  disagree — at decorator-evaluation time, i.e. at import, so a controller renamed without its
+  constant stops the API at boot instead of 404-ing at runtime for the life of a deployment.
+* Both sides now read those constants: `apps/web/lib/stock-live.ts` (five paths),
+  `apps/web/lib/vendor-notifications.ts` (the sixth), and the six `@Sse()` decorators in
+  `pharmacy.controller.ts` (×2), `audit.controller.ts`, `pharmacy-settings.controller.ts`,
+  `notifications.realtime.controller.ts`, `platform-notifications.controller.ts`.
+
+**§1.2 test — `apps/api/src/notifications/live-stream-routes-413.spec.ts` (13 tests).** It does not
+compare strings; string comparison is what missed this. It builds the ROUTE TABLE the way Nest builds
+it at boot — walking the module graph off `AppModule`'s own `@Module` metadata (handling dynamic
+modules and `forwardRef`), reading each controller's prefix and each handler's method + path in
+DECLARATION ORDER via `PATH_METADATA` / `METHOD_METADATA` / `SSE_METADATA` — and then asks the
+browser's question: for this exact URL, which handler answers first? Metadata only, so no DB, no
+fakes, no port. **Verified against the defect:** with the `@Sse` handler moved back below `@Get(':id')`
+the suite fails on exactly one test, `/pharmacy/recent-sales/stream is not shadowed by an earlier
+route`, naming `PharmacyRecentSalesController.detail` as the culprit. Restored and it passes.
+
+### §2 — offline: bottom toast, closable (owner's decision, reversing 403 §4.2)
+
+403 drew a permanent, undismissable 36px `.offbar` strip under the mobile header and pushed
+`.mp-shell-main` down by exactly that much for as long as the network was away — a line of a 360px
+list, all day, for a sentence the reader has already absorbed. Replaced with the kit's own toast:
+bottom-centre on the phone, the kit's close ×, `durationMs: 0` so it does not expire.
+`components/shell/OfflineBanner.tsx` now renders no DOM at all — it is an effect that raises one
+toast per offline EPISODE (a ref guard, so a re-render or a locale switch raises no second), and on
+reconnect DISMISSES the standing toast before raising the 2 s *Back online*. `.offbar` and the
+`:has()` margin rule are deleted from `globals.css`. Desktop is untouched: the desk says it in the
+live marker (403 §3) and the component is still mounted once, inside the shell's mobile branch.
+New copy `plsyOfflineToast` (EN + UR).
+
+### §3 — the eight named fixes
+
+1. **Stock alerts mobile segments.** The owner's DevTools finding, and the cause was SPECIFICITY, not
+   the declaration. `.mp-inv2 .segctl:not(.segctl--full)` (three classes) beat
+   `.mp-inv2 .segctl--m { width:100% }` (two) despite being declared 27 lines earlier, so the phone's
+   control computed `fit-content`. Added `:not(.segctl--m)` to the exception list — the same shape
+   `--full` already had — rather than adding weight to the rule that was right.
+2. **Ledger date sheet foot note → info block.** `.ledjump__foot`'s two justified tertiary spans
+   (they collided at 360px) become one `.ledjump__note`: leading `Info` icon, one muted card, the two
+   facts joined with ` · `. In `LedgerDrawerKit`'s `LedgerJumpGrid`, which the customer sheet, the
+   supplier sheet and the accounting book all mount — one component, so they cannot drift.
+3. **Customer sheet header.** `row-gap` under the phone 8px → `var(--space-2)` (4px). The address
+   LEFT the header on both tiers: it rode there as `locality(c.address)`, the last comma-separated
+   fragment, so "Shop 4, Ferozepur Road, Ichhra" arrived as "Ichhra". It is now a full-width
+   `.udhfacts__row` in the first facts card, whole, with the register's `—` when absent.
+4. **First KPI names its window.** Purchases mobile `pdMKpiMonth` → `mMonthLabel`; Recent sales
+   mobile `prsKpiThisMonth` → `canPickRange ? monthLabel : prsWindowFixed`. Both printed a constant
+   "This month" over a figure folded from whatever range the trigger beside them displayed.
+5. **Recent sales mobile month filter — traced.** The list-prefs binding was NEVER the problem:
+   `useMonthWindowPref(LIST_KEY, nowIso)` has backed `monthWin` since 405. 405 §4 put a plain
+   `.monthpick--m` button on the `.mfiltrow` that set `monthOpen` — and the screen's only
+   `<MonthRangePicker>` is mounted in the DESKTOP branch of the same ternary, anchored to the shell's
+   topbar tag. On a phone that branch never renders, so the press flipped a boolean nothing read.
+   Replaced with Purchases mobile's own instance: `<MonthRangePicker sheet renderTrigger>` with the
+   `.mrangebtn` trigger, which inherits that row's 104px × 46px rule, plus `monthNarrowed` measured
+   against `recentMonthsWindow(nowIso)` so the default does not tint. `.monthpick*` CSS deleted.
+6. **Recent sales desktop footer + pagination always shown.** Three conditions used to remove them —
+   `!empty`, `view === 'list'`, `pageCount > 1` — so the line saying how much of the register you are
+   looking at vanished after an empty filter, in card view, and on every one-page list. All three
+   dropped; Purchases' behaviour exactly.
+7. **Standalone hides the install affordances.** New `useStandalone()` + `markStandalone()` in
+   `lib/use-pwa-install.ts`. Settings → **Install on phone** returns `null` inside the installed app.
+   The login footer link is server-rendered on purpose (408 §1.3: the door costs no JS), so it is
+   hidden by CSS — `@media (display-mode: standalone)` for Chrome/Android, and
+   `html[data-standalone]` for iOS Safari's `navigator.standalone`, written once by `RegisterSW`,
+   the one client component the root layout mounts on every route including the auth surfaces.
+8. **50-row paging, per mobile list.** Recorded below.
+
+### §3.8 — the 50-row paging census
+
+`MOBILE_LIST_PAGE = 50` (`@mp/shared/list-paging`), enforced by `useListPaging`. Two lists page over
+the WIRE — one HTTP request per 50 rows, keyset cursor:
+
+* **Notifications centre** — `GET /notifications?filter=<chip>&limit=50[&cursor=<id>]`
+  (`lib/notifications.ts:234`, `fetchNotificationPage`).
+* **Audit log** — `GET /audit?from=&to=&…&limit=50[&cursor=<id>]` (`AuditClient.tsx:316`).
+
+The other eight page an in-browser window over rows the screen has already narrowed and reordered
+(chips, search, sort), so the request count is one per window, not one per 50 — the hook still opens
+the window in 50s and the ENDPOINT behind each is itself a `?cursor=&limit=50` endpoint:
+Recent sales, Purchases, Returns, Suppliers (+ supplier ledger), Customers (+ customer ledger),
+Inventory, Stock alerts, Accounting book. The request-per-page behaviour of the hook itself is proven
+in `packages/ui/src/lib/mobile-list-paging-404.spec.tsx`. **A live DevTools capture is not something
+this session can produce** — it is left to the owner's §4 sweep at 390 px.
+
+### Superseded assertions (earlier gates, updated in place with a 413 note)
+
+* `live-sync-and-offline-403.spec.tsx` §4 — the whole describe rewritten for the toast (closable,
+  one per episode, returns on a NEW transition, and the `.offbar` CSS is asserted ABSENT). 25 pass.
+* `recent-sales-round-3-405.spec.ts` — the `.mfiltrow` test now asserts `<MonthRangePicker` +
+  `mrangebtn` and that `monthpick` is gone; the KPI-order test anchors on the new first-tile label.
+* `recent-sales-mobile-392.spec.tsx` — first-tile label assertion.
+* `settings-testing-pass-375.spec.ts` — `SETTINGS_STREAM_PATH` is re-exported from `@mp/shared` now.
+* `customers-round-2-394.spec.tsx`, `stock-alerts-and-customers-polish-406.spec.ts` — the head
+  `row-gap` is `var(--space-2)`.
+* `inventory-desktop-polish-r2.spec.tsx` — the `fit-content` selector carries `:not(.segctl--m)`.
+
+### Decisions recorded (no approval gate)
+
+* `sseRoute` THROWS rather than falling back. A stream that silently moves is the failure mode this
+  whole section exists to end; failing at import is loud, early and cheap.
+* The §1.2 test reads Nest metadata instead of booting an HTTP server. Same route table, no DB.
+* The back-online toast keeps 403's behaviour (mobile only, because the component is mounted only in
+  the shell's mobile branch). Not widened to the desk — the desk has the marker.
+* `pdMKpiMonth` and `prsKpiThisMonth` are left in both catalogs (unused): parity is the gate, and
+  deleting a key is a separate decision from stopping using it.
+
+### Files
+
+**Added:** `packages/shared/src/live-streams.ts`,
+`apps/api/src/notifications/live-stream-routes-413.spec.ts`.
+**Changed (API):** `pharmacy/pharmacy.controller.ts`, `audit/audit.controller.ts`,
+`pharmacy-settings/pharmacy-settings.controller.ts`,
+`notifications/notifications.realtime.controller.ts`, `vendor/platform-notifications.controller.ts`,
+`pharmacy/recent-sales-round-3-405.spec.ts`.
+**Changed (shared/i18n):** `packages/shared/src/index.ts`, `packages/i18n/src/messages/{en,ur}.json`.
+**Changed (web):** `lib/stock-live.ts`, `lib/vendor-notifications.ts`, `lib/use-pwa-install.ts`,
+`app/register-sw.tsx`, `components/shell/OfflineBanner.tsx`, `components/pharmacy/LedgerDrawerKit.tsx`,
+`app/(app)/pharmacy/recent-sales/RecentSalesClient.tsx`,
+`app/(app)/pharmacy/purchase/PharmacyPurchaseClient.tsx`,
+`app/(app)/pharmacy/customers/CustomersClient.tsx`,
+`app/(app)/settings/sections/InstallPhoneSection.tsx`, `app/globals.css`.
+**Changed (ui specs):** `live-sync-and-offline-403`, `recent-sales-mobile-392`,
+`settings-testing-pass-375`, `customers-round-2-394`, `stock-alerts-and-customers-polish-406`,
+`inventory-desktop-polish-r2`.
