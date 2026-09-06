@@ -28260,3 +28260,82 @@ Four things the first real blue/green deploy (6 Sep 2026) taught us, each turned
 `deploy.sh` · `scripts/deploy-slots.sh` (new) · `scripts/check-env.sh` · `ecosystem.config.js` · `apps/web/app/api/version/route.ts` (new) · `docs/RELEASE-RUNBOOK.md` · `packages/ui/src/lib/release-ops-402.spec.ts` (new) · `packages/ui/src/lib/release-pipeline-401.spec.ts` · `PROGRESS.md`.
 
 **Owner verification on staging:** run `./deploy.sh` once — expect `Legacy processes found: mp-api mp-web`, adoption as blue, a green build, the two identity lines, the flip, then the legacy pair deleted 30 s later. And `./scripts/check-env.sh .` with `NODE_ENV=staging` must fail with the APP_ENV sentence.
+
+## 403 — live-sync-and-offline (2026-09-06) — FIX, branch `fix/403-live-sync-and-offline`
+
+**Spec:** `/specs/403-live-sync-and-offline.md`. No CODEREF covers 403.
+
+**§1 — the marker tells the truth about time.** "Last change" is now the DATA's clock, from two
+sources joined in one place. `lib/screen-refresh.ts` keeps the completion stamp for the whole app
+(`lastRefreshAt()` / `useLastRefreshAt()`, a `useSyncExternalStore` subscription) because every
+screen's re-read runs through that one registry; the live hooks already stamp `lastEventAt`.
+`pageLastUpdate(lastEventAt, refreshedAt, loadedAt)` takes the later of the two, and when there is
+neither it returns the page's LOAD time flagged `loaded: true` — which prints `Live · loaded 20:15`
+through the new `plsyStateLoaded` key instead of borrowing the wall clock. The load stamp is taken
+in an effect, never during render, so the server's clock is never the one that hydrates.
+`refreshScreen()` now resolves to `{ok, at}` instead of `void`: a run where a loader rejected does
+NOT move the stamp (a failed re-read is not a change) and tells its caller to toast.
+
+**§2 — Sync gets its third phase.** idle → `is-syncing` → `is-done` (a lucide `Check` on
+`--success-soft`) for `SYNC_DONE_MS = 1500` → idle. A failed run fires `toast.error(plsySyncFailed)`
+and returns to idle with no check mark and no `Synced 09:41` tooltip. `PullToRefreshHost` raises the
+SAME toast from the same result, so the kit has one failure sentence for both manual paths.
+
+**§3 — four states, one marker; the badge is deleted.** `pageLiveTone` takes an `offline` flag and
+answers it FIRST (a socket that has not noticed the radio die still reports `connected`, and `Live`
+over a dead network is the exact lie the fourth state exists to stop); `refused` still outranks
+`connected`. New `plsyOffline` = "Offline · showing saved data", new `.rtdot--gone` (danger ink,
+still dot — the only one of the four that is a fault). Offline is read through a new
+`useOnline()` in `lib/offline.tsx`, which returns the provider's own `online` (navigator.onLine +
+the window events, i.e. the very signal `deriveSyncStatus` turned into the badge's `offline`) and,
+unlike `useSyncStatus`, does not throw outside the provider — shell components render in previews
+and error surfaces too. `app/offline-indicator.tsx` DELETED, unmounted from `app/layout.tsx`, and
+its `.mp-sync-indicator` rules removed from `globals.css`.
+
+**DECISION RECORDED — what the deletion cost.** 233 §6 was an OWNER decision that this component
+must NOT be deleted, because it was the only surface telling a cashier that completed sales had not
+reached the server (`syncPending` / `syncAiQueued` counts). 403 §3 overrides it explicitly and the
+override is followed. The outbox is untouched — `OfflineProvider` still queues, drains, counts and
+mirrors the depth — and both catalogue keys remain; nothing draws them today. If the queued-depth
+warning is wanted back it should be designed into the marker or the banner rather than restored as
+a second corner badge. The 233 §6 test block was rewritten in place as the record of both decisions
+rather than deleted. `specs/40-44-CODEREF.md` still lists the indicator as load-bearing in the root
+layout; the later spec wins.
+
+**§4 — the phone.** `MobilePageChrome` loses `live` / `liveLang` and every one of its nine callers
+stops passing them; `PageLiveSync` loses its `mobile` prop, and `.plsync--m` (plus the wrapped-bar
+rules and the `--mchrome:125px` reservation that paid for the second row) is gone from `globals.css`
+— the app bar is back to the height its mockup draws. Pull-to-refresh is the phone's manual path,
+and the four screens that mounted the marker without registering a loader (Expenses, Accounting
+overview, Profit, Day close) now call `useScreenRefresh`; Day close registers `() => load(true)`
+because a loud read re-seeds the denomination ladder under a cashier's typed count. NEW
+`components/shell/OfflineBanner.tsx`: a 36px `.offbar` strip, mounted ONCE in the shell's mobile
+branch, `position:fixed` under whichever header is up (`84px` for the shell chrome, `var(--mchrome)`
+for a page chrome — the same numbers the body already reserves), z-index 85 so it reads over a sheet
+(41/61/82) and under the toast rail (100). No close button; `.mp-shell:has(.offbar) .mp-shell-main`
+takes a 36px margin so the page moves down by exactly the strip's height whatever the chrome
+variant. On reconnect it hides and fires ONE 2s `toast.success('Back online')`, tracked on a ref so
+a session that was never offline never announces one.
+
+**i18n.** +`plsyOffline`, `plsyStateLoaded`, `plsySyncFailed`, `plsyBackOnline`; −`plsyStateShort`
+(the phone's short label had no caller left). EN + UR both sides, parity green.
+
+**Tests.** NEW `packages/ui/src/lib/live-sync-and-offline-403.spec.tsx` — 23 cases: the four-state
+truth table (offline × connected × refused), both `lastUpdatedAt` sources and the loaded fallback
+(including an unparseable stamp), the kit's completion stamp on success and its absence on failure,
+and the banner really rendered under `I18nProvider` + `ToastProvider` (shows on the offline event,
+hides on reconnect, exactly one "Back online", silent for a session that was never offline), plus
+the mounting census. `packages/ui/jest.config.cjs` gained `@mp/ui/surface-routing` and
+`@mp/ui/session-persistence` module mappings — rendering a shell component pulls in the app's API
+client, and those subpaths resolve to ESM `dist/` that Jest cannot parse. Amended for the new
+contract: 322 (three `refreshScreen()` resolution assertions), 390 (label composition, the
+three-phase button, and the app-bar test reversed into the record of its reversal), 392 (the phone
+hands the chrome no live state), 233 §6 as above.
+
+**Gates.** `pnpm lint` and `pnpm typecheck` green. The five touched suites were run directly with
+jest (403, 322, 390, 391, 392, 399, 400, 393, invite-security) — all pass; the full `test:unit` gate
+is the controller's.
+
+**Owner check (spec §5):** desktop — Sync spins then shows ✓ for 1.5s; pull the API for 10s →
+`Reconnecting…`; airplane mode → `Offline · showing saved data`. Mobile — the strip appears under
+the header on every page and over a sheet, and reconnecting shows one "Back online" toast.
