@@ -28868,3 +28868,121 @@ for future timestamps, 4 workflows scanned for production references.
 **Not done here (needs the runner, not code):** registering the self-hosted arm64 runner and
 recording the warm-cache run time in this file are owner/controller actions on the Actions tab —
 the workflow targets the runner labels 401 §2 specifies.
+
+## 410 — print-helper-installer — DONE (2026-09-06)
+
+**Branch:** `feature/410-print-helper-installer` (FEATURE, `DEPLOY FEATURE`). Spec:
+`/specs/410-print-helper-installer.md`. No CODEREF covers 410.
+
+**The findings this step answers (owner, 6 Sep, Windows PC, POSPRO PTP-60 on USB).** Windows' own
+test page printed. The helper's writes to `\\.\COM3` returned `ok` and produced nothing — COM3 was
+a port that PC had always had and survived unplugging the printer. `MP_HELPER_EXTRA_DEVICES=USB001`
+also returned `ok`, because `open('USB001','w')` CREATED A FILE called `USB001` and wrote the
+receipt into it. And *Print a test* in dialog mode printed blank pages while the printer fed paper
+continuously.
+
+### §1 — print by printer name
+
+- NEW `apps/print-helper/src/windows-print.ts`. Listing is WMI `Win32_Printer` via
+  `Get-CimInstance`, falling back to `Get-WmiObject`. **`Get-Printer` was rejected and the reason
+  is recorded in the file**: it lives in the `PrintManagement` module (Windows 8+, absent from
+  Server Core), and a shop PC on Windows 7 must still list its printers. Printing is
+  `winspool.drv` `OpenPrinter`/`StartDocPrinter`/`WritePrinter` through PowerShell `Add-Type`,
+  datatype `RAW` — **no native addon**, because the artefact is one SEA executable.
+- "Sent" now means sent: the script waits up to 10 s for the job to LEAVE the queue and otherwise
+  reports the printer's own state (offline / out of paper / jammed / stopped / the job's status).
+  `parseSpoolerResult` treats output it cannot read as a FAILURE, never a success.
+- The printer name and the byte file reach the script through ENV VARS, never interpolation — a
+  Windows printer may legally be named `'; Remove-Item C:\ -Recurse`.
+- NEW `src/cups.ts` — Linux gains CUPS by name (`lpstat -p -d`, `lp -d <name> -o raw`) beside the
+  existing `/dev/usb/lp0` writes.
+- `devices.ts`: printers first, raw ports in a `section: 'serial'` group. `HelperDevice` gains
+  `section` and `default`; the type moved to `windows-print.ts` and is re-exported.
+- `printer.ts`: one `printDocument(device, bytes, platform)` that routes by `device.kind`. NEW
+  `rawTargetFault()` refuses a raw target that does not exist or is a regular FILE — the USB001
+  case, as a pure function with a unit test. An `EPERM`/`EBUSY` stat is allowed through, because
+  Windows will not stat some legitimate `\\.\COMn` paths and refusing those would break the
+  serial printers that path exists for.
+- `http.ts`: `POST /print` takes `printerName` (`printerId` still honoured for a tab that has not
+  reloaded). **An unlisted name is now 400, not 404** — 404 said "that printer went away", which
+  an owner waits out; this was a name that was never a printer. The 398 spec's assertion was
+  updated with the reason.
+
+### §2 — installer, auto-start, self-update
+
+- NEW `apps/print-helper/installer/marham-print-helper.iss` (Inno Setup, chosen over NSIS because
+  service registration, uninstaller, elevation and a scriptable finish page are all in the box).
+  `start= delayed-auto`; `sc failure … restart/60000 ×3 /restart/3600000`; `sc failureflag 1` so
+  those actions apply to a non-zero EXIT too, which is how the updater restarts itself. Opens the
+  status page at the end and shows the six-digit code on its last page. Nothing in it deletes a
+  file, which is what makes "upgrading = run the new installer" and "uninstalling keeps the
+  pairing" true — data lives in `%ProgramData%\MarhamPatti\print-helper`.
+- NEW `.github/workflows/release.yml`: `windows-latest` job (SEA + ISCC), a Linux job (binary +
+  systemd unit, tarred), and a publish job that computes the SHA-256s **on the uploaded bytes**
+  and attaches `print-helper-latest.json` beside the two artefacts.
+- NEW `apps/api/src/print-helper/` (module, controller, service). `GET /print-helper/latest` and
+  `GET /print-helper/download/{windows,linux}`, both `@Public` — **decision recorded in the
+  controller**: the counter PC's service has no session and never will, and an owner installing on
+  a PC they have not signed in on is the first thing that happens. The installer carries no tenant
+  data and no keys; the pairing token is minted on the shop's own PC and never passes through the
+  API. Assets come from a private GitHub release via `PRINT_HELPER_REPO` +
+  `PRINT_HELPER_GITHUB_TOKEN` (added to `.env.example`), cached for an hour, installers capped at
+  64 MB in memory.
+- NEW `src/update.ts`: daily check, SHA-256 verified before anything is staged, swap only on an
+  idle minute (no print in the last 60 s), then exit `3` for the service manager to restart.
+  Opt-out with `MP_HELPER_NO_UPDATE=1`. Version comparison is numeric part-by-part so `1.10` beats
+  `1.9`. `HELPER_VERSION` → `1.1.0` (and `package.json`).
+
+### §3 — pairing without a token
+
+NEW `src/pairing.ts`: the code is `HMAC-SHA256(token, ten-minute-window)` folded to six digits —
+derived, never stored, so the service, `mp-print-helper code` and the installer's last page all
+show the same digits with no file between them. `POST /pair` sits in front of the token guard (it
+is what hands the token out) but behind the ORIGIN guard, and `PairAttempts` shuts the exchange
+after ten wrong codes in a window — rotation + attempt cap + origin is what makes six digits
+enough, against 398's reasoning for rejecting a PIN. The code is deliberately NOT on `/health`
+(served without a token); it is on the status page, which is read by the person at the keyboard.
+Browser side: `HelperTransport.pairWithCode()`, `useHelper().pairWithCode`, and Settings →
+Printing's **Connect this PC's printer**. The 398 token field survives under *Advanced*.
+
+### §4 — dialog mode
+
+- `PrintStyle` gains `page?: PrintPageSize`; `pageRule()` emits `@page{size:80mm auto;margin:0}`
+  for a roll and `size:A4` for the sheet. `undefined` emits nothing, so untouched surfaces keep
+  today's behaviour. `PrintScreen` passes the chosen paper.
+- NEW `TestPrintSurface` — the two lines a test print exists to produce. The Settings pane mounts
+  it BEFORE `browserPrintDialog()` (which already waits two animation frames, so React has
+  committed) and clears it on `afterprint` with a 60 s fallback. That is the blank-page fix: there
+  was simply nothing mounted, and `PrintStyle` had dutifully hidden the whole app.
+- §4.3 — the print screen shows the *"In the print window choose your roll printer and 'Roll 80 mm'
+  paper"* hint once per browser (`mp.print.dialogHint.v1`), under the destination chip.
+
+### §5 — docs
+
+`docs/PRINT-HELPER.md` rewritten to the four installer steps with no PowerShell; the manual path,
+the env-var table and the token are in an appendix for technicians. The 398 suite's heading
+assertion moved from `Pair` to `Connect this PC` with the reason inline.
+
+### Tests
+
+NEW `apps/print-helper/src/print-helper-installer-410.spec.ts` (24 assertions: WMI/lpstat parsing,
+the RAW script's shape, the spooler answer never reading as success, the USB001 stray-file case,
+the six-digit code's rotation/grace/attempt cap/origin, and the updater's verify-idle-restart).
+NEW `packages/ui/src/lib/print-helper-installer-410.spec.ts` (`pairWithCode`, `printerName` on the
+wire, `pageRule`, and source assertions over the .iss, the workflow, the API controller and the
+pane). NEW `apps/api/src/print-helper/print-helper-410.spec.ts` (manifest parsing refuses a build
+with no usable digest, and never accepts an asset name that could be a path).
+
+### Gates
+
+`pnpm lint` clean (one pre-existing warning in `doctor-portal.repositories.ts`, untouched).
+`pnpm typecheck` clean, 32/32. Targeted suites re-run and green: the print-helper package (47),
+the 14 printing/settings UI suites (416), `@mp/i18n` parity (38), and `flags.e2e` to prove the new
+module wires into `AppModule`. `scripts/check-release-rules.cjs` clean with the new workflow. No
+schema change, so no `prisma generate`.
+
+### Left to the human sweep
+
+Real hardware: the installer on a real Windows box, a real spooler with a real roll, the silent
+sale, the service stopped → dialog with toast, and the dialog test print producing two lines with
+the printer stopping after the cut.
