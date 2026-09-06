@@ -29138,3 +29138,108 @@ Tests:       41 passed, 41 total
   day-close and returns models, not to the paper.
 * §5's second piece of evidence — a photo of the owner's 80 mm slip beside the mockup's sample — is
   an owner action and is not in the repo.
+
+## 412 — pos-print-dialog — DONE (2026-09-06)
+
+**Branch:** `fix/412-pos-print-dialog` (FIX, `DEPLOY FIX`). **Spec:** `/specs/412-pos-print-dialog.md`. No CODEREF covers 412 (the companions stop at 121).
+
+### The finding
+407 built the counter's print surface as a PAGE and reached it the only way a page can be reached:
+`PosClient` returned `<PrintScreen>` *instead of* the POS, above every other fragment. So a committed
+sale took the counter off the screen, and a quotation printed mid-sale took the cart the cashier was
+still standing in front of off the screen too. The committed mockup draws the print block as a dialog
+over the POS, and the owner wants it exactly so.
+
+### The decision: a FRAME prop, not a second surface
+The whole risk of this step was a second drawing of a sale — a dialog that redraws the preview, the
+action card and the facts card beside the page that already has them, which is 407's own defect one
+level up. So `<PrintScreen>` grew `frame?: 'page' | 'dialog'` and nothing else. `'page'` is 407's
+surface byte-for-byte and stays the register's reprint (opened from a list, nothing behind it to go
+back to). `'dialog'` mounts the SAME nodes inside `<Panel>`, the app's one answer to "dialog on the
+desk, sheet on the phone" — which brings `mp-fdlg` (365 §1's 720px, applied by the frame so no caller
+can pick a width of its own), the single ✕ (242 §1 / 239 §1), `Escape`, the scrim, the focus trap,
+the scroll lock and the device-back contract with it. None of that is re-implemented here.
+
+Parts extracted and now shared by both frames: `bar` (the width segments + the destination chip),
+`mobileFoot` (Print · New sale · ⋯) and `moreSheet` (the ⋯ option list). `preview`, `actions` and
+`facts` were already single consts and stayed that way — the suite asserts each appears exactly once.
+
+### Where the header row went
+The frame owns the title (`Sale INV-4021 · Rs 3,747.90 · Paid` / `Quotation · prices valid today`,
+407's own line handed over as `title`), so the segments and the chip become the row underneath it:
+`headExtra` on the desk (between `ModalHead` and the body's scroller — a width control that scrolled
+out of reach would be answering the wrong question) and `headBadges` on the phone (the sheet head's
+stacked third line, 351 §1). ONE node, two slots.
+
+### The two numbers that changed, and why only two
+A 720px dialog gives its body 676px between `.mp-inv2 .modal__body`'s 22px gutters. The action card
+drops 21rem → 15rem and the A4 preview scales 0.70 → 0.46 (794 × 0.46 = 365px inside the 412px
+column, with the desk's padding to spare); the negative margins give back the 54% a transform does not
+reclaim (−429 / −606), exactly as the 0.70 rule does with 0.30. The thermal strip needed nothing —
+48 columns of 11px monospace is ~345px and already fits, which is the point of sizing it in `ch`.
+On the phone the sheet takes A4 down again to 0.34 (270px), so a 360px screen reads the page instead
+of scrolling it sideways. Everything else — segments, chip, cards, facts, strip — is the page's rules.
+
+### Printing from inside a dialog
+`PrintStyle` hides everything outside `.mp-print-surface` and pins it to the page origin, but it
+cannot un-clip the ancestors it sits in: a form dialog is a 720px box with `overflow:hidden`, its body
+is the scroller and the sheet is at 46%. Each is undone in a `@media print` block on `.mp-pdlg`, the
+same shape `.mp-stmtdlg` has carried since 373 and `.printdlg` since 320 §3.
+
+### The counter underneath
+`PosClient`'s two early returns are gone; both cases are now one `printDialog` element mounted beside
+`payPage` (mobile) and `payDialog` (desktop). The quotation still wins when both could show (318 §5).
+`Close` means *return to the cart*: after a commit `commitSale` has already emptied the counter, so the
+return IS `newSale` (passed as both `onNewSale` and `onClose`); a quotation clears nothing, so closing
+it drops the model and leaves the cart line for line. `modalOpen` now includes the print dialog, which
+stands the counter's global shortcut map down — the one dimension of "nothing behind it is reachable"
+a focus trap cannot cover. The ⋯ sheet is rendered as a SIBLING of the frame, not a child: both tiers
+are `position:fixed` at the same layer, and a fixed descendant of an animated (transformed) sheet
+stops being fixed.
+
+### Files
+- `apps/web/app/(app)/pharmacy/pos/PrintScreen.tsx` — the `frame` prop, the `<Panel>` branch, the
+  shared `bar` / `mobileFoot` / `moreSheet` parts, the action card's Close gated to the page.
+- `apps/web/app/(app)/pharmacy/pos/PosClient.tsx` — early returns removed, `printDialog` mounted on
+  both tiers, `modalOpen` extended.
+- `apps/web/app/globals.css` — the 412 delta block (`.pscr__bar`, `.pscr--dlg`, `.mp-pdlg`,
+  `.mp-pdlg-sheet`, `.pscr__foot--sheet`, and the print un-clip).
+- `packages/ui/src/lib/pos-print-dialog-412.spec.ts` — new source-assertion suite (§1 the dialog,
+  §2 the full sheet, §3 no second drawing, plus the counter underneath).
+
+### Gates
+`pnpm lint` — 18/18 tasks pass, including the four web design-drift checks. `pnpm typecheck` — 32/32
+pass. Per CLAUDE.md §6 the unit/e2e/build gates are the controller's.
+
+### NOTE — the evidence the spec asks for (§4)
+Not produced in this session, and the reason is worth recording rather than deferring silently:
+
+1. **There is no mockup half to put side by side.** `specs/mockups/pharmacy/pos-desktop.html` contains
+   the string "print" ZERO times — no print dialog, no receipt block, in either state. `pos-mobile.html`
+   mentions it once, in prose about a lot row. The spec's composition list (title row · segments and
+   chip in the header row · preview left · action card right · facts card under it · sticky Print and
+   New sale on the phone) is therefore what was built to, verbatim; it is complete and unambiguous, so
+   this was not a missing-spec stop.
+2. **The deployed half needs a deploy.** The after-image is taken against staging, which this session
+   does not deploy. `specs/evidence/` does not exist yet and was not created empty.
+
+Both halves are the controller's to capture after the merge; the composition itself is asserted in
+`pos-print-dialog-412.spec.ts` so it cannot drift while the screenshots are outstanding.
+
+### 412 — pos-print-dialog — GATE FIX (2026-09-06)
+
+`pnpm test:unit` failed on one assertion in `packages/ui/src/lib/pos-print-screen-407.spec.ts`
+(§2, "offers A4 beside the rolls, and 48 only where a printer declares it"). The assertion was
+stale, not the code: step 411 §4 deliberately made the print screen offer 48mm unconditionally
+(`const segments: PrintPaper[] = ['a4', 80, 58, 48];`, PrintScreen.tsx) so a just-plugged-in
+two-inch handheld can be previewed before Settings catches up, and 412 asserts exactly that string
+in `pos-print-dialog-412.spec.ts`. The 407 suite still greped for the removed
+`...(policy?.paperWidth === 48 ? [48 as const] : [])` form.
+
+Fix: narrowed the 407 assertion to the half of the claim that survives 411 — A4 beside all three
+rolls — matching the string the 412 suite already asserts, with a comment recording that 411 §4
+superseded the conditional. No production code touched; no other 407 assertion referenced the
+conditional (line 60 `ROLLS`, line 127 `documentWidth`, line 221 CSS are unrelated and passed).
+
+Gates: `pnpm lint` clean (one pre-existing unused-eslint-disable warning in
+apps/api/src/doctor-portal/doctor-portal.repositories.ts, untouched), `pnpm typecheck` clean.
