@@ -28339,3 +28339,84 @@ is the controller's.
 **Owner check (spec §5):** desktop — Sync spins then shows ✓ for 1.5s; pull the API for 10s →
 `Reconnecting…`; airplane mode → `Offline · showing saved data`. Mobile — the strip appears under
 the header on every page and over a sheet, and reconnecting shows one "Back online" toast.
+
+## 404 — mobile-list-paging — DONE (2026-09-06)
+**Branch:** `fix/404-mobile-list-paging` (FIX). **Spec:** `/specs/404-mobile-list-paging.md`. No CODEREF for this range.
+
+### §1 — one paging rule for every mobile list
+- **NEW `packages/shared/src/list-paging.ts`** — the wire half of the rule, exported from the package index.
+  `MOBILE_LIST_PAGE = 50`, `MOBILE_LIST_PAGE_MAX = 200`, `LIST_PREFETCH_AT = 0.7`, `LIST_PREFETCH_VIEWPORT = 0.3`,
+  `encodeListCursor` / `decodeListCursor` (`<ordinal>|<key>`), `listPageLimit`, `parseListPageQuery`, `cursorPage`, `wholeList`.
+  Keyset, not offset: the cursor names the row the last page ENDED on, so a row arriving under the thumb cannot shift a page
+  and hide a line. The ordinal half is the documented fallback for the one case a key cannot answer — the cursor's own row was
+  deleted between two pages — where restarting at the top would re-serve fifty rows already read.
+- **NEW `apps/web/lib/list-paging.ts` — `useListPaging`, THE ONE HOOK.** Intended for `packages/ui`, but `@mp/ui` deliberately
+  has no `@mp/shared` dependency (typecheck proved it), and adding one would have changed the workspace graph for a hook; it
+  lives in the web list kit beside `list-keyboard` / `list-prefs` / `live-list` instead, which is where those screens already
+  look. Owns: the 50-row page, the keyset cursor, pages kept for the session, `patch` (realtime in place), `setRows` (wire
+  only — live prepend / mark-all-read / dismiss), `settled` (a first page landed, so a skeleton is not an empty state),
+  `growTo` (`useLedgerJump`'s landing), and `rowRef(i)` — the trip-wire, on the row ~70 % down the loaded rows, with a
+  `rootMargin` of ~30 % of the viewport read at observe time. `useInfiniteScroll` (218 §2) is now this hook's internal.
+  Two sources, one rule: `wire` (`?cursor=&limit=50`) and `memory` (an ordered list the screen holds).
+- **DECISION, recorded rather than escalated — which source each screen uses.** Inventory, Stock alerts, Purchases, Suppliers,
+  Returns, Customers, Recent sales and the three ledger sheets narrow, sort and search over the WHOLE list in the browser
+  (product-name matches the server answered, baqaya sort, standing chips, month/state chips). A fifty-row window fetched over
+  the wire would silently narrow "panadol" to whatever had been scrolled — a real regression the spec does not ask for — so
+  those read the `memory` source and the hook cuts the same fifty-row keyset pages out of it. Notifications and the Audit log
+  already paged by cursor in the DATABASE (399 §4 / 400 §2), so they read the `wire` source and the rule is end-to-end there:
+  one network call per fifty rows, which is the owner's acceptance walk. Every list nonetheless reads the ONE hook; no screen
+  keeps a `shownCount`, an observer or a page size of its own.
+- **API — every list endpoint the mobile lists call now answers `?cursor=&limit=`.** NEW `apps/api/src/pharmacy/list-page.ts`
+  (`pageEnvelope`, `pageRows`, `wantsPage`) applied in `pharmacy.controller.ts`, so the 15k-line service — which is also the
+  desk's service — learns no second shape. **Paging is opt-in:** a request naming neither is the DESK and gets what it always
+  got, with `nextCursor: null` beside it so both tiers read one envelope. Endpoints changed:
+  `GET /pharmacy/medicines/inventory` (rows) · `GET /pharmacy/inventory/alerts` (lowStock.rows + nearExpiry.items, a cursor
+  each — the screen draws one at a time) · `GET /pharmacy/purchase` (rows) · `GET /pharmacy/purchase/suppliers/summary` (rows)
+  · `GET /pharmacy/purchase/suppliers/:id/ledger` (entries) · `GET /pharmacy/returns` (rows) · `GET /pharmacy/customers/summary`
+  (rows) · `GET /pharmacy/customers/:id/ledger` (entries) · `GET /pharmacy/recent-sales` (rows). `GET /notifications` and
+  `GET /audit` already paged by cursor and are unchanged except that the browser now names `limit=50`. Stat strips, chip
+  counts, policy blocks and closing balances pass through WHOLE — a KPI folded from the fifty rows a phone had scrolled would
+  be a different number on every flick. Recent Sales reads the widest window it serves (`RECENT_SALES_MAX_PAGE_SIZE`) when a
+  page is asked for, because the rows behind a cursor have to exist before one can be cut out of them; the phone was already
+  asking for that window and now gets fifty rows off it instead of five hundred.
+- **Page sizes deleted:** Inventory 25, Stock alerts 25, Purchases/Suppliers/Customers 12 (`PURCHASE_MOBILE_PAGE`), Returns
+  (`RETURNS_MOBILE_PAGE`), Recent sales 25, accounting ledger 20. Settings → Users (25) and Categories (30) are NOT in §1.4's
+  list and were left alone; their rows render through a shared `CardRow` that would need a ref prop, which is a change §1.4
+  does not authorise.
+
+### §2 — ledger sheets: plain infinite list
+- The customer and supplier sheets drop `<LedgerMore>` (*Showing 40 of 312 · Load 40 more · Load all*) and the sticky month
+  headers above it — 394 §2 reversed by the owner. The accounting ledger drops 372's `<LedgerScrollFoot>` bar with them, for
+  the same reason. What is left under a list is the ONE loading row every mobile list draws, and only while a page is actually
+  in flight. `LedgerMore` / `LedgerMonth` / `monthHeads` / `LedgerScrollFoot` stay exported from the kit — Expenses still
+  mounts the foot — but no ledger sheet mounts any of them.
+
+### §3 — the date icon opens a bottom sheet
+- NEW `LedgerJumpSheet` in `LedgerDrawerKit`: the month grid is the body of the app's `MobileSheet`, portalled to the document
+  root exactly as the range picker beside it. `LedgerJump` gained an `inSheet` flag so it declares no second `role="dialog"`
+  and does not dismiss on an outside press (every press in a sheet is outside the grid). The grid is otherwise untouched —
+  dots on days that hold entries, dead days that cannot be pressed, `useLedgerJump` as the landing. `MobileFilterRow` opens
+  it, so both party sheets get it; the accounting ledger grew the same calendar button beside its search field rather than
+  losing jump-to-date when the scroll bar went. CSS: `.ledjump--sheet` in `globals.css` (static box, phone-sized 42px days).
+  i18n: `aclLoadingMore` EN + UR.
+
+### §4 — sweep
+- NEW `packages/ui/src/lib/mobile-list-paging-404.spec.tsx` (25 cases): the page size and its clamp; the desk/phone split in
+  `parseListPageQuery`; cursor continuity over a 300-row walk, plus a row inserted above the reader, a row removed above the
+  reader and a cursor whose own row was deleted; the trip-wire's position (row 35 of 50) and its viewport-scaled rootMargin,
+  rendered against a fake `IntersectionObserver`; one wire fetch per crossing with the right cursor; pages kept; `patch` in
+  place; and greps that all ten lists read the hook and none keeps its own page size or observer.
+- NEW `apps/api/src/pharmacy/list-paging-404.spec.ts` (15 cases): the 50-row page shape, the gapless walk, the last page's
+  null cursor, the forgiving stale cursor, the untouched envelope, and that each endpoint above applies the cut.
+- Stale assertions in earlier steps updated to state 404's reversals rather than 394's: `customers-round-2-394`,
+  `customers-mobile-close-372`, `customers-fix-387`, `accounting-ledger-379`, `allocation-itemized-357`,
+  `suppliers-drawer-and-mobile-r4`, `purchases-suppliers-mobile-r2`/`r3`, `inventory-mobile-to-mockup`,
+  `mobile-picker-and-list-fixes`.
+
+### Gates
+- `pnpm typecheck` — 32/32 green. `pnpm lint` — green (one pre-existing unrelated warning in `doctor-portal.repositories.ts`).
+- API jest: 253 suites / 3472 tests green. UI jest: green after the spec updates above.
+- UI design self-check by inspection: the ledger sheets are one unbroken run of rows; the month picker is a sheet on the
+  kit's own scrim; no foot states a position or offers a page anywhere on the phone.
+
+WORK TYPE: FIX (branch fix/404-mobile-list-paging)
