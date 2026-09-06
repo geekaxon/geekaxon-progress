@@ -28543,3 +28543,37 @@ own lines, so "fully returned" is decided by quantities), so the literal `…(te
 no longer appears. Updated that one assertion to the current call and noted why; the intent it guards
 (plural fold, singular `ReturnedLinkView` shape stays removed) is untouched. No product code changed.
 Verified: the 310 suite (25 tests) passes; `pnpm lint` and `pnpm typecheck` clean.
+
+## 406 — stock-alerts-and-customers-polish — DONE (2026-09-06)
+
+**Type:** FIX. Branch `fix/406-stock-alerts-and-customers-polish`. Spec `/specs/406-stock-alerts-and-customers-polish.md`. No CODEREF covers 406.
+
+Five owner-found defects, all of them in SHARED parts rather than in one screen.
+
+**§1.1 — the product-type chips on all three alert tabs.** `showsProductTypeChips` answers off the counts it is handed, and on the alerts screen those counts are the OPEN TAB's slice — so a shop whose general items were all in stock and unexpired saw `All · Medicines · General items` on Out of stock and only `All` on the other two. `ProductTypeChips` grew an optional `show?: boolean` (absent → it decides for itself, so Inventory is byte-identical); `StockAlertsClient` computes `hasGeneral` from the WHOLE payload — low rows, out-of-stock rows and near-expiry items — so the row is the same three chips on every tab and only the counts follow the tab. Folded from the payload rather than `base`, so a search that empties a tab cannot take the chips with it.
+
+**§1.2 — one chip scroller.** `typeChipRow` and `expChipRow` were two sibling `.mchips`; on the phone that is a whole extra scrolling line pushing the expiry buckets down. They are one `chipRow(mobile)` now, with Near expiry's `Expiring soon · Expired` pair after a `.filterchips__sep` — exactly how Inventory carries its own deep-link chips.
+
+**§1.3 — the phone's three segments.** `.mp-mobile .segctl` hands every phone segment `flex:none`, so `.segctl--m` sat at content width inside the alerts body's flex column; and `flex:1` is not equal thirds, because a flex item's automatic minimum is its content ("Out of stock" claimed more than "Low stock"). Now `flex:none` on the control with `width:100%`, `flex:1 1 0; min-width:0` on the segments, and the label moved into its own `<span>` so equal thirds can ellipsise it.
+
+**§2 — the desktop drawer's mark.** It was `.drawer__head`'s own child under `align-items:center`, so once 345 put the standing pill inside the header the mark was centred against a height that had grown by a line and drifted down past the name. `Panel` now wraps mark + name + phone in `.drawer__head-id` inside `.drawer__head-t`, with the badges hanging below the pair. A header with no badges is unmoved (a one-row column centres where a shrink-to-fit block already did), and `headIcon` stays opt-in.
+
+**§3.1 — the standing pill back on its own line.** 394 §3 had put it beside the ✕; the owner wants it under the phone. The container's `::after` is a flex item again (`content:''; order:1; flex:0 0 100%`) and the pill is `order:2`, `align-self:flex-start`. 387 §5.1's width fix stands: `width:fit-content`, indented `calc(44px + 12px)` (`.supmark--lg` + `.sheet__hd`'s gap) so it reads as a third line of the identity block. Markup untouched; tab order unchanged.
+
+**§3.2 — the footer gap and the silent refusal.** Two defects in one place. The `sr-only` reason span was the footer's LAST child — absolutely positioned so it took no room, but it took `:last-child` away from the button, which then sat at its own text width with the footer empty beside it (the owner's `receive-payment.png`). And a `title` is a hover, which a phone has none of, so a cashier meeting a greyed Receive payment was told nothing. The reason now LEADS the footer, visible as `.sheetfoot__why` on the phone and `sr-only` on the desk, claiming a row of its own; the buttons are last again and the family's `> button:last-child { flex:1 }` does the spanning. Edit is gated on `canWrite` (`pharmacy.sell`, the same permission the register's row actions answer to) and threaded in as `canEdit`.
+
+**§3.3 — the statement's range tabs.** `flex:1 1 0; min-width:0; justify-content:center; text-align:center` on the phone's `.rangerow__top .segctl button`: equal quarters with the label centred, instead of four words drifting left.
+
+**§3.4 — the merge rail and its search.** 394 dropped the rail's label to 11.5px to fit 360px — the one number on the strip that was not the file's. The labels ellipsise instead (`min-width:0` on the step and its text, `flex:none` on the active step, which never shortens), so the numbered circles, connectors and filled active step are §H's. The step-1 search field is `.mgsrch` on the phone: `position:sticky; top:0` inside `.sheet__body`, bleeding to the frame's edge like the rail above it, so the candidate list scrolls under a fixed head instead of leaving the filter behind.
+
+**§4 — Accounting opens on Overview.** `NavItem` grew `activePrefix?: string` and the entry is one line: `href: '/pharmacy/accounting/overview'`, `activePrefix: '/pharmacy/accounting'`. `activeHref` matches href and prefix the same way, longest match wins, and returns the entry's own href — so the sidebar row stays lit on all four tabs, `navItemForPath` still titles them, and the index remains the Ledger tab (no redirect, no second answer).
+
+**Files:** `apps/web/app/(app)/pharmacy/inventory/alerts/StockAlertsClient.tsx`, `apps/web/app/(app)/pharmacy/inventory/inventory-shared.tsx`, `apps/web/components/pharmacy/Panel.tsx`, `apps/web/app/(app)/pharmacy/customers/CustomersClient.tsx`, `apps/web/components/pharmacy/MergeCustomers.tsx`, `packages/shared/src/nav-registry.ts`, `apps/web/app/globals.css`, new `packages/ui/src/lib/stock-alerts-and-customers-polish-406.spec.ts`.
+
+**Superseded assertions updated** (source snapshots this step deliberately changed): `stock-alerts-to-mockup-393` (chip-row mount names, `segctl--m` rule), `customers-mobile-close-372` / `customers-fix-387` / `customers-round-2-394` (the sheet-head pill rules), `accounting-ledger-379` and `leftovers-and-live-sync-390` (the nav href).
+
+**Gates:** `pnpm lint` and `pnpm typecheck` — both clean. Targeted jest as a self-check: the new 406 suite (24 tests) and the seven amended suites (230 tests) all pass. Full gates left to the controller.
+
+**Decision recorded:** §3.1 reverses 394 §3 on the owner's instruction — the mockup still draws the pill beside the ✕, and the spec is authoritative over the mockup.
+
+WORK TYPE: FIX (branch fix/406-stock-alerts-and-customers-polish)
