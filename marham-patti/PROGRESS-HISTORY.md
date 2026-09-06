@@ -28793,3 +28793,78 @@ doctor-portal.repositories.ts, untouched), `pnpm typecheck` clean.
 
 Gates: `pnpm lint` and `pnpm typecheck` pass. Files: `apps/web/app/globals.css`,
 `packages/ui/src/lib/settings-to-mockup-374.spec.ts`.
+
+## 409 — ci-runtime — DONE (2026-09-06)
+
+**Branch:** `fix/409-ci-runtime` · **Spec:** `/specs/409-ci-runtime.md` · Type: FIX (infra).
+
+**Problem.** Every CI run since 394 ended `cancelled`, not `failed`: typecheck, lint, build and
+the release rules passed and the test step was still running when GitHub's job limit ended the
+job. The suite outgrew the 2-core hosted runner. The bot's own gate protected merges, so nothing
+shipped broken — but a permanently red Actions tab is a signal nobody reads.
+
+**§1 — CI runs where it can finish (`.github/workflows/ci.yml`).**
+- `runs-on` now resolves to `[self-hosted, linux, arm64]` (the runner the owner registers for
+  401 §2). `ubuntu-latest` is kept as a MANUAL fallback only: the expression is
+  `github.event_name == 'workflow_dispatch' && inputs.runner == 'ubuntu-latest'`, so a push or a
+  PR can never land on the hosted box by accident. A `workflow_dispatch` `choice` input exposes
+  the two options.
+- Concurrency group is `ci-${{ github.workflow }}-${{ github.ref }}` with
+  `cancel-in-progress: true`. Deliberate: after this step, a *superseded run* is the only
+  legitimate "cancelled" in the Actions tab, which makes the status meaningful again.
+- `timeout-minutes: 40` on the job; `timeout-minutes: 25` on the Test step, so a hung test names
+  itself instead of taking the whole job's clock with it.
+- Turborepo cache via `actions/cache@v4` on `path: .turbo`, keyed on
+  `hashFiles('pnpm-lock.yaml')` + `hashFiles('turbo.json', 'apps/**/src/**', 'packages/**/src/**')`,
+  with two `restore-keys` so a partial hit still replays the packages nobody touched.
+  `TURBO_TELEMETRY_DISABLED=1` on the job env.
+- Test step: full suite when `github.ref_name == 'staging'` (or when `origin/staging` is not
+  reachable — a missing base must not silently narrow the gate); otherwise
+  `pnpm turbo run test --filter=...[origin/staging]` — changed packages and their dependents.
+- `actions/checkout` now uses `fetch-depth: 0`: both the test filter (`origin/staging`) and the
+  new timestamp rule (`origin/release`) need real history.
+
+**§2 — Rules made greppable.**
+- New pure functions in `scripts/release-rules.cjs`: `MIGRATION_NAME_RE`, `migrationTimestamp()`,
+  `checkMigrationTimestamps(migrations, { now, released })`, `TIMESTAMP_FIX`,
+  `FUTURE_TIMESTAMP_RULE_AUTHORED`, `GRANDFATHERED_FUTURE_TIMESTAMPS`. A folder whose 14-digit
+  stamp is in the future is a finding whose message carries the fix (`date -u +%Y%m%d%H%M%S`).
+  `migrationTimestamp()` parses field by field and round-trips the result, so `20261301…` and
+  `20260231…` are refused rather than rolled over by `Date.UTC`.
+- `scripts/check-release-rules.cjs` now collects `{ file, message }` findings and, when
+  `GITHUB_ACTIONS === 'true'`, emits `::error title=release-rules,file=…,line=1::` workflow
+  commands so findings land on the diff as annotations (§2, second bullet). Message text is
+  `%`/`\r`/`\n`-escaped — an unescaped newline truncates a workflow command.
+- The frozen set comes from `git ls-tree --name-only origin/release packages/db/prisma/migrations/`,
+  tried as `origin/release` then `release`. Best-effort by design: an unreachable ref means
+  "nothing known to be frozen" rather than an invented failure.
+
+**DECISION — why eight names are grandfathered rather than renamed.** The spec's carve-out is
+"applied only to migrations not yet on `release`". Taken alone that would have failed CI today on
+eight folders (`20260907000000_expenses` … `20260913000000_sale_source_imported`), all stamped
+ahead of the commit date by the 405-era drift and all already **applied on dev and staging**.
+Prisma records a migration's NAME in `_prisma_migrations`; renaming those folders would make the
+next `migrate deploy` report the recorded migrations as missing and try to run the renamed ones a
+second time — i.e. the fix would break the staging deploy, and §3 asks for CI green. So they are
+pinned by name in `GRANDFATHERED_FUTURE_TIMESTAMPS` with the reason, exactly the shape 401 already
+uses for `GRANDFATHERED_DESTRUCTIVE` (and 232 for `UNGATED_NAV_HREFS`): the list can only grow
+deliberately, and the gate bites for every migration written from here on. The release-exemption
+from the spec is implemented as well and is what keeps the list from ever needing to grow again.
+
+**Tests.** New `packages/ui/src/lib/ci-runtime-409.spec.ts` (12 cases): the workflow's §1
+properties (runner default + manual fallback, concurrency, both timeouts, cache key + restore
+keys, the filter, release rules before the slow steps, annotations escaped); and the §2 rule
+BITING — a future stamp is a finding naming the fix, past/now pass, a `release` migration is
+exempt, an unparseable stamp is refused, every grandfathered entry is genuinely future-dated
+relative to `FUTURE_TIMESTAMP_RULE_AUTHORED`, and the live migration directory passes as it stands.
+
+**Gates.** `pnpm lint` — 18/18 pass. `pnpm typecheck` — 32/32 pass. `node scripts/check-release-rules.cjs`
+exits 0: 116 migrations scanned for destructive DDL, 104 frozen on `origin/release`, 116 scanned
+for future timestamps, 4 workflows scanned for production references.
+
+**Files:** `.github/workflows/ci.yml`, `scripts/release-rules.cjs`, `scripts/check-release-rules.cjs`,
+`packages/ui/src/lib/ci-runtime-409.spec.ts`, `PROGRESS.md`.
+
+**Not done here (needs the runner, not code):** registering the self-hosted arm64 runner and
+recording the warm-cache run time in this file are owner/controller actions on the Actions tab —
+the workflow targets the runner labels 401 §2 specifies.

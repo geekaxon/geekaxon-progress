@@ -836,5 +836,17 @@ _End ARCHITECTURE.md — detail per step in `specs/NN-slug.md` (private repo). K
 
 > **STANDING RULES FROM PHASE 47:** *A preview is the renderer's output* — never a second drawing. *A status flag is derived, never trusted* — full/partial comes from quantities. *The first deploy on a box with legacy processes is a migration*, and the script does it.
 
+**PHASE 48 — FIX ROUND AFTER THE PHASE 47 TEST (409–414).**
+
+409. `409-ci-runtime` — CI was red since 394 by **cancellation**, not failure: the suite outgrew GitHub's 2-core runner and the job's time limit. CI moves to the self-hosted runner with a 40-minute limit, Turborepo caching and change-filtered tests; a future-dated migration timestamp fails CI.
+410. `410-print-helper-installer` — the USB helper wrote to the wrong serial port and reported success, and created a file for a name that was not a device. It now prints **by Windows printer name through the spooler (RAW)**, refuses non-device names, and reports "sent" only when the job left the queue; one-click installer with delayed auto-start, restart-on-failure and self-update; **6-digit pairing**; download served by the app. Dialog mode gets a real test document and `@page` sizes so roll printers stop feeding A4.
+411. `411-thermal-receipt-to-golden` — third attempt on the receipt: the 40 mockup samples are extracted verbatim into `specs/411-goldens/` and the renderer's rows must equal them; a quotation golden is authored; `Item discounts` / `Bill discount` lines; the returns window line; `Powered by Marham Patti` + website; invoice number under the barcode; 48 mm everywhere. **Goldens are never regenerated from the renderer.**
+412. `412-pos-print-dialog` — the print block is the mockup's dialog (desktop) and full sheet (mobile), evidenced by side-by-side screenshots.
+413. `413-mobile-and-list-polish` — the Recent sales stream 404 (a moved route) → one path constant per stream on both sides; offline becomes a closable bottom toast that returns on state change; segment widths, date-sheet note, address out of the header, KPI window labels, month filter, always-on pagination, install card hidden when standalone, paging evidence.
+414. `414-merge-rail-evidence` — fourth report of the merge step rail: before/after side-by-side images under `specs/evidence/`, the difference list must be empty, and the after-image is the acceptance.
+
+> **STANDING RULES FROM PHASE 48:** *When a report repeats, the spec stops describing and starts proving* — goldens for text, side-by-side images for layout, committed under `specs/`. *A "sent" without an acknowledgement is a lie* — a transport reports success only on the device's word.
+
+
 
 
