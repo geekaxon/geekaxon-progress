@@ -29396,3 +29396,106 @@ this session can produce** — it is left to the owner's §4 sweep at 390 px.
 **Changed (ui specs):** `live-sync-and-offline-403`, `recent-sales-mobile-392`,
 `settings-testing-pass-375`, `customers-round-2-394`, `stock-alerts-and-customers-polish-406`,
 `inventory-desktop-polish-r2`.
+
+## 414 — merge-rail-evidence — DONE (2026-09-06)
+
+**Type:** FIX. Branch `fix/414-merge-rail-evidence`. Spec `/specs/414-merge-rail-evidence.md`. No CODEREF covers 414.
+Evidence-first: the acceptance is `specs/evidence/414-after.png`.
+
+### §1.1 — the before image, and how it was made
+There is no Playwright in this repo (no `playwright.config`, no `e2e` dir, no dependency) and no way to
+reach a signed-in deployed merge page from this session. Headless Chromium IS available, so the evidence
+is rendered by `scripts/evidence-414.mjs`: it reads `specs/mockups/pharmacy/customer-mobile.html`'s own
+`<style>` blocks and `apps/web/app/globals.css` **live**, puts §H's markup and `<MergeCustomers>`'s markup
+into two 390px iframes side by side (separate documents — both sides own `.sheet`, `.mgchosen` and
+`.pill`, and one cascade painting the other's markup is exactly the accidental pass this step exists to
+stop), and screenshots at DPR 2. Lucide glyphs are inlined so the render needs no network. Both PNGs
+regenerate from today's sources: `node scripts/evidence-414.mjs before|after`. The script keeps BOTH
+deployed DOMs — `before` is what the component rendered at 86f8cab, `after` is what it renders now — so
+the before-image stays reproducible after the fix. Computed values below were read out of the same
+browser (`getComputedStyle` + `getBoundingClientRect` on both sides).
+
+### §1.1 — every visible difference (element · mockup §H · deployed before)
+1. **Step node layout** · column: pip above, word under, centred · row: word beside the pip.
+2. **Step width** · `flex:1` — equal thirds · content width, plus `.is-on { flex:none }`.
+3. **Label size/behaviour** · 10.5px, centred, WRAPS at line-height 1.25 · 12.5px, start-aligned,
+   `nowrap` + ellipsis — rendered "Which on…" and "Co…" at 390px.
+4. **Pip** · 26×26, 1.5px border, 12px bold · 24×24, 1px border, 11.5px semibold.
+5. **Pip glyph** · 14px · 13px.
+6. **Active pip** · accent fill + `0 0 0 4px var(--accent-soft)` halo · accent fill, no halo.
+7. **Done pip** · `--success` fill, white tick · `--accent-soft` fill, accent numeral.
+8. **Third step** · no special colour · `.is-final.is-on` filled `--danger`, a token §H never uses.
+9. **Connector** · `::before` on each following pip: 2px, `top:12px` — through the pips' centres, and
+   `--success` behind a completed step · a separate `.mgsteps__gap` element, 1px, centred on the ROW,
+   always `--border-hairline`, never reflecting progress.
+10. **Rail band** · border top AND bottom, radius 14, `shadow-xs`, 69px tall · border-bottom only, no
+    radius, no shadow, 46px tall.
+11. **Search** · one bare 46px `.mpos-search` pill · `.field` with a label line, a required star and a
+    help sentence — an 85px block pinned over the list.
+12. **Sticky search** · (static in the mockup) · already `position:sticky; top:0` — 406 §3.4 got this
+    right and it is untouched.
+
+Two further §H/deployed differences are recorded but NOT closed here, because they are prior owner
+decisions and kit-wide rather than rail work: §H's sheet is 80%-height with a grip and keeps a `×` in
+the corner beside the back chevron, and the deployed sheet is `fullscreen` with a back control where the
+`×` was (372 §2 — "the owner's walk reversed it" — over 218 §3). Changing that touches every full-screen
+picker in the app and contradicts a recorded decision; 414 §2 scopes this step to the rail and the
+search. Flagged for the owner rather than silently changed.
+
+### §1.2 — the finding
+The deployed rail was **`MergeSteps`**, a private function inside `apps/web/components/pharmacy/MergeCustomers.tsx`,
+styled by `.mp-pur2 .mgsteps*` in `apps/web/app/globals.css`. It is the **desktop dialog's chip row**, not
+the sheet kit's stepper — reused verbatim on the phone and patched twice (406 §3.4 ellipsised the labels
+and pinned `.is-on` against shrinking) to survive 360px. Worse: the app already owned §H's tracker. The
+returns flow's `.mstep` was ported EXACTLY from this mockup family, and the merge sheet could not reach
+it because the rules were scoped to `.mp-ret-flow`. Two copies of one picture, and the sheet mounted
+neither. That is why 394's and 406's assertions passed on every round while the owner kept seeing a
+rail that was not §H's.
+
+### §2 — the fix
+- **New kit component `<StepRail>`** (`packages/ui/src/components/step-rail.tsx`, exported from the kit
+  index): renders `.mstep` / `.mstep--rail` with `role="group"`, `aria-current="step"` on the active pip,
+  and an inline tick (the kit owns its chrome — `mobile-sheet.tsx`'s rule; same path as lucide's `Check`).
+- **`.mstep` CSS de-scoped from `.mp-ret-flow` to the kit**, every declaration byte-for-byte unchanged.
+  Added `.mstep--rail`, ported from the mockup's 5403: bled to the frame edge and paying the inset back
+  as its own padding. The one value that is not §H's is the inset — 16px, not 18px — because
+  `.sheet--full` insets 16px where the mockup's sheet insets 18px; the band spans the same width and the
+  content starts at the same text inset, so nothing is visibly different.
+- **`MobileReturnFlow`'s `MobileStepBar` now delegates to `<StepRail>`** — same DOM, same classes, same
+  tick. Both returns screens keep their call sites and their own words.
+- **`MergeCustomers`** mounts `<StepRail rail>` as the sheet's `sheetRail`. `MergeSteps` LOST its `rail`
+  variant so it cannot be asked to be a phone rail a fifth time; it stays for the desktop dialog head,
+  where a chip row beside a 720px title is the right object and always was.
+- **The phone's search is §H's bare `.mpos-search` pill** — no label, no required star, no help line
+  (`.mp-pur2 .mpos-search` already existed at globals 15267, so no new CSS). The words are not lost: the
+  label is the field's `aria-label`, the help sentence is the placeholder. The desk keeps its `.field`.
+- The dead `.mp-pur2.mp-mrg-full .mgsteps--rail*` rules are deleted rather than tuned again. `.mgsrch`
+  stays exactly as 406 §3.4 built it.
+- Auto-advance on tap and Continue-on-return (394 §4) untouched: `pickOther(row.id, true)` on the phone
+  row, `false` on the desk's.
+- i18n: added `pcusMergeStepsLabel` (en + ur) — the rail group's accessible name.
+
+### §3 — after, and the two behaviours
+`specs/evidence/414-after.png` regenerated: the rail now reads identically to §H — equal thirds, 26px
+pips, the word under each, the connector through the pips' centres, the active pip filled and haloed, the
+band with its border top and bottom. **The §1 difference list for the rail and the search is empty**; the
+two flagged items above are the sheet-frame decisions of 372 §2, unchanged by design and left to the owner.
+
+Both §3 behaviours were verified in the same headless browser rather than asserted only in CSS
+(`EVIDENCE_414_PROBE=1 node scripts/evidence-414.mjs after`, six times §H's rows so there is more than
+600px under the strip): scrolling `.sheet__body` by 600px leaves `.mgsrch` at top 912 — exactly the
+scroller's own top, i.e. pinned and in view — while the rail sits at 833, above the scroller and never
+moving at all. Step 2 activating on a tap is the `advance` path, asserted in the spec file.
+
+**Tests.** New `packages/ui/src/lib/merge-rail-evidence-414.spec.ts` — the finding (no private rail, no
+`.mgsteps` rail rules left), the mount (kit export, both flows, one set of `.mstep` rules), and §H's four
+parts each pinned to a value (26px/1.5px/12px pip, label under and centred and never ellipsised, the 2px
+connector through the centres that turns `--success`, the filled and haloed active pip), plus the sticky
+search, the tap-advances path, and that both PNGs and their generator are in the repo.
+**Superseded assertions updated, with the reason written in:** `customers-round-2-394.spec.tsx` (the
+`sheetRail` contract it actually built is kept; WHICH rail is pinned is 414's) and
+`stock-alerts-and-customers-polish-406.spec.ts` §3.4 (its four-parts test asserted the wrong object —
+that is precisely how four rounds of "the rail matches §H" passed; its search-pinning win is kept).
+
+**Gates:** `pnpm lint` ✓ (18/18, incl. design-drift, token-integrity, tenant checks) · `pnpm typecheck` ✓
+(32/32). `pnpm test:unit` / `test:e2e` / `build` not run per CLAUDE.md — controller runs the full gates.
