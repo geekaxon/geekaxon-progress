@@ -30086,3 +30086,112 @@ No new i18n keys — the picker reuses `pdLedJumpTitle` / `pdLedJumpPrev` / `pdL
 suppliers/SuppliersClient,customers/CustomersClient,accounting/AccountingClient,
 inventory/alerts/StockAlertsClient}.tsx`, `apps/web/app/globals.css`, `scripts/check-env.sh`,
 `packages/ui/src/lib/live-marker-nav-and-ledger-dates-418.spec.tsx` (new) + the four updated suites.
+
+---
+
+## 419 — merge-mobile-like-new-sale-return — DONE (2026-09-07)
+
+**Type:** FIX · branch `fix/419-merge-mobile-like-new-sale-return` · `DEPLOY FIX` · spec `/specs/419-merge-mobile-like-new-sale-return.md` (no CODEREF in range).
+
+### The finding, and why this is the fifth report
+372, 394, 406 and 414 each took ONE object on the merge flow and made it match a mockup — the
+frame, the list's paging, the sticky search, the step rail — and the owner kept coming back.
+Matching four objects one at a time is not the same as the screen reading like the rest of the
+app. On 7 Sep they stopped naming objects and named a SCREEN: New sale return's mobile page.
+Every part of the composition the owner described already existed as shipped code on that screen;
+the merge page was drawing private copies of three of them.
+
+### §1 — what the merge page mounts now (reuse, not restyle)
+| part | component | was |
+| --- | --- | --- |
+| header | `<MobilePageChrome>` (`.mchrome--pos .mchrome--sub`) | the frame's `.sheet__hd` |
+| step rail | `<StepRail>` (`.mstep`), a card in the body | `<StepRail rail>` (`.mstep--rail`), a band pinned under the head |
+| section label | `<MobileListLabel>` (`.mlabel`) | `.mfslabel` |
+| row list | `<MobilePickList>` / `<MobilePickRow>` (`.mfeed` / `.mpickrow`) | `.mgrows` / `.mgrow` (394 §4) |
+
+New files/exports:
+- `apps/web/components/pharmacy/MobilePickList.tsx` — `MobileListLabel`, `MobilePickList`,
+  `MobilePickRow`, lifted verbatim out of `NewSaleReturnClient`'s step 1. Both screens mount them;
+  neither hand-rolls the markup any more.
+- `MobileSheet` grew `head?: ReactNode` — a caller-supplied header that REPLACES `.sheet__hd`.
+  `Panel` forwards it as `sheetHead` and **`sheetRail` is deleted** (the merge was its only user).
+  With no `closeRef` button the focus anchor falls to `focusable(sheet)[0]`, which on that header
+  is its back control, so 163's trap rule still holds.
+- `StepRail` lost its `rail` prop and `.mstep--rail` lost its CSS: one shape, so the two flows
+  cannot drift apart by choosing different ones.
+- `MobilePageChrome`: `initials` / `accountLabel` / `onAccount` are now optional (a sub-page draws
+  neither bell nor avatar). It also **refcounts** `--mp-chrome-c`: two of these headers are mounted
+  at once while the merge is open over Customers, and the last unmount must be the one that clears
+  the variable or dismissing the merge would leave the page's own header stuck open.
+
+Deleted: `MergeRecordRow`; CSS `.mstep--rail`, `.mp-pur2 .mgrows`, `.mp-pur2 .mgrow*`,
+`.mp-pur2.mp-mrg-full .sheet__hd`. `.mp-ret-flow .mpickrow*` was unscoped to `.mpickrow*` exactly
+as 414 unscoped `.mstep`; `.mp-mrg-full .mfeed` joins the returns card rule. The two things the
+merge adds to the shared row are `.mpickrow__amt.is-owing/.is-adv/.is-nil` (394's balance colours,
+moved onto the shared figure column), `small.is-muted` (a purchase count is not a warning) and
+`.mpickrow.is-picked`. The DESK is untouched: `<MergeSteps>`, `<CandidateRow>`, `.custopt`,
+`.mgcmp`, `<ModalHead>` and the 720px dialog are byte-identical.
+
+### §1.2 — body order
+`This record` card → step rail card → sticky `.mgsrch` → `SIMILAR NAMES · n FOUND` → rows. The
+card and the rail are composed by the frame's children on the phone (the desk keeps the card at
+the top of step 1's form); the rail sits OUTSIDE the per-step branch, so steps 2 and 3 still say
+which of three they are. 394 §4's behaviour is unchanged — a tap advances on the phone, the desk
+stays select-then-Continue, the list still pages 20 at a time. The RESULT screen wears the same
+header too: a flow whose head changes shape between the confirm and the confirmation reads as two
+screens by two hands.
+
+### §2 — evidence
+`scripts/evidence-419.mjs before|after` → `specs/evidence/419-{before,after}.png`. Three columns
+at 390px: New sale return mobile step 1 (the reference), the merge page, and the difference list
+itself. Both phone columns are drawn from `apps/web/app/globals.css`, the file the server ships,
+so a picture cannot outlive the code it claims to show. `before` additionally quotes the rules
+this step DELETED (`RETIRED_CSS`) — without them the old page would render as unstyled rubble
+rather than as the thing the owner actually looked at.
+
+**Difference list, after:** header, back control, heading, description, step rail, section label,
+row list, row and row name all read `same`. TWO entries read `by spec` and neither is drift:
+- **Search position.** The reference draws its search INSIDE the header; §1.2's body order puts
+  the merge's in the body, sticky, and §2 asks Playwright to prove it is still sticky after 600px
+  of scroll — which is a claim about a body element. §1.2 is the direct instruction for this page,
+  so it wins over the parenthetical describing the reference screenshot. 406 §3.4 and 414's work
+  on that strip survive intact.
+- **Copy.** Merge words, which is the intended difference.
+
+**Measured, not asserted** (`EVIDENCE_419_PROBE=1 node scripts/evidence-419.mjs after`, in a real
+390x844 frame): `searchStuckToScroller: true` after `scrollTop = 600` (the strip moves 1090 → 929
+and 929 IS the scroller's top), `headerInView: true`, `headerClass: "mchrome mchrome--pos
+mchrome--sub mchrome--fixed"`, `railIsCard: true`, `rowHeight: 58` — `.mpickrow`'s own height.
+
+### Known consequence, recorded rather than patched
+`.mchrome--pos .mhdr__sub` is one line and ellipsises (`white-space:nowrap`), which every screen
+in the app that mounts this header lives with. `pcusMergeSub` is 56 characters and clips at ~48 on
+step 1. Not restyled for one screen: the consequence sentences an operator must read before an
+irreversible merge are on STEP 3 (`.mgsum`), which is the screen that actually guards the action;
+step 1's line is orientation. Flagged here so the next report can overrule it if the owner wants
+shorter copy or a wrapping sub.
+
+`NewPurchaseReturnClient` still draws its own `.mfeed`/`.mpickrow` step-1 list inline. Out of
+scope here (the spec names two screens) but it is now the only remaining copy of that markup, and
+mounting `MobilePickList` there is a one-file follow-up.
+
+### Tests
+- NEW `packages/ui/src/lib/merge-mobile-like-new-sale-return-419.spec.ts` — the four components
+  mounted by both screens, the deleted merge-specific header/rail/row and their CSS, the body
+  order, the rail on every step, tap-advances, step-1-back-leaves, one title/description read by
+  both heads, the frame's `head` slot and focus anchor, the chrome refcount, and that both images
+  plus their generator are in the repo.
+- UPDATED, superseded assertions only: `customers-round-2-394.spec.tsx` (the rail's PLACE and the
+  private row), `stock-alerts-and-customers-polish-406.spec.ts` (the `sheetRail` frame contract),
+  `merge-rail-evidence-414.spec.ts` (the `rail` variant and the pinned band). Each edit says what
+  419 overruled and why; what those steps actually won is asserted unchanged.
+- Unaffected and re-checked by hand: 293's `.mpickrow` reachability probe (the family is now
+  UNSCOPED, so it still resolves), 302's `is-done` rule and fully-returned assertions, 351's
+  `headExtra`-inside-`.sheet__hd` ordering, 293's `aria-busy` (the desktop skeleton still carries it).
+
+### Gates
+`pnpm lint` ✓ (eslint + design-drift + token-integrity + tenant guards) · `pnpm typecheck` ✓ (32/32).
+Per AGENT.md the agent does not run `test:unit` / `test:e2e` / `build`; the controller runs them.
+`.gitignore` gained `.evidence-*.html` (the harness Chromium screenshots; the PNG is the artefact).
+
+WORK TYPE: FIX (branch fix/419-merge-mobile-like-new-sale-return)
