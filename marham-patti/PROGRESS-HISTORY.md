@@ -29499,3 +29499,166 @@ that is precisely how four rounds of "the rail matches §H" passed; its search-p
 
 **Gates:** `pnpm lint` ✓ (18/18, incl. design-drift, token-integrity, tenant checks) · `pnpm typecheck` ✓
 (32/32). `pnpm test:unit` / `test:e2e` / `build` not run per CLAUDE.md — controller runs the full gates.
+
+### 415 — pos-print-dialog-and-quotation-documents — DONE (2026-09-07)
+
+Branch `fix/415-pos-print-dialog-and-quotation-documents` (`DEPLOY FIX`). Spec
+`specs/415-pos-print-dialog-and-quotation-documents.md`. No companion CODEREF exists for this
+range; ARCHITECTURE.md was not opened (the task named the step and the spec path).
+
+**A NOTE ON THE MOCKUP, BECAUSE IT DECIDED SEVERAL THINGS BELOW.** §2/§3 cite
+`specs/mockups/pharmacy/pos-desktop.html` and `pos-mobile.html` for "the dialog, the *This
+quotation* card, the 80 mm quotation sample" and for the mobile bottom sheet. The copies committed
+to this repo contain none of it: `grep -i quotation` over both files returns nothing, and neither
+carries a print block, an `80mm/58mm/48mm` segment or a *This bill* card (last touched at step
+326). The referenced `80mm-58mm-48mm.png` is not in the repo either. The spec's prose is
+nonetheless complete — §2 enumerates every element — so the step was built from the prose, and the
+two places where the prose left a genuine choice are recorded here:
+
+  1. **"Qty prints the number only, the unit joins the description"** was read literally: the Qty
+     cell prints a bare `4` and the unit is appended to the description as `(str)` / `(box)`. The
+     alternative reading — that the description already names the unit (`500mg/65mg tab`) and
+     nothing needs appending — matches the spec's own two-line example more tidily, but loses the
+     unit outright on a line like `Face mask 3-ply · 1 · Rs 240.00`, where a customer comparing
+     quotations cannot tell whether Rs 240 buys a box or a mask. Information kept; the cost is one
+     extra wrap line in the 13-column name cell on the widest roll.
+  2. **The `Quote QT-…` row prints only when a number is present.** 415 renders it; 416 issues it.
+     A cart quoted before 416 prints no `Quote` row rather than a placeholder — a number that is
+     not a record is a lie on a piece of paper.
+
+**§1 — DRUG LICENCE AND NTN.** `StoreProfile` gains `drugLicence` (blank default, whitelisted in
+`parseStoreProfilePatch`, length-capped in `storeFormErrors`); `taxNumber` already existed. Both
+are typed in Settings → General → Store, side by side, and the pane declares `drugLicence` among
+the keys it owns (408 §2) so another pane's stale form cannot revert it. They travel on the
+receipt model: the API puts them on every server-built receipt beside the three contact lines, and
+`quotationIdentity()` puts them on the browser-built quotation, which until this step carried no
+phone, no email and no hours either. On the roll they are ONE captioned row under the timings
+(`DL 12345-K  -  NTN 1234567-8`; a hyphen, not a middle dot — a thermal head has no middot glyph),
+and a roll too narrow for the row prints one line each rather than splitting a number across two.
+On A4 they are two labelled lines in the masthead. `sale-invoice-doc.ts`'s `licence: null` — an
+eighteen-step-old TODO saying the store profile had no field for it — is gone.
+
+**§2 — THE DIALOG AND THE SHEET.** New CSS block in `globals.css` (after 412's, which had three of
+its numbers retired in place with a pointer rather than left to be shadowed):
+`--dialog-w-print:1180px` on `.mp-pdlg.mp-fdlg.mp-fdlg` (three classes, so it wins on specificity
+without `!important`); the dialog body stops scrolling and the desk becomes the only overflow, so
+the segments, the chip and the two cards stay put while the paper moves; the A4 preview goes from
+46% to 82% (1180 − 44 gutters − 304 card − 16 gap − 40 desk padding = 776px of column, 794 × 0.82
+= 651). Header row: title, then an amber `Valid today` badge for quotations — the *prices valid
+today* sentence is off the title, where it was a claim dressed as a name — then the segments,
+labelled `A4 · 80mm · 58mm · 48mm`, then a destination chip that NAMES the machine
+(`Counter printer · USB`), which needed `printerName` on `PrintPolicy`. Right column: no *What
+happens next* caption, no page count, Send on WhatsApp and Save PDF on the A4 tab only (both
+measure the sheet), no *Mark as reprint* on a quotation, and a facts card that is *This
+quotation* (Counter · Cashier · Customer · Valid until · Quoted total · `n items · m units` · the
+"becomes a sale" footnote) or *This bill*. The counts come off `saleSheetTotals`, not a local
+reduce, so 407 §1's "the screen adds nothing up" survives. Phone: `sheetVariant` back to `sheet`
+(412 reached for `fullscreen` because the block had just been a page), no header icon, and the
+real fix behind the owner's `80mm-58mm-48mm.png` — `MobileSheet` has had a third head row since
+260 §2, but the two rules that make one (`flex-wrap` on the head, `flex:1 0 100%` on the child)
+are declared per scope and this sheet's scope never declared them, so four tabs and a chip were
+being squeezed beside the title and running off the edge. The strip's paper now fills the desk and
+the desk fills the sheet. Footer: `⋯` then Print on A4, Print full width on a roll with no `⋯` at
+all. POS buttons: *Print only* → `btn--secondary`, *Clear cart* → `btn--dangerquiet` (the returns
+block's own outline-danger, scoped to `.mp-pos2`), and the phone's bin icon in danger ink.
+
+**§3 — THE QUOTATION DOCUMENTS.** Thermal: `Quote` and `Valid` rows in the bill block, a
+number-only Qty with the unit on the description, `QUOTE TOTAL`, `YOU WILL SAVE` in the future
+tense (411 §3 suppressed the savings line on a quotation; a price list is exactly where that
+figure belongs), the three-line NOT A SALE block with the shop's optional sentence under it, and
+no payment, udhaar, returns promise, reprint mark or barcode at any width. `quotationNote` shrank
+to `Not a tax invoice` — the *prices valid today* half moved into the `Valid` row, where it can
+name a real closing hour. **The item discount the deployed slip printed nowhere was a MODEL bug,
+not a renderer bug**: `openQuotation` handed every line `discountAmount: null`; it now passes
+`lineMoneyOf(...).discount`, the same run the cart row and the footer read. A4: new
+`QuotationDocument` + `quotation-doc.ts`, built from the same sheet kit and the same `.mp-pur2
+.docsheet` scope as the sale invoice, the purchase invoice and the statement, so
+`renderSheetsToPdf` cannot tell them apart — six columns summing to the well's own 714px (a
+quotation has no lots, so Batch and Expiry go and the item cell takes the room), the unit in the
+item cell, a bare Qty, `Valid today` in place of a settlement pill, a Customer card with no
+balance row, a *Quotation from* card, totals ending at Quote total / You will save with no Paid or
+Settled row, the NOT A SALE notes block, and a footer with no `Printed …` stamp. **The customer
+selected in the cart now prints**, which it did not. File names: one `documentFileName()` helper
+(`Quotation QT-0412 - Al-Shifa Pharmacy`, `Invoice INV-30 - …`, `Statement … - …`), returning the
+STEM because `downloadPdf` appends the extension, and folding the characters Windows refuses.
+
+**§4 — DEFAULT OUTPUT.** New `DefaultOutput` enum and two `pharmacy_settings` columns
+(`sale_default_output`, `quotation_default_output`, both `NOT NULL DEFAULT 'ASK'`), additive
+migration, DTO validation that refuses an unrecognised value rather than guessing, resolver
+falling back to `ASK`, and a Settings → Printing card with one segmented control per document.
+`PrintScreen` gained one prop, `auto`: it selects that tab, prints once (`fired` ref), and
+dismisses itself — and a print that FELL BACK does not dismiss, so 410 §4's "a silent default that
+fails falls back to the dialog" is the screen simply staying open with the toast already shown.
+
+**§5 — THE PROOF.** `specs/415-goldens/quotation-80mm.txt` replaces 411's, which is DELETED: 411's
+was authored from 411 §3's sentence and described a document that no longer exists. The new file
+is authored too — there is nothing to extract from, per the note at the top — and its header lists
+the rule behind every row, so the next reader can check the file against the spec rather than
+against the renderer. `goldens-415.spec.ts` diffs the 80mm render against it row for row and
+asserts the same RULES at 32 and 24 columns (§5's "derived"), including that a quotation is never
+marked a reprint however the model arrives. `scripts/evidence-415.mjs` writes
+`specs/evidence/415-dialog-desktop.png` and `415-sheet-mobile.png` from the SHIPPED
+`globals.css` and from the golden itself, in both states; **there is no "Mockup" column and the
+image says why in its own caption** — a column drawn from something that is not the mockup would
+be exactly the accidental pass 414's evidence script exists to prevent.
+
+**SUPERSEDED ASSERTIONS (the 412-gate precedent).** `pos-print-dialog-412.spec.ts`: the 720px
+width, the 46% A4 scale, the 15rem card, `sheetVariant="fullscreen"`, the `Quotation · prices
+valid today` title and the single-shape `mobileFoot` were narrowed to what 415 sets, each with a
+comment naming what superseded it. `pos-print-screen-407.spec.ts`: two import/callsite greps.
+`pos-print-wiring-282.spec.ts`: the seam import is now a list, and `DEFAULT_PRINT_POLICY` gained
+three fields whose values ARE the old claim (dialog, shut drawer). No production behaviour was
+changed to make a test pass.
+
+**Files.** `packages/shared`: `store-profile.ts`, `printing.ts`, `pharmacy-settings.ts`,
+`pharmacy-payment.ts`, new `quotation.ts`, `index.ts`. `packages/brand`: `index.ts`.
+`packages/db`: `schema.prisma`, `src/index.ts`, new migration
+`20260907124640_default_output_per_document`. `packages/escpos`: `documents.ts`, `receipt-copy.ts`,
+`render.ts`, `test-goldens-411.ts`, `test-goldens-411-file.ts`, new `test-goldens-415.ts`, new
+`goldens-415.spec.ts`, `goldens-411.spec.ts`. `apps/api`: `pharmacy.service.ts`,
+`pharmacy-settings.dto.ts`, `pharmacy-settings.repositories.ts`,
+`settings-testing-pass-375.spec.ts`. `apps/web`: `PrintScreen.tsx`, `PosClient.tsx`,
+`QuotationSheet.tsx`, new `QuotationDocument.tsx`, new `quotation-doc.ts`, new
+`document-file-name.ts`, `print-document.ts`, `printing.ts`, `StoreSection.tsx`,
+`ReceiptsSection.tsx`, `PrintingSection.tsx`, `globals.css`. `packages/i18n`: 41 new keys in both
+catalogs (parity green). `packages/ui`: new `pos-print-dialog-and-quotation-415.spec.ts` (43
+tests) plus the three superseded suites. `scripts/evidence-415.mjs`.
+
+**A MIGRATION TIMESTAMP CAUGHT BY 409's OWN GATE.** The migration was first written as
+`20260914000000_…`; `ci-runtime-409.spec.ts` failed it as a future stamp with the fix in the
+message, and it was renamed to a real `date -u` stamp. Exactly the failure that rule was written
+for, working.
+
+**Gates.** `pnpm lint` clean (one pre-existing unused-eslint-disable warning in
+`apps/api/src/doctor-portal/doctor-portal.repositories.ts`, untouched). `pnpm typecheck` clean.
+`pnpm prisma generate` run after the schema change. Targeted suites run during the build:
+`@mp/escpos` whole suite (13 files, 313 tests) green; `@mp/ui` whole suite green apart from the
+migration-stamp failure described above, which was then fixed; the new 415 suite (43 tests) green;
+the three touched API suites green.
+
+### 415 gate fix — `pnpm test:unit` flake: `@mp/db` tests raced `prisma generate`
+
+`@mp/db#test` failed with `Test suite failed to run` on `src/demo-seed.spec.ts` (79/80 suites
+passed). Not a test bug: `packages/db` passes 80/80 in isolation, twice, with and without the
+jest cache, and the two `Environment variable not found: DATABASE_URL` blocks in the gate log are
+ordinary console noise from the two real-DB suites that skip when no DB is reachable.
+
+Root cause: root `turbo.json` declares `test` as `dependsOn: ["^build"]` — a package's own build
+is NOT a prerequisite of its own tests. So `@mp/db#test` and `@mp/db#build` (the latter pulled in
+by `@mp/api#test` → `^build`) run CONCURRENTLY, and `@mp/db#build` starts with `prisma generate`,
+which rewrites `node_modules/.prisma/client` in place. A `require('@prisma/client')` landing in
+that window throws a module-resolution error, and jest reports it as a suite that failed to run.
+Reproduced: with `prisma generate` looping alongside, 7 of 400 bare `require('@prisma/client')`
+calls crashed. Step 415 touched `schema.prisma`, so `@mp/db#build` was a cache MISS and the
+generate actually ran during the test run — which is why the flake showed up on this step and
+not the ones before it.
+
+Fix: new `packages/db/turbo.json` (package configuration, `extends: ["//"]`) that overrides just
+`test` to `dependsOn: ["^build", "build"]`. `@mp/db#test` now waits for `@mp/db#build`, so the
+client is fully generated before any suite loads it. Scoped to `@mp/db` on purpose: doing this at
+the root would make every app's tests wait on `next build`/`nest build` for no benefit. Verified
+via `turbo run test --dry=json` that `@mp/db#test <- ["@mp/db#build", "@mp/shared#build"]`, and
+`@mp/api#test` already depended on `@mp/db#build`, so no other package can race the generate
+(`@mp/db` and `apps/api` are the only consumers of `@prisma/client`).
+
+Gates: `pnpm lint` 18/18 pass, `pnpm typecheck` 32/32 pass. No source or schema change.

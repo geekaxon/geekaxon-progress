@@ -847,6 +847,12 @@ _End ARCHITECTURE.md — detail per step in `specs/NN-slug.md` (private repo). K
 
 > **STANDING RULES FROM PHASE 48:** *When a report repeats, the spec stops describing and starts proving* — goldens for text, side-by-side images for layout, committed under `specs/`. *A "sent" without an acknowledgement is a lie* — a transport reports success only on the device's word.
 
+**PHASE 48 — OWNER'S REPORT, PART 2 (415–416).**
+
+415. `415-pos-print-dialog-and-quotation-documents` — the print dialog and sheet brought to the POS mockup (XL width, `Valid today` badge, `80mm/58mm/48mm`, destination chip naming the printer, one scroll, the *This quotation* / *This bill* facts card, PDF actions on A4 only); quotation documents on thermal (golden extracted from the POS mockup, with the owner's edits: number-only Qty, unit in the description, `YOU WILL SAVE`, website) and A4 (`QuotationDocument`, the sale sheet's twin); **Drug licence and NTN** in General, printed on every document; named PDF files; **default output per document** (ask / thermal silent / A4 silent).
+416. `416-saved-quotations` — a quotation becomes a record: `QT-` number, valid until closing, listed under Recent sales › Quotations, convertible to a sale with prices re-read; **no stock, ledger or day-close effect until conversion**; expiry by worker; its own permissions.
+
+
 
 
 

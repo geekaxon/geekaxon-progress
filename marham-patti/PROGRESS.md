@@ -6,16 +6,17 @@
 
 ## Current Status
 - **Project:** Marham Patti — multi-tenant white-label healthcare platform.
-- **Phase:** **PHASE 48** — Fix round after the Phase 47 test (409–414). 411–414 are `fix/*` (`DEPLOY FIX`). Target branch is still `staging`.
-- **Last completed:** **414 — merge-rail-evidence** — DONE.
-- **Next:** none — round complete; owner's 401 steps, then v1.0.0 promote [HUMAN_REQUIRED]
-- **Group order:** 409 → 410 → 411 → 412 → 413 → 414. One step per session. Never skip a number.
-- **EVIDENCE FIRST (412, 414):** mockup-vs-deployed screenshots under `specs/evidence/`; the after-image is the acceptance.
-- **After this:** owner's 401 steps → v1.0.0 promote → Pharmacy audit → consistency audit → Lab → Clinic.
+- **Phase:** **PHASE 48** — owner's report, part 2 (415–416). 416 is `feature/*` (`DEPLOY FEATURE`). Target branch is still `staging`.
+- **Last completed:** **415 — pos-print-dialog-and-quotation-documents** — DONE (2026-09-07).
+- **Next:** **416 — saved-quotations** — specs/416-saved-quotations.md
+- **Group order:** 415 → 416. One step per session. Never skip a number.
+- **GOLDENS ARE THE ACCEPTANCE:** the thermal goldens, plus the quotation golden 415 wrote.
+- **EVIDENCE FIRST:** side-by-side images under `specs/evidence/` for every "to mockup" item.
+- **QUOTATION = RECORD (416):** numbered, valid until closing, no stock/ledger/day effect until converted.
+- **After this:** next report part → owner's 401 steps → v1.0.0 promote.
 
 ### Recent steps
-- **414 — merge-rail-evidence** — DONE (2026-09-06) — the phone was drawing the desktop's rail; both flows now mount one kit stepper.
-- **413 — mobile-and-list-polish** — DONE (2026-09-06) — recent sales is live again, offline is a closable bottom toast, and eight small phone fixes.
-- **412 — pos-print-dialog** — DONE (2026-09-06) — the counter prints from a dialog over the cart, a full sheet on the phone.
+- **415 — pos-print-dialog-and-quotation-documents** — DONE (2026-09-07) — XL print dialog, quotation on both papers, licence and NTN, default output.
+- **409–414** — DONE.
 
 > Older steps in PROGRESS-HISTORY.md
