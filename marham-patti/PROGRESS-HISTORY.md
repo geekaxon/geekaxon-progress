@@ -29969,3 +29969,120 @@ Gates: `pnpm lint` clean (one pre-existing unrelated warning in `@mp/api`), `pnp
 parentheses under the item name on the 80mm roll are what `specs/415-goldens/quotation-80mm.txt`
 specifies, row for row. If they are to go, the golden and 415 §3.1 change together; the report did
 not say to.
+
+## 418 — live-marker-nav-and-ledger-dates (2026-09-07) — WORK TYPE: FIX, branch `fix/418-live-marker-nav-and-ledger-dates`
+
+Phase 48, part 3 of 3. Spec: `specs/418-live-marker-nav-and-ledger-dates.md`. No CODEREF in range.
+
+### §1 — "Last change" moved every minute on an idle screen
+
+**Diagnosis.** The SSE keep-alive 292 §2.2 added is not a comment frame — it is a real `data:`
+frame carrying `{ type: 'sse.ping', at }`, emitted every `SSE_PING_MS` (20 s). `usePageLive` was
+`useLiveStream(() => setSeenAt(Date.now()))`: it counted FRAMES, not events, so every heartbeat
+stamped `lastEventAt` and the desk's `Live · last change 17:39` walked forward through a shut
+shop. `notifications.ts` had already filtered the ping by hand (line 152), which is precisely the
+per-call-site convention that fails the moment a second listener is written.
+
+**Decision — the fix goes in the READER, not in the marker.** `apps/web/lib/stock-live.ts` now
+exports `isLiveDataEvent()` and the read loop drops any frame it rejects before `emit()`, so a
+keep-alive never reaches `onEvent` on ANY listener, present or future. `usePageLive` repeats the
+guard (the page-facing half of the rule, and the file the marker's tests live beside). Reconnects
+and re-renders were never events — they arrive as `onOpen`/`onClose`, which stamp nothing — and
+the completed-refresh source is unchanged (`refreshScreen` → `useLastRefreshAt` → `pageLastUpdate`).
+Kept the ABSOLUTE `HH:MM` per the spec's own recommendation: a relative reading needs a timer and
+would re-introduce the complaint.
+
+### §2 — Ctrl-click opens a new tab
+
+`grep 'router.push(' apps/web/app/(app)` returned TWO hits and both were kept, deliberately:
+`StockAlertsClient.tsx:449` is a query-only filter push (same path, the progress bar is not even
+armed) and `PosClient.tsx:3300` is the sign-out redirect, which must discard client state. The
+navigation-only controls in this app go through `useClientNav`'s `go()`, and those are what were
+converted to `<Button asChild><AppLink href>` — the shape ReturnsClient has used since 306:
+
+  · PharmacyPurchaseClient — New purchase ×3 (desk head, desk empty, phone quick actions,
+    phone empty = 4 anchors) and Open suppliers ×2. `Alt+N` keeps `go(NEW_PURCHASE_HREF)`.
+  · RecentSalesClient — New sale ×3, New sale return ×2.
+  · SuppliersClient — Purchases ×2.
+  · StockAlertsClient — Open inventory (empty state).
+  · AccountingClient — the ledger row's reference is now an anchor (`RefCell href`), and the
+    mobile sheet's `Open <ref>` became `AppLink` instead of a bare `<a>` (which was a full reload).
+
+Row-level opens that are NOT navigations (drawer/sheet opens on Inventory, Suppliers, Purchases,
+Returns) were left alone: a ctrl-click cannot open a drawer in a new tab, and `a[href]` is already
+in 305 §1's `ROW_OPEN_IGNORE_SELECTOR` so the new reference links do not fight the row handler.
+Notification and audit rows also mutate state (read-state) on open and stay buttons.
+
+§2.2 was already satisfied by both interceptors; the change is that the predicate now has ONE
+definition — `isModifiedClick()` in `leave-guard.ts`, imported by `client-nav.tsx` — so the guard's
+capture listener and `AppLink` cannot answer "is this a new-tab click?" differently. `RouteProgress`
+already computed the same thing through `navigationEligible({ modified })` and was left as is.
+
+### §3 — Jump to date on both platforms
+
+**Desk (§3.1) was simply absent.** `CustomersClient`'s `jumpDays` began `if (!mobile) return []`,
+so there was nothing to hang a control on; `SuppliersClient`'s drawer had no jump state at all.
+Both drawers now mount the calendar in `.drawbar` beside `RangeMenu`.
+
+**One component (§3.2).** `LedgerJumpControl` in `LedgerDrawerKit` is now the whole control —
+button, open state, and the unchanged `LedgerJump` grid — with `container="sheet" | "popover"` the
+only difference between tiers. `MobileFilterRow` delegates to it (the phone still gets 404 §3's
+bottom sheet, by name); the two drawers pass `container="popover"`.
+
+**The landing is still `useLedgerJump`, with its signature untouched** (three suites assert it).
+"Reachable" differs by tier, so the third argument does: the phone calls `paging.growTo(to)`, the
+desk turns to the page holding row `to - MOBILE_LIST_PAGE`, exactly as 357 §2's deep link does.
+`data-day` was added to all four desk tables on each book (8 on Suppliers, 9 on Customers) and the
+desk tabpanel carries the box ref. Suppliers' desk picker follows the tab in front and pages that
+tab's own pager.
+
+CSS: `.drawjump` (positioning context) + `.drawjump .ledjump` (hangs BELOW the bar, pinned to the
+button's inline end so RTL opens inward) and `.refcell__lnk` (inherits the cell's ink, underlines
+on hover only — a blue link inside a clickable row would read as two actions).
+
+### §4 — check-env
+
+Rule 7 exempts a `NEXT_PUBLIC_*_BASE_URL` whose value starts with `/`. Narrow on purpose: the
+rule exists for a BARE HOST, which `fetch` rejects silently; a leading `/` is unambiguous.
+`NEXT_PUBLIC_API_BASE_URL=api.example.com`, `=api/`, and `API_INTERNAL_URL=/api` are all still
+findings. Verified by running the script against temp `.env` files.
+
+### Tests
+
+New suite `packages/ui/src/lib/live-marker-nav-and-ledger-dates-418.spec.tsx` — 25 tests.
+§1 is a REAL reader run: `lib/api`/`lib/session` are mocked, a fake SSE body delivers ten
+heartbeats and then one `sale.completed`, and the stamp is asserted before and after (a grep could
+not have caught this bug — the wrong code looked right). §2 mixes source census (a control is an
+anchor) with behaviour (a plain click is guarded, a ctrl-click is not asked at all) and pins the
+two surviving `router.push` sites. §3 renders the popover, taps a dotted day and asserts the row
+it names is the one `scrollIntoView` was called on, plus dead days and month bounds. §4 executes
+`check-env.sh` against temp `.env` files, 402's own harness.
+
+**On the spec's "a Playwright run":** this repo has no Playwright — no config, no `test:e2e`
+script, no browser runner — so adding one would be a toolchain step, not this fix. The acceptance
+it asks for (tap a dotted day, assert the list scrolled to that date) is implemented as a jsdom
+render in the kit's own suite, which is the instrument every other ledger behaviour in this repo
+is proved with (372 §1's landing test is the direct precedent).
+
+Five older assertions pinned the exact shapes this step refactored and were updated to assert the
+same guarantee through the new one: `client-nav-and-layer-gestures` (the modifier chain →
+`isModifiedClick`), `leftovers-and-live-sync-390` (the marker's import line),
+`new-purchase-as-page-296` (×3: the five New-purchase offers now count links as well as `go()`
+calls; the guard's chain; the nav import), and `mobile-list-paging-404` (the phone asks for
+`container="sheet"` rather than drawing `<LedgerJumpSheet>` inline).
+
+### Gates
+
+`pnpm lint` clean (incl. design-drift, token-integrity, tenant-english-only, search-select,
+page-titles). `pnpm typecheck` clean. `packages/ui` suite: 220 files, 5830 tests, all passing.
+No new i18n keys — the picker reuses `pdLedJumpTitle` / `pdLedJumpPrev` / `pdLedJumpNext` /
+`pdLedJumpDay`, so EN/UR parity is untouched.
+
+### Files
+
+`apps/web/lib/stock-live.ts`, `apps/web/lib/leave-guard.ts`, `apps/web/lib/client-nav.tsx`,
+`apps/web/components/shell/PageLiveSync.tsx`, `apps/web/components/pharmacy/LedgerDrawerKit.tsx`,
+`apps/web/app/(app)/pharmacy/{purchase/PharmacyPurchaseClient,recent-sales/RecentSalesClient,
+suppliers/SuppliersClient,customers/CustomersClient,accounting/AccountingClient,
+inventory/alerts/StockAlertsClient}.tsx`, `apps/web/app/globals.css`, `scripts/check-env.sh`,
+`packages/ui/src/lib/live-marker-nav-and-ledger-dates-418.spec.tsx` (new) + the four updated suites.
