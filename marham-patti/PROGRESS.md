@@ -6,9 +6,9 @@
 
 ## Current Status
 - **Project:** Marham Patti — multi-tenant white-label healthcare platform.
-- **Phase:** **PHASE 48** — owner's report, part 2 (415–416). 416 is `feature/*` (`DEPLOY FEATURE`). Target branch is still `staging`.
-- **Last completed:** **415 — pos-print-dialog-and-quotation-documents** — DONE (2026-09-07).
-- **Next:** **416 — saved-quotations** — specs/416-saved-quotations.md
+- **Phase:** **PHASE 48** — owner's report, part 2 (415–416). Complete. Target branch is still `staging`.
+- **Last completed:** **416 — saved-quotations** — DONE (2026-09-07).
+- **Next:** none — awaiting the next report part [HUMAN_REQUIRED]
 - **Group order:** 415 → 416. One step per session. Never skip a number.
 - **GOLDENS ARE THE ACCEPTANCE:** the thermal goldens, plus the quotation golden 415 wrote.
 - **EVIDENCE FIRST:** side-by-side images under `specs/evidence/` for every "to mockup" item.
@@ -16,6 +16,7 @@
 - **After this:** next report part → owner's 401 steps → v1.0.0 promote.
 
 ### Recent steps
+- **416 — saved-quotations** — DONE (2026-09-07) — quotations are numbered records, listed in the register and convertible to a sale.
 - **415 — pos-print-dialog-and-quotation-documents** — DONE (2026-09-07) — XL print dialog, quotation on both papers, licence and NTN, default output.
 - **409–414** — DONE.
 

@@ -29662,3 +29662,163 @@ via `turbo run test --dry=json` that `@mp/db#test <- ["@mp/db#build", "@mp/share
 (`@mp/db` and `apps/api` are the only consumers of `@prisma/client`).
 
 Gates: `pnpm lint` 18/18 pass, `pnpm typecheck` 32/32 pass. No source or schema change.
+
+## 416 — saved-quotations — DONE (2026-09-07)
+
+**Type:** FEATURE. Branch `feature/416-saved-quotations`. Spec: `specs/416-saved-quotations.md`. No CODEREF covers 416.
+
+**The owner's decision (7 Sep).** Until this step a quotation was a printed cart: 318 §5 built the model in the
+browser, put it on paper and posted it nowhere, deliberately committing nothing. 416 makes it a RECORD —
+numbered, valid until the shop closes, listed, convertible — while keeping the promise that made 318 §5 safe:
+**saving a quotation moves no stock, writes no ledger row and has no day-close effect.**
+
+### §1 — the model
+- `schema.prisma`: `enum QuotationStatus { OPEN CONVERTED EXPIRED CANCELLED }`, `model Quotation`,
+  `model QuotationNumberSequence`. The quoted cart lives in `payload Json` in the SAME shape a `HeldSale`
+  parks (plus each line's row total and unit label), which is what lets "Convert to sale" re-hydrate through
+  the code path a resumed hold already uses instead of a second one written beside it. The money is ALSO in
+  columns (`subtotal`, `item_discount`, `bill_discount`, `tax`, `quote_total`) because the register lists,
+  sorts and searches by quoted total, and folding a JSON blob per row is the scan 391 §3 removed from sales.
+- `valid_until` is an INSTANT, not a clock: 415 §3's `quotationClosingTime()` reads the hour out of the shop's
+  own free-text opening hours, and the new `quotationValidUntilAt()` turns it into the instant on the quoted
+  day IN THE TENANT'S ZONE (387 §4's rule). `valid_until_label` keeps the hour as the paper words it (`11pm`).
+  A shop with no readable hour gets the END OF THE QUOTED DAY — never "never", never "now".
+- One migration, `20260914000000_saved_quotations`: two tables, one enum, additive only, both under
+  `apply_tenant_rls()`. `(tenant_id, number)` unique (gapless per-tenant `QT-0412`), `(tenant_id,
+  converted_sale_id)` unique so one sale can never be claimed by two quotations, `client_action_id` unique so
+  a replayed offline save never burns a second number. `sales` is UNTOUCHED — the pointer goes one way only.
+- New advisory-lock namespace `QUOTATION_NUMBER_LOCK_NAMESPACE = 4_160_001` (its own, so quoting never queues
+  behind a checkout); the number is claimed under it inside the inserting transaction (61/190/213 pattern).
+
+### §2 — flows
+- **`@mp/shared/pharmacy-quotations.ts`** — the shapes and the rules: `formatQuotationNumber` (`QT-0412`),
+  `quotationValidUntilAt` / `closingMsIntoDay`, `quotationEffectiveStatus`, `quotationTransition` (the
+  optimistic lock; `EXPIRED → CONVERTED` is REFUSED because §3 re-quotes rather than flips), `quotationCounts`,
+  `quotationMatches`, `quotationPriceDiff`, `QUOTATION_CHANGED` + `quotationChangedEvent`, and the row/detail
+  view types. `zone-day.ts` gained `zoneDayInstant()` so the closing instant is resolved with the same two-pass
+  offset logic `zoneDayStart`/`zoneDayEnd` use rather than by adding milliseconds to a start instant.
+- **API: a NEW module, `apps/api/src/quotations/`** (controller, service, repository + Prisma impl, dto,
+  constants, module, sweeper, fakes). Its own module rather than a fourteenth pharmacy controller, and the
+  separation IS the design: the service is constructed with a store that can only reach the `quotations`
+  table, `BrandService` and the Recent-sales publisher, so §1's no-side-effect rule is a shape rather than a
+  discipline. Asserted twice in the suite — behaviourally, and structurally (the module names no stock,
+  ledger, day-period or customer-payment seam anywhere).
+  Routes under `pharmacy/quotations`: `GET /` (list + chip counts, server-side search over number, customer
+  and PRODUCT NAME inside the cart), `GET /:id`, `POST /` (save), `POST /:id/cancel`, `POST /:id/convert`.
+- **Conversion is NOT implemented in the service.** The counter loads the quoted cart, re-prices it and rings
+  an ORDINARY sale through the frozen commit path; `POST /:id/convert` records which sale that was, AFTER the
+  commit. A lost mark leaves the sale standing and the quotation OPEN (the sweep later expires it) — nothing
+  is double-counted. The reverse ordering would not be safe, which is why it is not the one used.
+- **POS (`PosClient.tsx`):** `openQuotation` is now async and SAVES FIRST — a failed save prints nothing and
+  says so; the number on the sheet is the server's (`QuotationInput.quotationNo` → the model's `quotationNo`,
+  a field 415 had already pre-wired into `ThermalReceiptInput` and both renderers). `cancelQuotation` posts
+  the record's own cancel. `?quotation=<id>` loads a saved quotation into the cart, computes the price diff
+  and shows it as a banner beside `inactiveCustomerNote` on both tiers before anything commits; the commit
+  then marks the quotation converted. The hold-resume re-hydration was EXTRACTED into `hydrateCartLines()` and
+  is now shared by both callers — which is what makes "prices re-read at conversion" true by construction
+  rather than by a second implementation.
+- **`PrintScreen.tsx`:** new optional `onCancelQuotation`. Behind the ⋯ on the phone (and the ⋯ now exists at
+  every roll for a quotation, since 415 §2's "no menu over an empty list" rule no longer applies) and as a
+  ghost button on the desk's action card.
+- **Register (`RecentSalesClient.tsx` + new `QuotationsPanel.tsx`):** a two-chip TAB strip in the register's
+  own `.filterchips` kit, and the Quotations list built from the register's own kits — `.filterchips` for the
+  status row, `.tbl-wrap`/`.tbl-toolbar`/`table.tbl` for the desk, `.msalelist` cards for the phone,
+  `StatusPill`, `.rowacts`/`.iconbtn`, `.emptystate`, and the same `Panel` for the detail. No new design (the
+  owner agreed); the only new CSS is the tab strip's hairline and the detail body's three rules. Actions:
+  View · Print (re-renders THE RECORD, never re-priced) · Convert (a LINK to `/pharmacy/pos?quotation=<id>`;
+  nothing about money happens in that file) · Cancel. A control a row cannot use is ABSENT, not greyed.
+- **§2.5 permissions:** `sales.quotation.create` and `sales.quotation.convert`, both flagged on `pharmacy.pos`.
+  Defaults per the owner: create → PHARMACIST, SALESMAN, CASHIER (the counter roles that have printed
+  quotations since 318 §5); convert → MANAGER and ADMIN; TENANT_OWNER holds both by construction. Enforced on
+  the endpoints AND gated on the screen.
+- **§2.6 realtime:** `quotation.changed` joins `SALE_LIVE_EVENTS`, so quotations ride the Recent-sales scope
+  of the spec-112 bus — no second stream. The frame carries no figure (413 §1); the tab re-reads. Because
+  `useSaleLive` routes an unrecognised envelope to `onChange` (343 §2's rule), the register only needed a new
+  `liveTick` counter bumped there — `lastEventAt` stays the live indicator's own clock.
+
+### §3 — expiry
+`QuotationExpirySweeper` — an in-process interval in the sanctioned shape (62/76/demo), gated by the new
+`QUOTATION_EXPIRY_ENABLED` / `QUOTATION_EXPIRY_MINUTES` config (off by default, documented in `.env.example`),
+non-overlapping, never throws out of a tick. Per tenant, under that tenant's own RLS scope; the only
+platform-level read is the tenant list (the sweep's outer loop). **A late sweep never lies:** the list and the
+detail both read `quotationEffectiveStatus`, so a quotation past its hour reads EXPIRED whether or not the
+timer has fired. Converting an EXPIRED quotation re-quotes (a new record, today's prices); the old row stays.
+
+### Decisions recorded (no approval gates)
+- Convert is marked AFTER the commit rather than inside it — see above; the failure mode is benign in one
+  direction only.
+- `sales.quotation.convert` follows the spec literally (Manager, plus Admin as the owner's deputy, matching
+  how `pharmacy.sale.void` is written). SALESMAN sells but does not convert; the owner can change it.
+- The Quotations tab is component state on the register, not a route: a reader flipping between the two lists
+  should not lose the month, the search or the scroll position of either.
+
+### Tests written (controller runs the gates)
+- `packages/db/src/quotations-isolation-416.spec.ts` — pglite over every migration in order: forced RLS on
+  both tables, fail-closed with no GUC, WITH CHECK, per-tenant number uniqueness, one-sale-one-quotation,
+  nulls do not collide, and `sales` untouched.
+- `apps/api/src/quotations/quotations-416.spec.ts` (+ `__fakes__.ts`) — the no-side-effect rule behaviourally
+  AND structurally, gapless numbering, offline idempotency, the closing instant in the tenant zone, list and
+  server-side product search, the conversion pointer and its refusals, cancel, the transition lock, the price
+  diff, the realtime frame, the expiry job and the late-sweep guarantee, and the two permissions.
+- `packages/ui/src/lib/saved-quotations-416.spec.ts` — save-before-print, the dialog's cancel, the tab on both
+  tiers built from the register's kits, Convert-is-a-link, the shared re-hydration, the diff banner before
+  commit, the mark-after-commit ordering, the pure rules exercised, and EN+UR parity for every new key.
+
+### Local verification
+`pnpm prisma generate`, `pnpm lint` and `pnpm typecheck` — clean (the one remaining lint warning is a
+pre-existing unused eslint-disable in `doctor-portal.repositories.ts`, untouched by this step). The three new
+suites plus `packages/i18n` and the two schema-drift specs were run individually and pass; the full gates are
+the controller's.
+
+WORK TYPE: FEATURE (branch feature/416-saved-quotations)
+
+## 416 gate fix — realtime audit table (2026-09-07)
+`pnpm test:unit` failed one assertion in `apps/api/src/pharmacy/realtime-everywhere-343.spec.ts` §1
+("lists exactly the surfaces that exist"): step 416 added
+`apps/web/app/(app)/pharmacy/recent-sales/QuotationsPanel.tsx` without an entry in the 343 audit table,
+which is exactly what that suite exists to catch.
+
+Decision: the panel is recorded as EXEMPT, not as a subscriber. It holds no socket of its own —
+`RecentSalesClient.tsx` owns `useSaleLive`, and 416 §2.6 routes the quotation frame
+(`QUOTATION_CHANGED`) through that same sale scope, bumping a `liveTick` that is passed into the tab.
+One reader per screen; a second hook here would open a second reader for the same events. Verified
+the panel imports neither `lib/stock-live` nor `useNotificationFeed`, so the "exempt does not quietly
+subscribe" assertion holds too.
+
+Files: `apps/api/src/pharmacy/realtime-everywhere-343.spec.ts` (one audit entry + rationale comment).
+Gates: `pnpm lint` — 0 errors (1 pre-existing unused-eslint-disable warning in
+`doctor-portal.repositories.ts`, untouched); `pnpm typecheck` — clean. Audit table now matches the
+93 surface files under `(app)` exactly.
+
+## Gate fix — 416 saved-quotations, `pnpm test:unit` (2026-09-07)
+
+Five failures, all of them the step's own edits showing up in guards written by earlier steps.
+Code only; no behaviour added.
+
+1. **`@mp/db` `reseed-staging.spec.ts` — the partition was no longer total.** 416 added two
+   tenant-scoped models and the 360 reseed lists knew neither, so "every tenant-scoped model is on
+   exactly one side of the wipe" failed with `Quotation` and `QuotationNumberSequence` missing.
+   Both are TRADING HISTORY, not masters: a quotation is a document about a sale that may never
+   have happened, and its counter is cleared with the documents it numbered exactly as
+   `HeldSaleNumberSequence` is. Added to `RESEED_TRADING_ORDER` (after `HeldSale`, and beside the
+   other sequences). Neither declares a `@relation`, so the FK-order check is unaffected.
+2. **`@mp/ui` `ci-runtime-409.spec.ts` — the migration was dated a week into the future.**
+   `20260914000000_saved_quotations` on a 7 Sep commit is precisely the mistake 409 §2 was written
+   to catch, and it caught it. Renamed to `20260907120000_saved_quotations` (unapplied anywhere, so
+   no checksum drift), and the one spec naming the folder follows it. NOT grandfathered: that list
+   is for stamps already applied on dev and staging.
+3. **`@mp/ui` 287 §1 — a fourth site clearing the hold attribution.** The quotation loader
+   re-typed the three `setActiveHeld*(null)` lines the ending paths already share. It now calls
+   `clearCart()` — the same function `clear`, the confirm dialog and the commit path use — and then
+   lays the quoted cart over it. Identical state, one less copy, and the "three sites" rule holds.
+4. **`@mp/ui` 298 §1 — the rule moved, so the grep moved with it.** 416 lifted the resume's
+   re-hydration into `hydrateCartLines` so a conversion goes through the same read. The assertion
+   now checks the resume CALLS it and that the function is what re-reads the lots per product,
+   which is where the guarantee actually lives.
+5. **`@mp/ui` 367 §1.5/§1.6 — two stale anchors on `RecentSalesClient`.** The KPI slice ended at
+   `{chips}`, which the Quotations tab strip now sits above; it ends at `{tabStrip}`. And
+   `onRefetch` is a block since the reconnect ticks the Quotations tab too, so the test reads the
+   handler's body rather than a one-line arrow. Both still assert what they always did.
+
+Gates: `pnpm lint` clean (one pre-existing unused-disable warning in `doctor-portal.repositories.ts`),
+`pnpm typecheck` clean, `@mp/ui` 218 suites / 5782 tests green, `@mp/db` 81 suites / 710 tests green.
