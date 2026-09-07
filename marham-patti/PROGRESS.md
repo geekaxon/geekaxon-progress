@@ -6,18 +6,17 @@
 
 ## Current Status
 - **Project:** Marham Patti — multi-tenant white-label healthcare platform.
-- **Phase:** **PHASE 48** — owner's report, part 2 (415–416). Complete. Target branch is still `staging`.
-- **Last completed:** **416 — saved-quotations** — DONE (2026-09-07).
-- **Next:** none — awaiting the next report part [HUMAN_REQUIRED]
-- **Group order:** 415 → 416. One step per session. Never skip a number.
-- **GOLDENS ARE THE ACCEPTANCE:** the thermal goldens, plus the quotation golden 415 wrote.
-- **EVIDENCE FIRST:** side-by-side images under `specs/evidence/` for every "to mockup" item.
-- **QUOTATION = RECORD (416):** numbered, valid until closing, no stock/ledger/day effect until converted.
+- **Phase:** **PHASE 48** — owner's report, part 3 (417–419), all `fix/*` (`DEPLOY FIX`). Target branch is still `staging`.
+- **Last completed:** **417 — quotation-dialog-and-documents-round-2** — DONE.
+- **Next:** specs/418-live-marker-nav-and-ledger-dates.md
+- **Group order:** 417 → 418 → 419. One step per session. Never skip a number.
+- **REUSE (419):** the merge page mounts New sale return's header, rail and rows; a merge-only component is deleted.
+- **ONE TIME SOURCE (418):** `lastUpdatedAt` moves on data events and completed refreshes only; heartbeats never.
 - **After this:** next report part → owner's 401 steps → v1.0.0 promote.
 
 ### Recent steps
-- **416 — saved-quotations** — DONE (2026-09-07) — quotations are numbered records, listed in the register and convertible to a sale.
-- **415 — pos-print-dialog-and-quotation-documents** — DONE (2026-09-07) — XL print dialog, quotation on both papers, licence and NTN, default output.
-- **409–414** — DONE.
+- **417 — quotation-dialog-and-documents-round-2** — DONE (2026-09-07) — the powered-by mark names the platform; the dialog fits the screen.
+- **418–419** — AUTHORED — live marker, Ctrl-click, ledger dates · merge = New sale return pattern.
+- **415–416** — DONE.
 
 > Older steps in PROGRESS-HISTORY.md

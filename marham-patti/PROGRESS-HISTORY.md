@@ -29822,3 +29822,150 @@ Code only; no behaviour added.
 
 Gates: `pnpm lint` clean (one pre-existing unused-disable warning in `doctor-portal.repositories.ts`),
 `pnpm typecheck` clean, `@mp/ui` 218 suites / 5782 tests green, `@mp/db` 81 suites / 710 tests green.
+
+## 417 — quotation-dialog-and-documents-round-2 — DONE (2026-09-07)
+
+Branch `fix/417-quotation-dialog-and-documents-round-2`. Spec `specs/417-quotation-dialog-and-documents-round-2.md`.
+
+### §1 — why the screen and the golden disagreed (the evidence, first)
+
+**The golden tests, run before any edit** (`npx jest goldens-415 goldens-411` from `packages/escpos`;
+`pnpm --filter` does not work in this repo, and `pnpm test:unit` is the controller's gate):
+
+```
+PASS src/goldens-415.spec.ts
+PASS src/goldens-411.spec.ts
+
+Test Suites: 2 passed, 2 total
+Tests:       73 passed, 73 total
+Snapshots:   0 total
+Time:        2.63 s, estimated 15 s
+Ran all test suites matching /goldens-415|goldens-411/i.
+```
+
+**`git log -p -- specs/415-goldens specs/411-goldens` — no golden has been edited since it was
+uploaded.** Two commits touch either directory, and each one CREATES files:
+
+```
+6c69cc5 fix(web,escpos,shared,db,api,i18n): step 415 — pos-print-dialog-and-quotation-documents
+ specs/411-goldens/quotation-80mm.txt | 55 -----------------------
+ specs/415-goldens/quotation-80mm.txt | 87 ++++++++++++++++++++++++++++++++++++
+112d94f fix(escpos,api,web): step 411 — thermal-receipt-to-golden
+ specs/411-goldens/quotation-80mm.txt  |   55 ++
+ specs/411-goldens/thermal-goldens.txt | 1514 ++++++++++++++++++++++++++++++++
+```
+
+411's quotation golden was DELETED and replaced by 415's in the same commit as 415's spec, which is
+the rule; `thermal-goldens.txt` has not been touched since it was extracted from the mockup, and
+`goldens-411.spec.ts` re-extracts it from `specs/mockups/pharmacy/thermal-receipt.html` on every run
+(`extract-goldens.mjs --check`), so a hand-edited row could not have passed anyway.
+
+**So the screen and the golden do NOT disagree about `Not a tax invoice` or about the units in
+parentheses: `specs/415-goldens/quotation-80mm.txt` prints both, by 415 §3.1's own sentences.**
+Both are the acceptance this repo committed to. They are recorded here as a decision for the owner
+rather than changed on a report that did not ask for them to be changed.
+
+**There is NO second renderer in the web.** The POS preview and the printed bytes are one path:
+`apps/web/lib/print-document.ts` → `documentLines()` → `receiptLines(renderDocument(...))`, i.e. the
+rows are read back out of the very bytes `printDocument` sends, and `goldens-415.spec.ts` asserts
+`renderLines(...)`, which is the same `receiptLines(renderSaleReceipt(...))`. `apps/web/.../PrintScreen.tsx`
+imports nothing from `@mp/escpos` (282 §3's seam). `components/pharmacy/quotation-doc.ts` is the A4
+sheet's assembly, not a thermal composition, and is untouched as such.
+
+**What WAS wrong, and the file that produced it:**
+`apps/web/app/(app)/pharmacy/pos/QuotationSheet.tsx` → `quotationBranding()` sets
+`appName: brand.identity.appName` — on a white-label tenant that IS the tenant's own product name —
+and `packages/escpos/src/render.ts` composed the credit as `` `${labels.poweredBy} ${field(id.branding.appName)}` ``.
+Every shop on the platform printed `Powered by <its own name>`; the owner's slip read
+`Powered by Ganatra Clinic`.
+
+Fixed as §1.3 asks: `PLATFORM_NAME = 'Marham Patti'` and `PLATFORM_URL = 'www.marhampatti.com'` are
+constants in `packages/escpos/src/receipt-copy.ts`, exported from the package index, and `render.ts`
+prints them. `branding.poweredBy` still decides whether the mark prints at all (the plan's switch,
+136 §2.2.4); no tenant field reaches either row. New suite
+`packages/escpos/src/platform-credit-417.spec.ts` (8 tests) renders a tenant whose name, app name
+and URL are all tells, at 24/32/48 columns, on a quotation and on a sale, and asserts none of them
+appears anywhere in the credit block.
+
+§1.4 — `WORDS_24.stackedQtyHead` was `Qty x Unit` over a cell holding `4 x 145.00`. It is
+`Qty x Rate` now, like the 58mm roll. Because the goldens are EXTRACTED, the mockup changed with
+them: `specs/mockups/pharmacy/thermal-receipt.html` (6 occurrences),
+`specs/411-goldens/thermal-goldens.txt` (6), the three `__golden__/*-48.txt` files and
+`receipt-to-mockup-396.spec.ts`. `goldens-411`, `goldens-415`, `properties` and
+`receipt-to-mockup-396` are green after (131 tests).
+
+### §2 — the desktop dialog
+
+- The `Valid today` badge moved off the row of paper tabs and beside the TITLE. `<ModalHead>` and
+  `<Panel>` grew one opt-in slot (`titleBadge`) that fills both frames' headers, at the kit's 8px
+  gap (`.cxdialog__tr` / `.panel__headline`).
+- The destination chip gains the "nobody has set a printer up" case: `No printer set · print dialog`
+  (`pharmacyPos.print.destNoPrinter`, EN + UR), rendered as an `AppLink` to `/settings?s=printing`.
+- **The dialog is `calc(100vh - 32px)` tall** (`dvh` where supported) and the only scroller is the
+  preview: `.mp-pdlg.mp-inv2 .modal__body { overflow:hidden }` (three classes, because
+  `.mp-inv2 .modal__body`'s own `overflow-y:auto` is declared later in the file and was winning),
+  `.pscr--dlg .pscr__side { overflow:visible }`, and — the rule that actually made it true —
+  `.pscr--dlg .pscr__grid { grid-template-rows:minmax(0,1fr); align-items:stretch }`. The grid was
+  sized to the body but its implicit ROW still tracked a 1013px A4 preview, so the body took the
+  scroll and the paper did not.
+- *This quotation* is Counter · Customer · Valid until · Quoted total · the note. The Cashier row is
+  gone; so is *Cancel this quotation*, which moves to Recent sales › Quotations (416 §2.2, already
+  built there against the same endpoint). `onCancelQuotation` is deleted from `PrintScreen`, and
+  `cancelQuotation` / `savedQuotationId` from `PosClient`.
+- The A4 preview scales to the pane it is in: the screen measures `.pscr__desk` with a
+  `ResizeObserver` and publishes `--pscr-a4-scale = pane / 794`. 415's three hand-computed scales
+  (0.82 desk, 0.34 sheet) survive only as CSS fallbacks for the first paint.
+
+### §3 — the mobile sheet
+
+Head is icon + `Quotation` + badge again (the icon came back once the tabs left). The four paper
+tabs are the FIRST ROW OF THE BODY at full width (`.pscr__mbar`) with the destination chip on one
+line under them; nothing is passed to the sheet head's badge slot, and 415's `sheet__hd--stack`
+rules are deleted with the row that needed them. The thermal strip's type size is solved for the
+pane (`--pscr-strip-fs`, from `cols × 1ch + 28px`) so no roll scrolls sideways; the A4 tab uses the
+same measured scale. `hasMore` is `chosen === 'a4'`, so a thermal width has no ⋯ and Print takes the
+whole footer. POS `Clear cart` was already the danger icon button (415) — unchanged.
+
+### §4 — the A4 quotation
+
+`Unit` is its own column (`QUOTE_COLS = [20,250,60,56,104,106,118]`, still 714px); the THERMAL roll
+keeps the unit on the description — the owner's decision, per document, and `goldens-415` still pins
+it. Headings uppercase and cells vertically middle via `.tbl--quote`; masthead blocks top-aligned
+independently via `.mh--quote`. `DL … · NTN …` is one line. The `Valid today` badge has its own line
+under the date. *Quotation from* drops the Cashier row and is built from the rows that EXIST, so an
+unset field collapses instead of leaving a blank line. The meta strip drops `Valid` (stated twice
+already). Page 2+ shows the quotation number and nothing else.
+
+**The dropped customer**: `PosClient`'s quotation branch of `printDialog` passed `invoice={{ soldAt }}`
+with no `customer`, while the sale branch has passed one since 397 — and `buildQuotationDoc` reads
+`invoice?.customer`. `Print only` therefore produced a sheet made out to *Walk-in customer* for a
+named customer. It now passes the same shape the sale does, off the same `selectedCustomer`.
+
+### §5 — evidence and gates
+
+`scripts/evidence-417.mjs` renders both surfaces from the SHIPPED `apps/web/app/globals.css` (there
+is still no quotation dialog in the committed mockups — `grep -i quotation` over `pos-desktop.html`
+and `pos-mobile.html` returns nothing — and each image's caption says so). It also MEASURES: it
+opens the dialog in a 1366×768 iframe and reads `scrollHeight − clientHeight` off the dialog root,
+the body and the card column, writing `specs/evidence/417-overflow.json`:
+
+```
+{"viewport":{"w":1366,"h":768},"dialog":{"height":736,"overflow":0},
+ "body":{"overflow":0},"side":{"overflow":0},"deskScrolls":true}
+```
+
+The script throws rather than writing a picture of a broken layout, and it found the grid-row bug
+above. Images: `specs/evidence/417-dialog-desktop.png`, `417-sheet-mobile.png`.
+
+New suite `packages/ui/src/lib/quotation-dialog-and-documents-417.spec.ts` (23 tests, green).
+415's and 416's suites are updated where 417 supersedes them, each with a note saying what moved and
+what the earlier step still owns: the badge's position, the phone's head row, the unit's place on
+A4, `DL · NTN` as one line, the seven columns, and the cancel's home.
+
+Gates: `pnpm lint` clean (one pre-existing unrelated warning in `@mp/api`), `pnpm typecheck` clean
+(32 tasks). Targeted jest: escpos 131 passed, ui 415/416/417 suites 92+ passed.
+
+**For the owner, two open items rather than silent changes:** `Not a tax invoice` and the units in
+parentheses under the item name on the 80mm roll are what `specs/415-goldens/quotation-80mm.txt`
+specifies, row for row. If they are to go, the golden and 415 §3.1 change together; the report did
+not say to.
