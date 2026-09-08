@@ -30354,3 +30354,180 @@ The owner's two PDFs (`QT-0027` with an address, `QT-0028` with it cleared) diff
 
 ### Gates
 `pnpm prisma generate` not needed (no schema change). `pnpm lint` and `pnpm typecheck` run once each, clean. New suites: `packages/ui/src/lib/quotation-documents-and-dates-421.spec.tsx` (25 cases — the A4 blocks RENDERED and their rows counted per cleared field, the roll rendered to bytes, the picker driven by typing and by a pointer drag, the predicate exercised) and `apps/api/src/pharmacy/quotation-documents-and-dates-421.spec.ts` (5 cases — one fully and one partly returned sale through the service, with the status flag deliberately never written). Two superseded source assertions updated with notes: 415 §1 and 417 §4's `{doc.licence || doc.taxNumber ? (` lost its JSX brace when the masthead's rows became a list.
+
+## 422 — quotation-settings-and-lifecycle — DONE (2026-09-08)
+
+**Branch:** `feature/422-quotation-settings-and-lifecycle` · FEATURE · spec `/specs/422-quotation-settings-and-lifecycle.md` · no CODEREF.
+
+### §1 — Opening hours per day
+396 §2's single free-text `receiptTimings` line printed beautifully and could not ANSWER anything:
+415 §3 had to regex the last clock off the last line to find the shutter hour, which is wrong for a
+two-line hours block on any day but the last one it names, and §2 below asks the same question about
+a day three days out. So the hours became STRUCTURE.
+
+New pure module `packages/shared/src/opening-hours.ts`: seven `OpeningDayRow`s (`closed`, `open`,
+`close`, optional `open2`/`close2` for a Zuhr break) plus ONE free-text note under them. Decision
+recorded: the note is per BLOCK, not per day — the spec's own migration clause ("keeps the old string
+as the note") only makes sense against a single note. Functions: `openingHoursSummary` (folds
+consecutive identical days into `Mon-Sat 9am - 11pm · Sun 12pm - 4pm`, omits closed days, a closed day
+BREAKS a range), `openingHoursLine` (summary · note), `closingClockOn`/`closingLabelOn`/`closingLabelAt`
+(the LAST close of that day — a break is not a closing time), `parseTypedClock`/`formatClock12`, and
+`openingHoursFromTimings`.
+
+**Migration is a READ, not a script.** `resolveStoreProfile` derives rows from `receiptTimings` when the
+blob has no `openingHours` key — pure, idempotent, on every read — so there is no backfill to run and no
+window in which half the tenants disagree with the other half. `Open daily 9am - 11pm` and
+`Mon-Sat 9am - 11pm\nSunday: 12pm - 4pm` become rows; ANYTHING else is kept VERBATIM as the note with
+every day left closed, so the printed line comes out byte-identical to what went in (`Open 24 hours`).
+Stored rows win the moment the owner saves the card.
+
+`StoreProfile` gained `openingHours` and a new `storeTimingsLine(store)` that every printing surface now
+reads instead of the raw string: `pharmacy.service.ts` (server receipts), `quotationIdentity()` (the POS
+quotation). `StoreSection` lost the timings field; new pane `OpeningHoursSection` joins `GeneralSection`
+as a fifth pane under the group's one save bar, owning exactly one store key (`openingHours`) so a stale
+form cannot revert the licence or the thermal threshold. The pane shows a LIVE PREVIEW built by
+`openingHoursLine` itself — the printing function, never a second formatter.
+
+New kit control `packages/ui/src/components/time-field.tsx` — "the app's own time field". Typed, not the
+browser's native time chrome (196's rule applied to time; the card needs fourteen of them on one screen).
+Accepts `9`, `9am`, `9 AM`, `9:30pm`, `21:30`, `09:30`; normalises on blur to `9am`/`9:30pm`; a typo is
+handed back as `null` and LEFT ON SCREEN. Its clock arithmetic is stated in the kit rather than imported
+— `@mp/ui` depends on `@mp/brand` and nothing else in the workspace, exactly as `DatePicker` states its
+own date arithmetic — and 422's suite pins it against `@mp/shared`'s copy sample for sample.
+
+### §2 — Quotation validity (days)
+`StoreProfile.quotationValidityDays`, default 1, edited in Settings → Receipts & prints (new
+**Quotations** card beside the shop's own quotation sentence). New `quotationValidity(quotedAt, hours,
+days, zone)`: `n ≥ 1` = closing time on the nth day, read off THAT day's row (a Saturday quote good for
+two days lapses at Sunday's 4pm, not Saturday's 11pm — the thing one free-text line could never do);
+a closed day gets end-of-day, 415 §3's rule unchanged; **0 stores NULL and never expires.**
+
+Schema: `Quotation.validUntil` relaxed to nullable, migration `20260914000000_quotation_validity_and_retention`.
+New model field `quotationNoExpiry` on the thermal model, distinct from an absent hour: the roll prints
+NO `Valid` row, the A4 sheet drops both the `Valid until` row and the masthead `Valid today` badge, and
+the print dialog's card drops its fact. The register says `No expiry` rather than showing a date nobody
+promised. A REPRINT reads the record's own validity, not today's setting.
+
+### §3 — Retention (owner's decision, refined)
+`StoreProfile.quotationRetentionDays`, default 60. New column `Quotation.linesClearedAt`. New shared rule
+`quotationLinesDue` + `clearedQuotationPayload`; new repo method `clearLinesDue` (matches only
+`EXPIRED`/`CANCELLED` with `linesClearedAt IS NULL`, conditional per row so overlapping ticks clear once);
+new service `clearDueLines()` reading the retention days PER TENANT inside the loop (0 skips the tenant
+entirely) and capped at `QUOTATION_RETENTION_BATCH = 500` per tick so the first run after deploy drains a
+backlog over several nights. The lines go; the header — number, customer, totals, dates, status — stays.
+`OPEN` and `CONVERTED` are unreachable from the predicate by construction.
+
+Second timer and second switch on `QuotationExpirySweeper` (`QUOTATION_RETENTION_ENABLED`,
+`QUOTATION_RETENTION_HOURS`, daily, off by default, own overlap guard, logged per run and silent on a
+zero run). Kept in the same class because it is the same quotation's lifecycle read at two speeds; kept
+on separate timers because a 15-minute status stamp and a nightly deletion are not the same risk.
+A quotation with no validity at all is measured from `createdAt` instead. The list marks such rows
+`Lines cleared`, the detail says so in words instead of drawing an empty table, and Print/Convert are
+ABSENT on them (405 §2) — including at the URL, so a bookmarked convert link is refused too.
+
+### §4 — Price honesty at conversion
+§4.1 `QUOTATION_PRICE_HONESTY` in `@mp/shared` — *"Prices valid today only. Subject to stock at the time
+of sale."* — printed under the NOT A SALE block, before the shop's own optional note, on both papers.
+The roll's copy table spells the string out rather than importing it (this package takes only TYPE
+imports from the domain package — 280 §3) and the suite pins the two against each other. The 80mm golden
+`specs/415-goldens/quotation-80mm.txt` gained the two centred rows; they were computed through the real
+`wrap`/`padCentre`, not typed by hand.
+
+§4.2 `QuotationLine.batchNo` — the FEFO lot a line was priced against, saved as a WITNESS and never a
+reservation (a quotation still holds no stock), so a conversion can say `batch B-12 finished` rather
+than the weaker `price changed`. New `quotationConversionPlan` reports only what MOVED, with
+`UNAVAILABLE` / `BATCH_FINISHED` / `PRICE_CHANGED` and `honourable` (true only where the QUOTED price is
+the lower — there is no mechanism for charging above the shelf and no shop wants one).
+
+**The ORDER changed.** 416 loaded the cart and then said what had moved; §4.2 requires the panel BEFORE
+the cart opens, and the difference matters the moment a line is unsellable. `PosClient` now fetches,
+re-reads through `hydrateCartLines` (the resumed-hold path, which is what makes "re-reads FEFO batches
+and prices" a fact about the code path), builds the plan, and — if anything moved — opens a `cxdialog`
+diff panel with the cart untouched. Three answers per line: today's price, keep quoted, drop. Unavailable
+defaults to DROP. Cancel is a genuine no-op. An empty plan opens the cart straight away, which is 416's
+behaviour unchanged. Honouring commits as the ordinary manual line discount the frozen path already
+takes (`honourDiscountPct`); the REASON (`quotationHonourReason` → `Honoured quotation QT-0412`) is shown
+on the row as it is chosen and travels to `POST :id/convert`.
+
+§4.3 New permission `sales.quotation.honour-price` (TENANT, gated on `pharmacy.pos`, ADMIN + MANAGER
+defaults, Owner by construction). The panel hides the control; the convert endpoint REFUSES a body with
+honoured lines from a principal without the key (`PermissionService.can`) and audits the honoured lines
+with the reason when it allows them — ARCHITECTURE principle 6 applied to the only artefact that
+outlives the conversation at the counter. Recorded decision: the sale itself commits through the frozen
+POS path, which has no per-line reason field on the wire, so the reason lives on the quotation's
+conversion audit entry rather than on the sale line.
+
+### Files
+`packages/shared/src/opening-hours.ts` (new), `store-profile.ts`, `pharmacy-quotations.ts`,
+`pharmacy-payment.ts`, `permissions.ts`, `index.ts`; `packages/ui/src/components/time-field.tsx` (new),
+`index.ts`; `packages/escpos/src/receipt-copy.ts`, `render.ts`; `packages/config/src/index.ts`;
+`packages/db/prisma/schema.prisma` + migration `20260914000000_quotation_validity_and_retention`;
+`apps/api/src/quotations/{constants,dto,repository,service,controller,quotation-expiry.sweeper,__fakes__}.ts`;
+`apps/api/src/pharmacy/pharmacy.service.ts`; `apps/web/app/(app)/settings/sections/OpeningHoursSection.tsx`
+(new), `{General,Store,Receipts}Section.tsx`; `apps/web/app/(app)/pharmacy/pos/{PosClient,PrintScreen,QuotationSheet}.tsx`;
+`apps/web/app/(app)/pharmacy/recent-sales/QuotationsPanel.tsx`;
+`apps/web/components/pharmacy/{QuotationDocument.tsx,quotation-doc.ts}`; `apps/web/app/globals.css`;
+`packages/i18n/src/messages/{en,ur}.json`; `.env.example`; `specs/415-goldens/quotation-80mm.txt`.
+
+### Tests
+`packages/ui/src/lib/quotation-settings-and-lifecycle-422.spec.tsx` — the hours arithmetic RUN (summary,
+ranges broken by a closed day, the Zuhr second interval, the migration's three shapes, read-time
+migration), the time field RENDERED and typed into (not a native control, no numeric keyboard, normalise
+on blur, a typo left on screen), the kit/shared clock parsers pinned sample for sample, validity against
+instants including the 0 case from both ends, the retention predicate at its boundary and on every
+status, the roll rendered TO BYTES for both §4.1's sentence and §2's missing `Valid` row, the conversion
+plan's four cases, `honourDiscountPct` to the paisa, and the permission read out of the catalogue and
+the role defaults. `apps/api/src/quotations/quotations-422.spec.ts` — the service with the settings as
+settings: validity days 1/2/0, the sweep never expiring a null bound, retention at 59 vs 61 days,
+`OPEN`/`CONVERTED` untouched after four years, `CANCELLED` cleared, 0 skipping the tenant, idempotence,
+and the realtime frame the cleared row publishes.
+
+### Gates
+`pnpm prisma generate` ✓ · `pnpm lint` ✓ (one pre-existing warning in `doctor-portal.repositories.ts`,
+confirmed present on a clean tree) · `pnpm typecheck` ✓ (32/32). Per AGENT.md the unit gate is the
+controller's; not run here.
+
+WORK TYPE: FEATURE (branch feature/422-quotation-settings-and-lifecycle)
+
+### 422 — quotation-settings-and-lifecycle — unit-gate fix (2026-09-08)
+`pnpm test:unit` failed on `apps/api/src/pharmacy/realtime-everywhere-343.spec.ts` §1 ("lists exactly the surfaces that exist"): step 422 added `apps/web/app/(app)/settings/sections/OpeningHoursSection.tsx` and the standing audit table had no entry for it, so `found` carried one file the table did not.
+
+Fix: one line added to the AUDIT table — `settings/sections/OpeningHoursSection.tsx` marked exempt with the reason the other Settings editors carry ("422 §1 — a settings FORM (seven typed rows): a live re-read would discard unsaved work."). Checked the pane against the suite's other two assertions before choosing exempt over `hooks`: it imports neither `lib/stock-live` nor `useNotificationFeed`, so the "exempt table is not lying" test passes, and the reason is well over the 20-character minimum. No product code touched.
+
+Gates: `pnpm lint` 18/18 and `pnpm typecheck` 32/32 pass. Committed as 393ec9b on feature/422-quotation-settings-and-lifecycle.
+
+## 422 — unit-gate fix (2026-09-08)
+
+`pnpm test:unit` failed with 5 suites / 6 tests down in `@mp/ui`, all traceable to step 422's own
+changes. Fixed on `feature/422-quotation-settings-and-lifecycle` (commit `e6a0757`), code only.
+
+- `thermal-receipt-to-mockup-396.spec.ts` §2 — two failures. 422 §1 replaced the free-text
+  `receiptTimings` FIELD on the Store pane with the seven-row Opening hours card, and
+  `pharmacy.service.ts` now prints `timings: storeTimingsLine(store)`. The spec asserted the old
+  field and the old service line. It now reads `OpeningHoursSection.tsx` for the card title and its
+  `openingHours: { days: decode(form.hours), note: form.note.trim() }` save, keeps the email
+  assertions on `StoreSection.tsx`, asserts the service reads the one helper, and adds a behavioural
+  check that `storeTimingsLine(resolveStoreProfile(null))` is `''` — the §2 promise that a shop
+  which has typed no hours prints no hours line survives the move.
+- `pos-print-dialog-and-quotation-415.spec.ts` — two failures. `quotationIdentity` now takes the
+  quoted instant (`brand, at?`), `PrintScreen` reads `receipt.quotationValidUntil` rather than
+  `receipt.timings`, and the validity is folded out of the rows
+  (`closingLabelAt(store.openingHours, when, store.timezone)`) instead of
+  `quotationClosingTime(store.receiptTimings)`. Assertions retargeted, intent (resolved ONCE,
+  stated everywhere from that one answer) unchanged.
+- `saved-quotations-416.spec.ts` §2.2 — `actionable` gained 422 §3's `!q.linesCleared &&` guard and
+  wrapped onto two lines. The spec now asserts the signature line and the predicate line separately,
+  so the cleared-lines rule is covered rather than merely tolerated.
+- `quotation-documents-and-dates-421.spec.tsx` — suite failed to COMPILE: `QuotationDoc` gained
+  422 §4.1's required `priceHonesty`. The fixture now carries `QUOTATION_PRICE_HONESTY` from
+  `@mp/shared`, the same constant the roll and the sheet both print.
+- `ci-runtime-409.spec.ts` §2 — the gate BIT, correctly: 422 shipped
+  `20260914000000_quotation_validity_and_retention` on 8 Sep 2026, six days in the future. Renamed
+  to `20260908173729_quotation_validity_and_retention` (`date -u +%Y%m%d%H%M%S`), which is the fix
+  the finding names, and is what 415/416's migrations already did. The folder is off `release` and
+  off `staging`, so no applied checksum moves; it was NOT added to
+  `GRANDFATHERED_FUTURE_TIMESTAMPS`, because grandfathering a migration written the same week is how
+  the rule stops meaning anything. Only `PROGRESS-HISTORY.md` referenced the old name.
+
+Gates: the five suites re-run green (118 tests). `pnpm lint` and `pnpm typecheck` pass across all
+packages. `pnpm test:unit` / `test:e2e` / `build` left to the controller.
