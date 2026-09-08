@@ -30195,3 +30195,134 @@ Per AGENT.md the agent does not run `test:unit` / `test:e2e` / `build`; the cont
 `.gitignore` gained `.evidence-*.html` (the harness Chromium screenshots; the PNG is the artefact).
 
 WORK TYPE: FIX (branch fix/419-merge-mobile-like-new-sale-return)
+
+---
+
+## 420 — quotation-dialog-to-mockup-css — DONE (2026-09-08)
+
+**Type:** FIX. Branch `fix/420-quotation-dialog-to-mockup-css`. Spec `specs/420-quotation-dialog-to-mockup-css.md`. No CODEREF covers 420 (the highest is 113–121).
+
+### Why this step is a transcription and not a redesign
+Heading case, badge position, the destination chip and the *This quotation* card had each come back on
+the owner's report three times or more, and each time 407 / 412 / 415 / 417 answered with a FOURTH
+authoring of them in `.pscr__*`. The 8 Sep mockups carry the real classes — `.prdlg` on the take-payment
+dialog shell, `.prsheet` on the phone's bottom sheet, and every atom they are built from. So the whole of
+§1 is a copy, and "copied" is now a claim two independent gates check.
+
+### §1 — what was transcribed, and where
+A new block at the END of `apps/web/app/globals.css` (last on purpose: it has to outrank
+`.mp-inv2 .segctl--m button`'s 44px and 415/417's own `.pscr--dlg` widths on source order rather than
+on specificity). Classes: `.paydlg__hd` + `.t` + `.paydlg__esc` + `.paydlg__x` + `.paydlg__body` +
+`.paydlg__col--right`; `.destchip` + `--warn`; `.pp-actions` + `__sep`; `.pp-row`; `.pp-facts` +
+`__hd` + `.fr` + `.fr--sum` + `__grp`; `.prdlg` and all six of its parts; `.prsheet` + `__ctl` +
+`__toast` and the `.sheet__hd/__body/__foot` deltas; `.ppm-dest`; `.ppm-prev` and its modifiers.
+
+THREE ancestor names are the app's rather than the mockup's, and nothing else changed:
+`.phone` → `.mp-mobile` (the app's device scope), `[data-theme="dark"]` → `.dark` (the ThemeProvider
+toggles a class), and the mockup's generic `.card` transcribed scoped under `.prdlg` / `.prsheet`
+because the app has no such atom. `.segctl--m`'s base is also restated under `.prsheet__ctl`: the app's
+copy is scoped to `.mp-inv2` and the print sheet is `.mp-pos2`, so without it the four paper tabs were
+an inline pill instead of §4's full-width row. `.prsheet .pill*` likewise (the sheet is not `.mp-inv2`).
+
+### §2 — the desktop dialog
+`<Panel>` still owns the layer contract (scrim, Escape, focus trap, scroll lock, device-back, one
+dismissal); a new opt-in `dialogHead` prop lets the print dialog bring the take-payment shell's header
+instead of `<ModalHead>` (the symmetric half of 419's `sheetHead`; absent → `<ModalHead>`, byte-identical
+for every other caller). The header is now TWO lines: the NAME on the first in sentence case with its
+badge inside the `<b>` (`Quotation` + `.pill.pill--archived` *Valid today*; a sale gets the settlement
+pill), and `QT-0412 · Rs 3,747.90 · Rabia Anwar · Counter 2` on the second. `.prdlg__ctl` carries the
+paper segments and the chip and nothing else; `Esc` and the close are the mockup's.
+
+Body: `.paydlg__body` at 3fr/2fr. Preview `.prdlg__prevwrap > .prdlg__prev`, fixed 560px, `#e6eaee`
+(`.dark` → `#0b1113`), centred, vertical scroll only. A4 draws in `.a4prev` 492×696 at 62%; a two-page
+document releases the fixed height (`:has(.docsheet + .docsheet)`) so nothing is scrolled off the
+bottom. The thermal strip keeps 417 §3's measured `--pscr-strip-fs` (so no horizontal scrollbar at any
+pane) and gains `min-height:100%` so the white runs the full scrolled height. Right column: 560px, its
+own scroll, `.card.pp-actions` (56px Print, Print & new sale, New sale (no print), then the separator
+and the two PDF actions as `.pp-row`s on the A4 tab ONLY) over `.card.pp-facts` — header
+`This quotation` + `Counter 2 · Hina Saeed`, rows **Customer** and **Valid**, `fr--sum` **Quoted total**
+with `4 items · 12 units` as the label's `<small>`, then the closing sentence. No `THIS QUOTATION`
+eyebrow, no Cashier row, no *Cancel this quotation*.
+
+**Two 415/417 numbers were retired by the transcription and the reasons are recorded here rather than
+re-litigated later.** `--dialog-w-print` goes 1180px → the mockup's 940px, and 417's `height:calc(100vh
+- 32px)` goes back to content-tall: the preview is a FIXED 560px now and the right column is 560px
+beside it, so there is nothing left for the frame to clamp, and a 1180px dialog under a 3fr/2fr body
+would give the card column 472px against the mockup's 376px.
+
+### §3 — the chip reads Settings, not the browser
+`destination` is now a `{ icon, name, detail, warn, live, href }` model instead of one interpolated
+string, built from the counter's printer row and `defaultOutputFor(policy, SALE|QUOTATION)` and from
+nothing else (asserted: the block does not mention `navigator` or `userAgent`). Printer set + *Ask* →
+`<b>name</b><small>USB</small>`; a paper default → `<small>USB · silent</small>`; no printer set → the
+warn chip `Print dialog · no printer set`, whole chip a link to Settings → Printing; BLE set but not
+reachable → the warn chip `Print dialog · printer not reachable`. A4 is the print window at every
+counter and says so. The phone draws the same model as `.ppm-dest` with a `Change` link.
+
+DECISION: the WIRED_HELPER "unreachable" case is not distinguished. The helper's reachability is not
+observable from this screen — `usePrintDocument`'s `status` describes the Bluetooth session only — and
+`printDocument` already toasts *printer not reachable* on the attempt. Inventing a state the screen
+cannot know would be the opposite of what §3 is about.
+
+### §4 — the mobile sheet
+`sheetClassName` gains `prsheet`; a new opt-in `sheetCtl` prop on `<Panel>` renders `.prsheet__ctl`
+BETWEEN the sheet head and `.sheet__body` (the body is the grey tray the paper stands on and carries the
+mockup's `margin-inline:-18px`, so a control row inside it would be drawn on the tray and scroll with the
+paper). Head is `icon + Quotation + Valid today + ✕` with the badge inside the `<b>` via `titleNode`.
+Body is `.ppm-prev` with the paper centred, theme colour either side, white to the bottom. Footer:
+`New sale` + `Print` (the row's `flex:1` primary, so it takes the whole width on a roll) and the mockup's
+52px `.mic` ⋯ on the A4 tab only. POS mobile's Clear cart was already the danger icon button (415 §2).
+
+TWO documented app deltas where the mockup's fixed numbers are 417 §3's measurement written down:
+`.prsheet .ppm-prev .paper--lines { transform:none; margin-bottom:0 }` (the mockup's 0.85 fits a 407px
+paper into a 360px phone; the app's strip is already solved for the pane, and scaling it again fits it
+twice — 300px of paper on a 360px screen), and `.prsheet .ppm-prev--a4 .a4prev` sized from
+`--pscr-a4-scale` with the mockup's `.38` as the FALLBACK — which is exactly what a 360px phone measures,
+so the mockup's own viewport is unchanged and a 390px one stops getting grey down both sides.
+
+### §5 — evidence
+`scripts/evidence-420.mjs` (a sibling of `evidence-415/417/419`). It renders ONE specimen DOM twice —
+once against the mockup's stylesheet, once against `globals.css` with the mockup's `:root` appended so
+both sides resolve the same tokens — and diffs `getComputedStyle` property by property. The property
+list is read out of the mockup's own rules rather than hand-picked. `--table` runs the diff alone;
+the default run also writes the two side-by-side images.
+
+    specs/evidence/420-computed-style-diff.md   EMPTY (0 differing properties)
+    specs/evidence/420-dialog-desktop.png       mockup | app, 1000px each
+    specs/evidence/420-sheet-mobile.png         mockup | app, 400px each
+
+Three narrowings are documented IN the script rather than left implicit: `.paper` compares only the
+`.ppm-prev` / `.prdlg__prev` rules (the mockup's `.paper` WRAPS a `.rcpt`; the app's `.paper--lines` IS
+the strip); `.sheet__hd/__body/__foot` compare only the `.prsheet` dress, not the mockup's shared
+scrolled-header shadow system, which this app has never carried on any of the eight surfaces it applies
+to; and `transform-origin` is normalised back to a fraction of the box, because `top center` computes to
+pixels and two boxes of different widths report different numbers for the identical declaration. The
+SCREENSHOT pass (never the table) also hands both columns the mockup's `.btn` / `.rcpt` / `.toast` atoms,
+which in the app are `<Button>`'s Tailwind classes, `PaperLines` and `toast()` — none of which a static
+stylesheet harness can mount.
+
+### Tests
+New: `packages/ui/src/lib/quotation-dialog-to-mockup-css-420.spec.ts`. §1 is checked by PARSING both
+stylesheets: for every class the spec names, every mockup rule whose SUBJECT is that class (82 rules
+across 41 distinct selectors, with 407's print PAGE surfaces — `.pp-bar`, `.pp-body`, `.pp-prev`,
+`.pp-side`, `.ppm-hdr`, `.ppm-seg`, `.ppm-bar`, `.ppm-scroll`, `.ppm-sheet` — excluded as out of scope)
+must exist in `globals.css` under the renamed selector with identical declarations. Add a property to the
+mockup and this fails until it is transcribed. §2–§5 assert the markup, the chip's four states with
+EN+UR parity for the seven new keys, the sheet, and that the emitted diff table is empty.
+
+Superseded assertions updated with the reason in place, never deleted: `pos-print-screen-407`
+(`destDialog` → `destPrintDialog`), `pos-print-dialog-412` (`title={head}` → `headName`/`headSub`;
+`.pscr__bar`/`headExtra` → `.prdlg__ctl`/`dialogHead`/`sheetCtl`; `.pscr__side` → `.paydlg__col--right`
+in the DIALOG, the page keeps its own), `pos-print-dialog-and-quotation-415` (the one-string chip; the
+phone's preview node), `quotation-dialog-and-documents-417` (`titleBadge` → `titleNode`; the chip's warn
+state; `.pscr__mbar`/`mobileBar` → `.prsheet__ctl`/`sheetCtl`).
+
+i18n EN+UR: `print.destPrintDialog`, `destNoPrinterSet`, `destNotReachable`, `destSilent`, `destChange`,
+`escHint`, `factValid`, `capA4`, `capRoll`, `capScale`, `capColumns`, and `v18.quotationHead`
+(`Quotation`, sentence case — `v18.quotationTitle` stays `QUOTATION` because that is the THERMAL
+heading). Parity verified: no key missing in either direction.
+
+### Gates
+`pnpm typecheck` — 32/32 pass. `pnpm lint` — pass (the one warning is a pre-existing unused
+eslint-disable in `apps/api`, untouched by this step). `pnpm test:unit` / `test:e2e` / `build` are the
+controller's, per AGENT.md §4A.

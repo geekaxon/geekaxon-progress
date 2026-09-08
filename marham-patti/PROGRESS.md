@@ -6,14 +6,17 @@
 
 ## Current Status
 - **Project:** Marham Patti — multi-tenant white-label healthcare platform.
-- **Phase:** **PHASE 48** — owner's report, part 3 (417–419), all `fix/*` (`DEPLOY FIX`). Target branch is still `staging`.
-- **Last completed:** **419 — merge-mobile-like-new-sale-return** — DONE.
-- **Next:** none — awaiting the next report part [HUMAN_REQUIRED]
-- **After this:** owner's 401 steps → v1.0.0 promote.
+- **Phase:** **PHASE 48** — owner's report, part 4 (420–423). 422 is `feature/*`; the rest `fix/*`. Target branch is still `staging`.
+- **Last completed:** **420 — quotation-dialog-to-mockup-css** — DONE.
+- **Next:** **421 — quotation-documents-and-dates** — specs/421-quotation-documents-and-dates.md
+- **Group order:** 420 → 421 → 422 → 423. One step per session. Never skip a number.
+- **DESTINATION CHIP:** reads the counter's printer and Settings → Printing → Default output — never the browser's transport.
+- **QUOTATIONS NEVER RESERVE STOCK (422 §4):** the paper says "subject to stock"; conversion shows a price/stock diff.
+- **After this:** Recent sales › Quotations design → next round → owner's 401 steps → v1.0.0 promote.
 
 ### Recent steps
-- **419 — merge-mobile-like-new-sale-return** — DONE (2026-09-07) — the merge screen mounts New sale return's header, rail and rows.
-- **418 — live-marker-nav-and-ledger-dates** — DONE (2026-09-07) — the marker moves on real news only; ctrl-click opens a tab; jump to date.
-- **417 — quotation-dialog-and-documents-round-2** — DONE (2026-09-07) — the powered-by mark names the platform; the dialog fits the screen.
+- **420 — quotation-dialog-to-mockup-css** — DONE (2026-09-08) — dialog and sheet copied from the mockup, with an empty style diff.
+- **421–423** — AUTHORED — documents + jump-date + chip counts · hours, validity, retention, price honesty · merge header.
+- **417–419** — DONE.
 
 > Older steps in PROGRESS-HISTORY.md
